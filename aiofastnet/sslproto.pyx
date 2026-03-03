@@ -17,24 +17,42 @@ from .openssl cimport *
 from .transport cimport *
 
 
-cdef enum:
-    SSL_READ_BUFFER_SIZE = 128 * 1024
-    SSL_WRITE_BUFFER_SIZE = 128 * 1024
+cdef:
+    Py_ssize_t SSL_READ_BUFFER_SIZE = 128 * 1024
+    Py_ssize_t SSL_WRITE_BUFFER_SIZE = 128 * 1024
+
+    # Number of seconds to wait for SSL handshake to complete
+    # The default timeout matches that of Nginx.
+    float SSL_HANDSHAKE_TIMEOUT = 60.0
+
+    # Number of seconds to wait for SSL shutdown to complete
+    # The default timeout mimics lingering_time
+    float SSL_SHUTDOWN_TIMEOUT = 30.0
 
 
-cdef extern from *:
-    """
-    // Number of seconds to wait for SSL handshake to complete
-    // The default timeout matches that of Nginx.
-    #define SSL_HANDSHAKE_TIMEOUT 60.0
+cpdef enum SSLProtocolState:
+    UNWRAPPED = 0
+    DO_HANDSHAKE = 1
+    WRAPPED = 2
+    FLUSHING = 3
+    SHUTDOWN = 4
 
-    // Number of seconds to wait for SSL shutdown to complete
-    // The default timeout mimics lingering_time
-    #define SSL_SHUTDOWN_TIMEOUT 30.0
-    """
 
-    const float SSL_HANDSHAKE_TIMEOUT
-    const float SSL_SHUTDOWN_TIMEOUT
+
+cdef enum AppProtocolState:
+    # This tracks the state of app protocol (https://git.io/fj59P):
+    #
+    #     INIT -cm-> CON_MADE [-dr*->] [-er-> EOF?] -cl-> CON_LOST
+    #
+    # * cm: connection_made()
+    # * dr: data_received()
+    # * er: eof_received()
+    # * cl: connection_lost()
+
+    STATE_INIT = 0
+    STATE_CON_MADE = 1
+    STATE_EOF = 2
+    STATE_CON_LOST = 3
 
 
 cdef object _logger = getLogger('aiofastnet.ssl')
@@ -112,6 +130,16 @@ cdef Py_ssize_t _bio_pending(BIO* bio):
 
 
 cdef class SSLConnection:
+    cdef:
+        object ssl_ctx_py
+        SSL_CTX* ssl_ctx
+        bytearray incoming_buf
+        bytearray outgoing_buf
+        BIO* incoming
+        BIO* outgoing
+        SSL* ssl_object
+        str server_hostname
+
     def __init__(self, ssl_context, bint is_server, str server_hostname):
         ERR_clear_error()
 
@@ -177,7 +205,7 @@ cdef class SSLConnection:
         # Free SSL and its BIO
         SSL_free(self.ssl_object)
 
-    cdef tuple cipher(self):
+    cdef inline tuple cipher(self):
         cdef const SSL_CIPHER* c = SSL_get_current_cipher(self.ssl_object)
 
         cdef const char* name = SSL_CIPHER_get_name(c)
@@ -190,7 +218,7 @@ cdef class SSLConnection:
 
         return (name_obj, protocol_obj, bits)
 
-    cdef dict getpeercert(self):
+    cdef inline dict getpeercert(self):
         if SSL_is_init_finished(self.ssl_object) != 1:
             raise ssl.SSLError("SSL_is_init_finished failed")
 
@@ -207,10 +235,10 @@ cdef class SSLConnection:
     # TODO: I don't think people would need this.
     # For now I return None but if somebody asks can be made compatible with
     # python implementation
-    cdef str compression(self):
+    cdef inline str compression(self):
         return None
 
-    cdef make_exc_from_ssl_error(self, str descr, int err_code):
+    cdef inline make_exc_from_ssl_error(self, str descr, int err_code):
         assert err_code != SSL_ERROR_NONE, "check logic"
         cdef char err_string[256]
         cdef unsigned long last_error
@@ -229,7 +257,7 @@ cdef class SSLConnection:
         else:
             return ssl.SSLError(f"{descr}, unknown error_code={err_code}")
 
-    cdef _exc_from_err_last_error(self, str descr):
+    cdef inline _exc_from_err_last_error(self, str descr):
         cdef unsigned long last_error = _err_last_error()
         cdef int lib = ERR_GET_LIB(last_error)
         cdef int reason = ERR_GET_REASON(last_error)
@@ -265,7 +293,7 @@ cdef class SSLConnection:
         exc.reason = reason_name
         return exc
 
-    cdef _configure_hostname(self):
+    cdef inline _configure_hostname(self):
         if not self.server_hostname or self.server_hostname.startswith("."):
             raise ValueError("server_hostname cannot be an empty string or start with a leading dot.")
 
@@ -297,7 +325,7 @@ cdef class SSLConnection:
             if ip != NULL:
                 ASN1_OCTET_STRING_free(ip)
 
-    cdef _decode_certificate(self, X509* certificate):
+    cdef inline _decode_certificate(self, X509* certificate):
         return aiofn_decode_certificate(certificate)
 
 
@@ -321,6 +349,12 @@ cdef inline _create_transport_context(server_side, server_hostname):
 
 
 cdef class SSLTransport:
+    cdef:
+        object _loop
+        SSLProtocol _ssl_protocol
+        bint _closed
+        object context
+
     def __cinit__(self, loop, SSLProtocol ssl_protocol, context):
         self._loop = loop
         # SSLProtocol instance
@@ -459,6 +493,38 @@ cdef class SSLProtocol(Protocol):
     buffers which are ssl.MemoryBIO objects.
     """
 
+    cdef:
+        bint _server_side
+        str _server_hostname
+        object _sslcontext
+        SSLConnection _ssl_connection
+
+        dict _extra
+        list _write_backlog
+
+        object _loop
+        SSLTransport _app_transport
+
+        Transport _transport
+        object _ssl_handshake_timeout
+        object _ssl_shutdown_timeout
+        object _ssl_handshake_complete_waiter
+
+        SSLProtocolState _state
+        size_t _conn_lost
+        AppProtocolState _app_state
+
+        object _app_protocol
+        bint _app_protocol_is_buffered
+        bint _app_protocol_aiofn
+
+        object _handshake_start_time
+        object _handshake_timeout_handle
+        object _shutdown_timeout_handle
+
+        bint _reading_paused
+        bint _is_debug
+
     def __init__(self,
                  loop,
                  app_protocol,
@@ -546,7 +612,7 @@ cdef class SSLProtocol(Protocol):
             self._app_transport = SSLTransport(self._loop, self, context)
         return self._app_transport
 
-    cdef Transport get_tcp_transport(self):
+    cdef inline Transport get_tcp_transport(self):
         return self._transport
 
     def connection_made(self, transport):
@@ -678,7 +744,7 @@ cdef class SSLProtocol(Protocol):
             self._transport.close()
             raise
 
-    cdef _wakeup_waiter(self, exc=None):
+    cdef inline _wakeup_waiter(self, exc=None):
         if (self._ssl_handshake_complete_waiter is not None and
                 not self._ssl_handshake_complete_waiter.done()):
             if exc is not None:
@@ -686,7 +752,7 @@ cdef class SSLProtocol(Protocol):
             else:
                 self._ssl_handshake_complete_waiter.set_result(None)
 
-    cdef _get_extra_info(self, name, default=None):
+    cdef inline _get_extra_info(self, name, default=None):
         if name == "ssl_object":
             return self._ssl_connection
         elif name in self._extra:
@@ -696,7 +762,7 @@ cdef class SSLProtocol(Protocol):
         else:
             return default
 
-    cdef _set_state(self, SSLProtocolState new_state):
+    cdef inline _set_state(self, SSLProtocolState new_state):
         cdef bint allowed = False
 
         if self._is_debug:
@@ -730,7 +796,7 @@ cdef class SSLProtocol(Protocol):
 
     # Handshake flow
 
-    cdef _start_handshake(self):
+    cdef inline _start_handshake(self):
         if self._is_debug:
             _logger.debug("%r starts SSL handshake", self)
             self._handshake_start_time = self._loop.time()
@@ -755,7 +821,7 @@ cdef class SSLProtocol(Protocol):
         else:
             self._do_handshake()
 
-    cdef _check_handshake_timeout(self):
+    cdef inline _check_handshake_timeout(self):
         if self._state == DO_HANDSHAKE:
             msg = (
                 f"SSL handshake is taking longer than "
@@ -764,7 +830,7 @@ cdef class SSLProtocol(Protocol):
             )
             self._fatal_error(ConnectionAbortedError(msg))
 
-    cdef _do_handshake(self):
+    cdef inline _do_handshake(self):
         cdef:
             int rc
             int ssl_error
@@ -791,7 +857,7 @@ cdef class SSLProtocol(Protocol):
             self._on_handshake_complete(self._ssl_connection.make_exc_from_ssl_error("ssl handshake failed", ssl_error))
             return
 
-    cdef _on_handshake_complete(self, handshake_exc):
+    cdef inline _on_handshake_complete(self, handshake_exc):
         if self._handshake_timeout_handle is not None:
             self._handshake_timeout_handle.cancel()
             self._handshake_timeout_handle = None
@@ -837,7 +903,7 @@ cdef class SSLProtocol(Protocol):
 
     # Shutdown flow
 
-    cdef _start_shutdown(self, object context=None):
+    cdef inline _start_shutdown(self, object context=None):
         if self._state in (FLUSHING, SHUTDOWN, UNWRAPPED):
             return
         # we don't need the context for _abort or the timeout, because
@@ -854,12 +920,12 @@ cdef class SSLProtocol(Protocol):
                                       lambda: self._check_shutdown_timeout())
             self._do_flush(context)
 
-    cdef _check_shutdown_timeout(self):
+    cdef inline _check_shutdown_timeout(self):
         if self._state in (FLUSHING, SHUTDOWN):
             self._transport._force_close(
                 asyncio.TimeoutError('SSL shutdown timed out'))
 
-    cdef _do_read_into_void(self, object context):
+    cdef inline _do_read_into_void(self, object context):
         """Consume and discard incoming application data.
 
         If close_notify is received for the first time, call eof_received.
@@ -884,7 +950,7 @@ cdef class SSLProtocol(Protocol):
 
         raise self._ssl_connection.make_exc_from_ssl_error("SSL_read_ex failed", ssl_error)
 
-    cdef _do_flush(self, object context=None):
+    cdef inline _do_flush(self, object context=None):
         """Flush the write backlog, discarding new data received.
 
         We don't send close_notify in FLUSHING because we still want to send
@@ -902,7 +968,7 @@ cdef class SSLProtocol(Protocol):
                 self._set_state(SHUTDOWN)
                 self._do_shutdown(context)
 
-    cdef _do_shutdown(self, object context=None):
+    cdef inline _do_shutdown(self, object context=None):
         """Send close_notify and wait for the same from the peer."""
         cdef:
             int rc
@@ -941,7 +1007,7 @@ cdef class SSLProtocol(Protocol):
         except Exception as ex:
             self._on_shutdown_complete(ex)
 
-    cdef _on_shutdown_complete(self, shutdown_exc):
+    cdef inline _on_shutdown_complete(self, shutdown_exc):
         if self._shutdown_timeout_handle is not None:
             self._shutdown_timeout_handle.cancel()
             self._shutdown_timeout_handle = None
@@ -953,14 +1019,14 @@ cdef class SSLProtocol(Protocol):
         else:
             self._transport.close()
 
-    cdef _abort(self, exc):
+    cdef inline _abort(self, exc):
         self._set_state(UNWRAPPED)
         if self._transport is not None:
             self._transport._force_close(exc)
 
     # Outgoing flow
 
-    cdef write(self, data):
+    cdef inline write(self, data):
         """Write some data bytes to the transport.
 
         This does not block; it buffers the data and arranges for it
@@ -994,7 +1060,7 @@ cdef class SSLProtocol(Protocol):
         except Exception as ex:
             self._fatal_error(ex, 'Fatal error on SSL protocol')
 
-    cdef write_mem(self, char* data_ptr, Py_ssize_t data_len):
+    cdef inline write_mem(self, char* data_ptr, Py_ssize_t data_len):
         if not self._is_protocol_ready():
             return
 
@@ -1013,7 +1079,7 @@ cdef class SSLProtocol(Protocol):
         except Exception as ex:
             self._fatal_error(ex, 'Fatal error on SSL protocol')
 
-    cdef writelines(self, list_of_data):
+    cdef inline writelines(self, list_of_data):
         """
         Write a list (or any iterable) of data bytes to the transport.
         """
@@ -1058,11 +1124,11 @@ cdef class SSLProtocol(Protocol):
         except Exception as ex:
             self._fatal_error(ex, 'Fatal error on SSL protocol')
 
-    cdef pause_reading(self):
+    cdef inline pause_reading(self):
         self._reading_paused = True
         self._transport.pause_reading()
 
-    cdef resume_reading(self):
+    cdef inline resume_reading(self):
         if self._reading_paused:
             self._reading_paused = False
             self._loop.call_soon(self._do_read)
@@ -1074,7 +1140,7 @@ cdef class SSLProtocol(Protocol):
     cpdef resume_writing(self):
         self._app_protocol.resume_writing()
 
-    cdef bint _is_protocol_ready(self) except -1:
+    cdef inline bint _is_protocol_ready(self) except -1:
         if self._state in (FLUSHING, SHUTDOWN, UNWRAPPED):
             if self._conn_lost >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
                 _logger.warning('SSL connection is closed')
@@ -1083,7 +1149,7 @@ cdef class SSLProtocol(Protocol):
         else:
             return True
 
-    cdef _flush_write_backlog(self):
+    cdef inline _flush_write_backlog(self):
         if self._state not in (WRAPPED, FLUSHING):
             return
 
@@ -1111,7 +1177,7 @@ cdef class SSLProtocol(Protocol):
         except Exception as ex:
             self._fatal_error(ex, 'Fatal error on SSL protocol')
 
-    cdef _write_impl(self, data, char* data_ptr, Py_ssize_t data_len, bint is_last):
+    cdef inline _write_impl(self, data, char* data_ptr, Py_ssize_t data_len, bint is_last):
         """
         Do SSL_write, if outgoing BIO reach threshold size flush it to the 
         underlying protocol. If is_last=True, flush in the end regardless.
@@ -1179,7 +1245,7 @@ cdef class SSLProtocol(Protocol):
                 raise self._ssl_connection.make_exc_from_ssl_error(
                     "SSL_write_ex failed", ssl_error)
 
-    cdef _maybe_send_outgoing(self, bint is_last):
+    cdef inline _maybe_send_outgoing(self, bint is_last):
         # We call _maybe_send_outgoing if there MAY be some data to send,
         # Upstream logic doesn't check itself if there are actually some data
         # to send
@@ -1219,7 +1285,7 @@ cdef class SSLProtocol(Protocol):
         except Exception as ex:
             self._fatal_error(ex, 'Fatal error on SSL protocol')
 
-    cdef _do_read__buffered(self):
+    cdef inline _do_read__buffered(self):
         if self._app_protocol_aiofn:
             app_buffer = (<Protocol>self._app_protocol).get_buffer(-1)
         else:
@@ -1278,7 +1344,7 @@ cdef class SSLProtocol(Protocol):
 
         raise self._ssl_connection.make_exc_from_ssl_error("SSL_read_ex failed", last_error)
 
-    cdef _do_read__copied(self):
+    cdef inline _do_read__copied(self):
         cdef:
             size_t bytes_read
             list data = None
@@ -1336,7 +1402,7 @@ cdef class SSLProtocol(Protocol):
 
         raise self._ssl_connection.make_exc_from_ssl_error("SSL_read_ex failed", last_error)
 
-    cdef _call_eof_received(self, object context=None):
+    cdef inline _call_eof_received(self, object context=None):
         if self._app_state == STATE_CON_MADE:
             self._app_state = STATE_EOF
             try:
@@ -1358,7 +1424,7 @@ cdef class SSLProtocol(Protocol):
                     _logger.warning('returning true from eof_received() '
                                        'has no effect when using ssl')
 
-    cdef _fatal_error(self, exc, message='Fatal error on transport'):
+    cdef inline _fatal_error(self, exc, message='Fatal error on transport'):
         if self._app_transport:
             self._app_transport._force_close(exc)
         elif self._transport:

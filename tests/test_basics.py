@@ -83,3 +83,9 @@ async def test_write_paused(conn_type, buffered_protocol):
 
 # TODO: test pause_reading
 # TODO: test exception after beginning, weird hang ups observed
+
+
+async def test_pause_reading(conn_type, buffered_protocol):
+    async with echo_server(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
+        async with echo_client(server, ssl_context=conn_type.client_ssl_context, is_buffered=buffered_protocol) as client:
+            assert 1 == 0

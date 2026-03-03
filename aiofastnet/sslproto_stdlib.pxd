@@ -1,5 +1,3 @@
-import asyncio
-
 cpdef enum SSLProtocolState:
     UNWRAPPED = 0
     DO_HANDSHAKE = 1
