@@ -42,6 +42,11 @@ jobs:
       run: |
         python setup.py build_ext --inplace
 
+    - uses: actions/checkout@v6
+    - name: Setup tmate session
+      uses: mxschmitt/action-tmate@v3
+
+
     - name: Run tests
       run: |
         pytest -v
