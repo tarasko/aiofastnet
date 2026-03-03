@@ -3,12 +3,17 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import importlib
 import os
+from logging import getLogger
 from pathlib import Path
 import ssl
 import sys
+from typing import Tuple, Optional
 
+import async_timeout
 import pytest
 from aiofastnet import create_connection, create_server
+
+_logger = getLogger("tests.utils")
 
 def multiloop_event_loop_policy():
     """
@@ -59,96 +64,137 @@ def multiloop_event_loop_policy():
 
 
 class EchoServerProtocol(asyncio.Protocol):
+    def __init__(self, is_buffered: bool):
+        self._is_buffered = is_buffered
+        self._read_buffer = bytearray(b"X") * (128*1024)
+
+    def is_buffered_protocol(self):
+        return self._is_buffered
+
     def connection_made(self, transport):
         self.transport = transport
 
+    def get_buffer(self, hint):
+        return self._read_buffer
+
+    def buffer_updated(self, bytes_read):
+        _logger.debug("EchoServer.buffer_updated: received=%d", bytes_read)
+        assert self._is_buffered
+        self.transport.write(self._read_buffer[:bytes_read])
+
     def data_received(self, data):
+        _logger.debug("EchoServer.data_received: %d", len(data))
+        assert not self._is_buffered
         self.transport.write(data)
 
+    def pause_writing(self):
+        _logger.debug("EchoServer.pause_writing")
 
-class _ReadNClientProtocol(asyncio.Protocol):
-    def __init__(self, closed: asyncio.Future):
-        self._closed = closed
+    def resume_writing(self):
+        _logger.debug("EchoServer.resume_writing")
+
+
+class AsyncClient(asyncio.Protocol):
+    def __init__(self, is_buffered: bool):
+        self._is_buffered = is_buffered
+        self._closed = asyncio.get_running_loop().create_future()
         self._transport = None
-        self._buffer = bytearray()
-        self._waiters = []
+        self._read_buffer = bytearray(b"X") * (256*1024)
+        self._data = bytearray()
+        self._readn_waiter: Optional[Tuple[int, asyncio.Future]] = None
+
+    def is_buffered_protocol(self):
+        return self._is_buffered
 
     def connection_made(self, transport):
         self._transport = transport
-        self._drain_waiters()
 
     def data_received(self, data):
-        self._buffer.extend(data)
-        self._drain_waiters()
+        assert not self._is_buffered
+        self._data.extend(data)
+        _logger.debug("AsyncClient.data_received: received=%d, total=%d", len(data), len(self._data))
+        self._wakeup_waiters()
+
+    def get_buffer(self, hint):
+        return self._read_buffer
+
+    def buffer_updated(self, bytes_read):
+        assert self._is_buffered
+        self._data += self._read_buffer[:bytes_read]
+        _logger.debug("AsyncClient.buffer_updated: received=%d, total=%d", bytes_read, len(self._data))
+        self._wakeup_waiters()
+
+    def pause_writing(self):
+        _logger.debug("AsyncClient.pause_writing")
+
+    def resume_writing(self):
+        _logger.debug("AsyncClient.resume_writing")
+
+    def eof_received(self):
+        pass
 
     def connection_lost(self, exc):
-        if exc and not self._closed.done():
-            self._closed.set_exception(exc)
-        elif not self._closed.done():
-            self._closed.set_result(None)
-        self._drain_waiters()
+        if not self._closed.done():
+            if exc is not None:
+                self._closed.set_exception(exc)
+            else:
+                self._closed.set_result(None)
+        if self._readn_waiter is not None:
+            self._readn_waiter[1].set_exception(RuntimeError("connection closed"))
+            self._readn_waiter = None
 
     def write(self, data: bytes):
-        if self._transport is None:
-            raise RuntimeError("connection is not established")
+        _logger.debug("AsyncClient.write(len=%d)", len(data))
         self._transport.write(data)
 
-    async def readn(self, n: int) -> bytes:
+    def write_in_lines(self, data: bytes, num_lines: int):
+        parts = []
+        part_sz = int(len(data) / num_lines)
+        for i in range(num_lines - 1):
+            parts.append(data[part_sz*i : part_sz*(i + 1)])
+        already_added = sum(len(part) for part in parts)
+        parts.append(data[already_added:])
+        lens = [f"len={len(p)}" for p in parts]
+        _logger.debug("AsyncClient.writelines(%s)", lens)
+        self._transport.writelines(parts)
+
+    async def readn(self, n: int, timeout=5.0) -> bytes:
+        assert self._readn_waiter is None
+
         if n < 0:
             raise ValueError("n must be >= 0")
         if n == 0:
             return b""
 
-        loop = asyncio.get_running_loop()
-        fut = loop.create_future()
-        self._waiters.append((n, fut))
-        self._drain_waiters()
-        return await fut
+        if len(self._data) >= n:
+            res = self._data[:n]
+            self.data = self._data[n:]
+            return res
+
+        self._readn_waiter = (n, asyncio.get_running_loop().create_future())
+        if timeout is None:
+            return await asyncio.shield(self._readn_waiter[1])
+        else:
+            async with async_timeout.timeout(timeout):
+                return await asyncio.shield(self._readn_waiter[1])
 
     def close(self):
-        if self._transport is not None:
-            self._transport.close()
+        self._transport.close()
 
-    def _drain_waiters(self):
-        if not self._waiters:
+    async def wait_closed(self):
+        await asyncio.shield(self._closed)
+
+    def _wakeup_waiters(self):
+        if self._readn_waiter is None:
             return
 
-        alive = []
-        for n, fut in self._waiters:
-            if fut.done():
-                continue
+        if len(self._data) < self._readn_waiter[0]:
+            return
 
-            if len(self._buffer) >= n:
-                data = bytes(self._buffer[:n])
-                del self._buffer[:n]
-                fut.set_result(data)
-                continue
-
-            if self._closed.done():
-                fut.set_exception(ConnectionError("connection closed before enough bytes were received"))
-                continue
-
-            alive.append((n, fut))
-
-        self._waiters = alive
-
-
-class EchoClient:
-    def __init__(self, transport: asyncio.BaseTransport, protocol: _ReadNClientProtocol):
-        self._transport = transport
-        self._protocol = protocol
-
-    def write(self, data: bytes):
-        self._protocol.write(data)
-
-    async def readn(self, n: int) -> bytes:
-        return await self._protocol.readn(n)
-
-    def close(self):
-        self._protocol.close()
-
-    def abort(self):
-        self._transport.abort()
+        n, fut = self._readn_waiter
+        fut.set_result(self._data[:n])
+        self._data = self._data[n:]
+        self._readn_waiter = None
 
 
 @dataclass(frozen=True)
@@ -166,11 +212,11 @@ class ConnectionType:
 
 
 @asynccontextmanager
-async def echo_server(host="127.0.0.1", port=0, ssl_context=None):
+async def echo_server(host="127.0.0.1", port=0, ssl_context=None, is_buffered=False):
     loop = asyncio.get_running_loop()
     server = await create_server(
         loop,
-        EchoServerProtocol,
+        lambda: EchoServerProtocol(is_buffered),
         host=host,
         port=port,
         ssl=ssl_context,
@@ -184,7 +230,7 @@ async def echo_server(host="127.0.0.1", port=0, ssl_context=None):
 
 
 @asynccontextmanager
-async def echo_client(server_or_host, port=None, ssl_context=None, server_hostname=None):
+async def echo_client(server_or_host, port=None, ssl_context=None, server_hostname=None, is_buffered=False):
     if isinstance(server_or_host, EchoServerHandle):
         host = server_or_host.host
         port = server_or_host.port
@@ -194,26 +240,23 @@ async def echo_client(server_or_host, port=None, ssl_context=None, server_hostna
             raise ValueError("port must be provided when host is passed directly")
 
     loop = asyncio.get_running_loop()
-    closed = loop.create_future()
-    transport, protocol = await create_connection(
+    _, client = await create_connection(
         loop,
-        lambda: _ReadNClientProtocol(closed),
+        lambda: AsyncClient(is_buffered),
         host=host,
         port=port,
         ssl=ssl_context,
         server_hostname=server_hostname,
     )
-    client = EchoClient(transport, protocol)
     try:
         yield client
     finally:
         client.close()
         try:
-            await asyncio.wait_for(asyncio.shield(closed), timeout=1.0)
+            await asyncio.wait_for(client.wait_closed(), timeout=1.0)
         except TimeoutError:
             # SSL close_notify can hang in edge cases (for example no payload).
             client.abort()
-            await asyncio.shield(closed)
 
 
 def make_test_ssl_contexts(cert_file: str | Path, key_file: str | Path):

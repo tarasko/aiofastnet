@@ -93,6 +93,7 @@ cdef class SelectorSocketTransport(Transport):
         bint _eof
         object _empty_waiter
         bint _send_again_after_partial_send
+        bint _is_debug
 
         aiofn_iovec _iovecs[256]
 
@@ -129,6 +130,7 @@ cdef class SelectorSocketTransport(Transport):
         # Enable this to experiment with calling send again until we get EAGAIN
         # after successful partial send
         self._send_again_after_partial_send = False
+        self._is_debug = loop.get_debug()
 
         _set_nodelay(self._sock)
 
@@ -194,7 +196,7 @@ cdef class SelectorSocketTransport(Transport):
             return
         self._paused = True
         self._loop.remove_reader(self._sock_fd)
-        if self._loop.get_debug():
+        if self._is_debug:
             _logger.debug("%r pauses reading", self)
 
     cpdef resume_reading(self):
@@ -206,7 +208,7 @@ cdef class SelectorSocketTransport(Transport):
             return
         self._loop.add_reader(self._sock_fd, self._read_ready)
 
-        if self._loop.get_debug():
+        if self._is_debug:
             _logger.debug("%r resumes reading", self)
 
     cpdef close(self):
@@ -415,6 +417,8 @@ cdef class SelectorSocketTransport(Transport):
 
         if self._write_backlog:
             for data in list_of_data:
+                if not data:
+                    continue
                 self._write_backlog.append(aiofn_maybe_copy_buffer(data))
             self._maybe_pause_protocol()
             return
@@ -483,6 +487,7 @@ cdef class SelectorSocketTransport(Transport):
                 else:
                     data_ptr += bytes_sent
                     data_len -= bytes_sent
+                    bytes_sent = 0
                     self._write_backlog.append(aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len))
         else:
             while bytes_sent > 0:
@@ -490,8 +495,12 @@ cdef class SelectorSocketTransport(Transport):
                 data_len = len(data)
                 if data_len <= bytes_sent:
                     bytes_sent -= data_len
+                    if self._is_debug:
+                        _logger.debug("%r wrote item of size %d from backlog", self, data_len)
                 else:
                     self._write_backlog.appendleft(data[bytes_sent:])
+                    if self._is_debug:
+                        _logger.debug("%r partially wrote %d out of %d from backlog item", self, bytes_sent, data_len)
                     break
 
     cdef inline _write_many(self, list_of_data):
@@ -500,14 +509,19 @@ cdef class SelectorSocketTransport(Transport):
             char* data_ptr
             Py_ssize_t data_len
 
-        for idx, data in enumerate(list_of_data):
+        for data in list_of_data:
             aiofn_unpack_buffer(data, &data_ptr, &data_len)
+            if data_len == 0:
+                continue
             self._iovecs[idx].iov_base = data_ptr
             self._iovecs[idx].iov_len = data_len
-            if idx == AIOFN_MAX_IOVEC - 1:
+            idx += 1
+            if idx == AIOFN_MAX_IOVEC:
                 break
 
-        cdef Py_ssize_t bytes_sent = aiofn_writev(self._sock_fd, self._iovecs, idx + 1)
+        cdef Py_ssize_t bytes_sent = aiofn_writev(self._sock_fd, self._iovecs, idx)
+        if self._is_debug:
+            _logger.debug("%r writev sent %d out of %d iovecs", self, bytes_sent, idx)
         self._adjust_leftover_buffer(list_of_data, bytes_sent)
 
     cpdef _write_ready(self):
@@ -515,6 +529,8 @@ cdef class SelectorSocketTransport(Transport):
         if self._conn_lost:
             return
         try:
+            if self._is_debug:
+                _logger.debug("%r write_ready event, resume writing from backlog", self)
             self._write_many(self._write_backlog)
         except (BlockingIOError, InterruptedError):
             pass
