@@ -83,4 +83,4 @@ async def test_write_paused(conn_type, buffered_protocol):
             await client.readn(total_bytes_written)
 
 # TODO: test pause_reading
-# TODO: test after beginning, weird hang ups observed
+# TODO: test exception after beginning, weird hang ups observed
