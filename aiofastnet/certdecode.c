@@ -229,7 +229,7 @@ get_peer_alt_names(X509 *certificate)
 
     names = X509_get_ext_d2i(certificate, NID_subject_alt_name, NULL, NULL);
     if (names == NULL) {
-        return Py_NewRef(Py_None);
+        Py_RETURN_NONE;
     }
 
     peer_alt_names = PyTuple_New((Py_ssize_t)sk_GENERAL_NAME_num(names));
@@ -323,7 +323,7 @@ get_aia_uri(X509 *certificate, int nid)
     int i;
 
     if (info == NULL) {
-        return Py_NewRef(Py_None);
+        Py_RETURN_NONE;
     }
 
     items = PyList_New(0);
@@ -378,7 +378,7 @@ get_crl_dp(X509 *certificate)
     int i;
 
     if (dps == NULL) {
-        return Py_NewRef(Py_None);
+        Py_RETURN_NONE;
     }
 
     items = PyList_New(0);
