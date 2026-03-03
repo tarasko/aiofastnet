@@ -9,9 +9,9 @@ if vi < (3, 9):
 
 
 if os.name == 'nt':
-    base_libraries = ["Ws2_32"]
+    base_libraries = ["Ws2_32", "libssl", "libcrypto"]
 else:
-    base_libraries = []
+    base_libraries = ["ssl", "crypto"]
 
 extensions = [
     Extension("aiofastnet.utils", ["aiofastnet/utils.pyx"],
