@@ -7,7 +7,7 @@ from logging import getLogger
 from pathlib import Path
 import ssl
 import sys
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Union
 
 import async_timeout
 import pytest
@@ -287,7 +287,7 @@ async def echo_client(server_or_host, port=None, ssl_context=None, server_hostna
             client.abort()
 
 
-def make_test_ssl_contexts(cert_file: str | Path, key_file: str | Path):
+def make_test_ssl_contexts(cert_file: Union[str, Path], key_file: Union[str, Path]):
     cert_file = str(cert_file)
     key_file = str(key_file)
 
