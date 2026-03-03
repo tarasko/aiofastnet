@@ -1,0 +1,10 @@
+build
+dist
+*.idea
+*.so
+*.c
+*.html
+*.pyc
+
+!static_mem_bio.c
+!certdecode.c

@@ -1,0 +1,48 @@
+[project]
+name = "aiofastnet"
+description = "Fast networking on top of asyncio"
+authors = [{name = "Taras Kozlov", email = "tarasko.projects@gmail.com"}]
+requires-python = '>=3.9'
+readme = "README.rst"
+license-files = ["LICENSE"]
+dynamic = ["version"]
+keywords = ["websocket", "networking"]
+dependencies = []
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Cython",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: System :: Networking"
+]
+
+[build-system]
+requires = ["setuptools >= 78.0", "wheel", "Cython >= 3.0"]
+build-backend = "setuptools.build_meta"
+
+[project.urls]
+Homepage = "https://github.com/tarasko/aiofastnet"
+Repository = "https://github.com/tarasko/aiofastnet"
+Issues = "https://github.com/tarasko/aiofastnet/issues"
+Documentation = "https://aiofastnet.readthedocs.io/en/latest"
+
+[tool.setuptools]
+packages = ["aiofastnet"]
+
+#[tool.setuptools.dynamic]
+#version = {attr = "aiofastnet.__version__"}
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

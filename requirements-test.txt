@@ -1,0 +1,7 @@
+setuptools >= 78.0
+Cython >= 3.0
+pytest
+pytest-asyncio
+async_timeout
+uvloop; sys_platform != 'win32'
+winloop; sys_platform == 'win32'
