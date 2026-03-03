@@ -1,5 +1,7 @@
 import os
 import sys
+from pathlib import Path
+
 from Cython.Build import cythonize
 from setuptools import Extension, setup
 
@@ -13,13 +15,18 @@ if os.name == 'nt':
 else:
     base_libraries = ["ssl", "crypto"]
 
+if sys.platform == "darwin":
+    openssl_link_dirs = [str(Path(sys.prefix) / 'lib')]
+else:
+    openssl_link_dirs = []
+
 extensions = [
     Extension("aiofastnet.utils", ["aiofastnet/utils.pyx"],
               libraries=base_libraries),
     Extension("aiofastnet.transport", ["aiofastnet/transport.pyx"],
               libraries=base_libraries),
     Extension("aiofastnet.sslproto", ["aiofastnet/sslproto.pyx", "aiofastnet/static_mem_bio.c", "aiofastnet/certdecode.c"],
-              libraries=base_libraries),
+              libraries=base_libraries, library_dirs=openssl_link_dirs),
     Extension("aiofastnet.sslproto_stdlib", ["aiofastnet/sslproto_stdlib.pyx"],
               libraries=base_libraries),
 ]
