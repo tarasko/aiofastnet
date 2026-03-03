@@ -18,7 +18,7 @@ jobs:
     strategy:
       matrix:
         pyver: ['3.9', '3.10', '3.11', '3.12', '>=3.13.5', '3.14', '3.14t']
-        os: [ubuntu]
+        os: [ubuntu, macos]
       fail-fast: false
 
     runs-on: ${{ matrix.os }}-latest
