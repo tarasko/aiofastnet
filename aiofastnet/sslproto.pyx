@@ -222,9 +222,12 @@ cdef class SSLConnection:
         if SSL_is_init_finished(self.ssl_object) != 1:
             raise ssl.SSLError("SSL_is_init_finished failed")
 
-        cdef X509* peer_cert = SSL_get1_peer_certificate(self.ssl_object)
+        cdef X509* peer_cert = SSL_get0_peer_certificate(self.ssl_object)
         if peer_cert == NULL:
             return None
+
+        if X509_up_ref(peer_cert) != 1:
+            raise ssl.SSLError("X509_up_ref failed")
 
         cdef int verification = SSL_CTX_get_verify_mode(self.ssl_ctx)
         try:
