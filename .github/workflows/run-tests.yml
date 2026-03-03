@@ -1,0 +1,48 @@
+# This workflow will install Python dependencies, run tests and lint with a single version of Python
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+
+name: run tests
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+permissions:
+  contents: read
+
+jobs:
+  
+  build:
+    strategy:
+      matrix:
+        pyver: ['3.9', '3.10', '3.11', '3.12', '>=3.13.5', '3.14', '3.14t']
+        os: [ubuntu]
+      fail-fast: false
+
+    runs-on: ${{ matrix.os }}-latest
+
+    steps:
+    - uses: actions/checkout@v6
+    - name: Set up Python ${{ matrix.pyver }}
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ matrix.pyver }}
+
+    - name: Show Python build OPT flags (they are automatically added when building extensions)
+      run: python -c "import sysconfig; print(sysconfig.get_config_var('OPT'))"
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-test.txt
+
+    - name: Compile Cython extensions
+      run: |
+        python setup.py build_ext --inplace
+
+    - name: Run tests
+      run: |
+        pytest -v
+        
