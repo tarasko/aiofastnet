@@ -11,9 +11,11 @@ if vi < (3, 9):
 
 
 if os.name == 'nt':
-    base_libraries = ["Ws2_32", "libssl", "libcrypto"]
+    base_libraries = ["Ws2_32"]
 else:
-    base_libraries = ["ssl", "crypto"]
+    base_libraries = []
+
+openssl_libraries = ["ssl", "crypto"]
 
 if sys.platform == "darwin":
     openssl_link_dirs = [str(Path(sys.prefix) / 'lib')]
@@ -26,7 +28,8 @@ extensions = [
     Extension("aiofastnet.transport", ["aiofastnet/transport.pyx"],
               libraries=base_libraries),
     Extension("aiofastnet.sslproto", ["aiofastnet/sslproto.pyx", "aiofastnet/static_mem_bio.c", "aiofastnet/certdecode.c"],
-              libraries=base_libraries, library_dirs=openssl_link_dirs),
+              libraries=base_libraries + openssl_libraries,
+              library_dirs=openssl_link_dirs),
     Extension("aiofastnet.sslproto_stdlib", ["aiofastnet/sslproto_stdlib.pyx"],
               libraries=base_libraries),
 ]
