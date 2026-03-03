@@ -105,6 +105,7 @@ class AsyncClient(asyncio.Protocol):
         self._readn_waiter: Optional[Tuple[int, asyncio.Future]] = None
         self._is_writing_paused = False
         self._write_resumed_fut = None
+        self._new_data_ev = asyncio.Event()
 
     @property
     def transport(self):
@@ -126,6 +127,8 @@ class AsyncClient(asyncio.Protocol):
         self._data.extend(data)
         _logger.debug("AsyncClient.data_received: received=%d, total=%d", len(data), len(self._data))
         self._wakeup_waiters()
+        self._new_data_ev.set()
+        self._new_data_ev.clear()
 
     def get_buffer(self, hint):
         return self._read_buffer
@@ -135,6 +138,8 @@ class AsyncClient(asyncio.Protocol):
         self._data += self._read_buffer[:bytes_read]
         _logger.debug("AsyncClient.buffer_updated: received=%d, total=%d", bytes_read, len(self._data))
         self._wakeup_waiters()
+        self._new_data_ev.set()
+        self._new_data_ev.clear()
 
     def pause_writing(self):
         _logger.debug("AsyncClient.pause_writing")
@@ -211,6 +216,10 @@ class AsyncClient(asyncio.Protocol):
 
         async with async_timeout.timeout(timeout):
             return await asyncio.shield(self._write_resumed_fut)
+
+    async def wait_new_data(self, timeout=1.0):
+        async with async_timeout.timeout(timeout):
+            return await asyncio.shield(self._new_data_ev.wait())
 
     def _wakeup_waiters(self):
         if self._readn_waiter is None:

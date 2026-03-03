@@ -1,4 +1,6 @@
 import asyncio
+
+import async_timeout
 import pytest
 
 from tests.utils import echo_client, echo_server, \
@@ -85,7 +87,22 @@ async def test_write_paused(conn_type, buffered_protocol):
 # TODO: test exception after beginning, weird hang ups observed
 
 
-async def test_pause_reading(conn_type, buffered_protocol):
-    async with echo_server(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
-        async with echo_client(server, ssl_context=conn_type.client_ssl_context, is_buffered=buffered_protocol) as client:
-            assert 1 == 0
+async def test_pause_reading(conn_type):
+    payload = b"x" * (20*1024*1024)
+
+    async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
+        async with echo_client(server, ssl_context=conn_type.client_ssl_context) as client:
+            client.transport.write(payload)
+            client.transport.pause_reading()
+            with pytest.raises(asyncio.TimeoutError):
+                await client.wait_new_data(0.2)
+            client.transport.resume_reading()
+
+            await client.wait_new_data(0.1)
+            client.transport.pause_reading()
+
+            with pytest.raises(asyncio.TimeoutError):
+                await client.wait_new_data(0.2)
+
+            client.transport.resume_reading()
+
