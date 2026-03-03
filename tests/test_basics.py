@@ -1,13 +1,12 @@
 import asyncio
-import socket
-
 import pytest
-from aiofastnet import create_connection, create_server
 
 from tests.utils import echo_client, echo_server, \
     multiloop_event_loop_policy, make_test_ssl_contexts, ConnectionType
 
+
 event_loop_policy = multiloop_event_loop_policy()
+
 
 @pytest.fixture
 async def loop_debug():

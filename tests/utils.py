@@ -235,8 +235,8 @@ class EchoServerHandle:
 @dataclass(frozen=True)
 class ConnectionType:
     name: str
-    server_ssl_context: ssl.SSLContext | None = None
-    client_ssl_context: ssl.SSLContext | None = None
+    server_ssl_context: Optional[ssl.SSLContext] = None
+    client_ssl_context: Optional[ssl.SSLContext] = None
 
 
 @asynccontextmanager
