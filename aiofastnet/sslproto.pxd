@@ -85,6 +85,7 @@ cdef class SSLProtocol(Protocol):
         object _shutdown_timeout_handle
 
         bint _reading_paused
+        bint _is_debug
 
     # Instead of doing python calls, c methods *_impl are called directly
     # from stream.pyx

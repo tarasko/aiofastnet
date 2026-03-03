@@ -1,4 +1,5 @@
 import asyncio
+import socket
 import ssl
 import warnings
 from logging import getLogger
@@ -36,7 +37,7 @@ cdef extern from *:
     const float SSL_SHUTDOWN_TIMEOUT
 
 
-cdef object _logger = getLogger('aiofastnet')
+cdef object _logger = getLogger('aiofastnet.ssl')
 
 
 ctypedef struct PySSLContextHack:
@@ -513,6 +514,21 @@ cdef class SSLProtocol(Protocol):
         else:
             self._app_state = STATE_CON_MADE
         self._reading_paused = False
+        self._is_debug = loop.get_debug()
+
+    def __repr__(self):
+        info = [self.__class__.__name__]
+        if self._server_side:
+            info.append("server")
+        else:
+            info.append("client")
+        if self._transport is not None:
+            sock: socket.socket = self._transport.get_extra_info("socket")
+            info.append(f"fd={sock.fileno()}")
+
+        wbuf_size = self.get_local_write_buffer_size()
+        info.append(f', wbuf_size={wbuf_size}>')
+        return '<{}>'.format(' '.join(info))
 
     cpdef is_buffered_protocol(self):
         return True
@@ -626,7 +642,10 @@ cdef class SSLProtocol(Protocol):
         if isinstance(self._app_protocol, Protocol):
             total += (<Protocol> self._app_protocol).get_local_write_buffer_size()
 
-        return total + _bio_pending(self._ssl_connection.outgoing)
+        if self._ssl_connection is not None:
+            total += _bio_pending(self._ssl_connection.outgoing)
+
+        return total
 
     def eof_received(self):
         """Called when the other end of the low-level stream
@@ -637,7 +656,7 @@ cdef class SSLProtocol(Protocol):
         transport is up to the protocol.
         """
         try:
-            if self._loop.get_debug():
+            if self._is_debug:
                 _logger.debug("%r received EOF", self)
 
             if self._state == DO_HANDSHAKE:
@@ -680,8 +699,8 @@ cdef class SSLProtocol(Protocol):
     cdef _set_state(self, SSLProtocolState new_state):
         cdef bint allowed = False
 
-        if self._loop.get_debug():
-            _logger.debug("Change state to %s", SSLProtocolState(new_state).name)
+        if self._is_debug:
+            _logger.debug("%s change state to %s", self, SSLProtocolState(new_state).name)
 
         if new_state == UNWRAPPED:
             allowed = True
@@ -712,7 +731,7 @@ cdef class SSLProtocol(Protocol):
     # Handshake flow
 
     cdef _start_handshake(self):
-        if self._loop.get_debug():
+        if self._is_debug:
             _logger.debug("%r starts SSL handshake", self)
             self._handshake_start_time = self._loop.time()
         else:
@@ -754,6 +773,7 @@ cdef class SSLProtocol(Protocol):
             rc = SSL_do_handshake(self._ssl_connection.ssl_object)
             if rc == 1:
                 self._on_handshake_complete(None)
+                self._maybe_send_outgoing(True)
                 return
 
             # Since our outgoing bio has limited capacity we may get
@@ -791,7 +811,7 @@ cdef class SSLProtocol(Protocol):
             self._wakeup_waiter(exc)
             return
 
-        if self._loop.get_debug():
+        if self._is_debug:
             dt = self._loop.time() - self._handshake_start_time
             _logger.debug("%r: SSL handshake took %.1f ms", self, dt * 1e3)
 

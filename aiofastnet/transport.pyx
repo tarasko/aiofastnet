@@ -11,7 +11,7 @@ from .utils cimport *
 from cpython.bytes cimport *
 
 
-cdef object _logger = getLogger('aiofastnet')
+cdef object _logger = getLogger('aiofastnet.transport')
 cdef object _DATA_RECEIVED_MAX_SIZE = 256 * 1024
 
 
@@ -181,6 +181,7 @@ cdef class SelectorSocketTransport(Transport):
     cpdef set_write_buffer_limits(self, high=None, low=None):
         self._set_write_buffer_limits(high=high, low=low)
         self._maybe_pause_protocol()
+        self._maybe_resume_protocol()
 
     cpdef abort(self):
         self._force_close(None)
@@ -449,6 +450,9 @@ cdef class SelectorSocketTransport(Transport):
         while True:
             try:
                 bytes_sent = aiofn_send(self._sock_fd, data_ptr, data_len)
+                if self._is_debug:
+                    _logger.debug("%r write(...,len=%d)=%d", self,
+                                  bytes_sent, data_len)
             except (BlockingIOError, InterruptedError):
                 pass
             except (SystemExit, KeyboardInterrupt):

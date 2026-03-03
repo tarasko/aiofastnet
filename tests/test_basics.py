@@ -4,7 +4,7 @@ import socket
 import pytest
 from aiofastnet import create_connection, create_server
 
-from tests.utils import echo_client, echo_server, make_test_connection_types, \
+from tests.utils import echo_client, echo_server, \
     multiloop_event_loop_policy, make_test_ssl_contexts, ConnectionType
 
 event_loop_policy = multiloop_event_loop_policy()
@@ -54,92 +54,33 @@ async def test_echo_writelines(msg_size, num_lines, conn_type, buffered_protocol
             assert echoed == payload
 
 
-class _SinkServerProtocol(asyncio.Protocol):
-    def data_received(self, data):
-        pass
+async def test_write_paused(conn_type, buffered_protocol):
+    payload = b"x" * (128*1024)
 
+    async with echo_server(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
+        async with echo_client(server, ssl_context=conn_type.client_ssl_context, is_buffered=buffered_protocol) as client:
+            wbuf_size = client.transport.get_write_buffer_size()
+            assert wbuf_size == 0
+            client.transport.set_write_buffer_limits(0, 0)
+            total_bytes_written = 0
+            while not client.is_writing_paused:
+                client.transport.write(payload)
+                total_bytes_written += len(payload)
+                assert total_bytes_written < 20*1024*1024, "send buffer is much smaller than this, we should already have hit pause_writing by now"
 
-class _FlowControlClientProtocol(asyncio.Protocol):
-    def __init__(self, connected: asyncio.Future, closed: asyncio.Future, paused: asyncio.Future, resumed: asyncio.Future):
-        self.transport = None
-        self._connected = connected
-        self._closed = closed
-        self._paused = paused
-        self._resumed = resumed
-        self.pause_calls = 0
-        self.resume_calls = 0
+            wbuf_size = client.transport.get_write_buffer_size()
+            assert wbuf_size > 0
 
-    def connection_made(self, transport):
-        self.transport = transport
-        sock = transport.get_extra_info("socket")
-        if sock is not None:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8 * 1024)
-        self.transport.set_write_buffer_limits(high=16 * 1024, low=8 * 1024)
-        if not self._connected.done():
-            self._connected.set_result(None)
+            # increase writing buffer limit, this should cause resume_writing
+            client.transport.set_write_buffer_limits(wbuf_size+2048, wbuf_size+1)
+            assert not client.is_writing_paused
 
-    def pause_writing(self):
-        self.pause_calls += 1
-        if not self._paused.done():
-            self._paused.set_result(None)
+            # decrease writing buffer limit, cause writing paused
+            client.transport.set_write_buffer_limits(0, 0)
+            assert client.is_writing_paused
 
-    def resume_writing(self):
-        self.resume_calls += 1
-        if not self._resumed.done():
-            self._resumed.set_result(None)
+            await client.wait_write_resumed()
+            await client.readn(total_bytes_written)
 
-    def connection_lost(self, exc):
-        if exc and not self._closed.done():
-            self._closed.set_exception(exc)
-        elif not self._closed.done():
-            self._closed.set_result(None)
-
-
-async def test_client_flow_control_callbacks(conn_type):
-    loop = asyncio.get_running_loop()
-    server = await create_server(
-        loop,
-        _SinkServerProtocol,
-        host="127.0.0.1",
-        port=0,
-        ssl=conn_type.server_ssl_context,
-    )
-
-    connected = loop.create_future()
-    closed = loop.create_future()
-    paused = loop.create_future()
-    resumed = loop.create_future()
-
-    transport = None
-    try:
-        port = server.sockets[0].getsockname()[1]
-        transport, protocol = await create_connection(
-            loop,
-            lambda: _FlowControlClientProtocol(connected, closed, paused, resumed),
-            host="127.0.0.1",
-            port=port,
-            ssl=conn_type.client_ssl_context,
-        )
-        await asyncio.wait_for(connected, timeout=5.0)
-
-        chunk = b"x" * (64 * 1024)
-        for _ in range(1024):
-            transport.write(chunk)
-            if paused.done():
-                break
-        await asyncio.wait_for(paused, timeout=5.0)
-
-        await asyncio.wait_for(resumed, timeout=5.0)
-
-        assert protocol.pause_calls >= 1
-        assert protocol.resume_calls >= 1
-    finally:
-        if transport is not None:
-            transport.close()
-            try:
-                await asyncio.wait_for(asyncio.shield(closed), timeout=1.0)
-            except TimeoutError:
-                transport.abort()
-                await asyncio.shield(closed)
-        server.close()
-        await server.wait_closed()
+# TODO: test pause_reading
+# TODO: test after beginning, weird hang ups observed

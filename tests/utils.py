@@ -72,6 +72,7 @@ class EchoServerProtocol(asyncio.Protocol):
         return self._is_buffered
 
     def connection_made(self, transport):
+        _logger.debug("EchoServer.connection_made")
         self.transport = transport
 
     def get_buffer(self, hint):
@@ -102,11 +103,22 @@ class AsyncClient(asyncio.Protocol):
         self._read_buffer = bytearray(b"X") * (256*1024)
         self._data = bytearray()
         self._readn_waiter: Optional[Tuple[int, asyncio.Future]] = None
+        self._is_writing_paused = False
+        self._write_resumed_fut = None
+
+    @property
+    def transport(self):
+        return self._transport
+
+    @property
+    def is_writing_paused(self):
+        return self._is_writing_paused
 
     def is_buffered_protocol(self):
         return self._is_buffered
 
     def connection_made(self, transport):
+        _logger.debug("AsyncClient.connection_made")
         self._transport = transport
 
     def data_received(self, data):
@@ -126,9 +138,14 @@ class AsyncClient(asyncio.Protocol):
 
     def pause_writing(self):
         _logger.debug("AsyncClient.pause_writing")
+        self._is_writing_paused = True
+        self._write_resumed_fut = asyncio.get_running_loop().create_future()
 
     def resume_writing(self):
         _logger.debug("AsyncClient.resume_writing")
+        self._is_writing_paused = False
+        self._write_resumed_fut.set_result(None)
+        self._write_resumed_fut = None
 
     def eof_received(self):
         pass
@@ -142,6 +159,10 @@ class AsyncClient(asyncio.Protocol):
         if self._readn_waiter is not None:
             self._readn_waiter[1].set_exception(RuntimeError("connection closed"))
             self._readn_waiter = None
+        if self._write_resumed_fut is not None:
+            self._write_resumed_fut.set_exception(RuntimeError("connection closed"))
+            self._write_resumed_fut = None
+
 
     def write(self, data: bytes):
         _logger.debug("AsyncClient.write(len=%d)", len(data))
@@ -183,6 +204,13 @@ class AsyncClient(asyncio.Protocol):
 
     async def wait_closed(self):
         await asyncio.shield(self._closed)
+
+    async def wait_write_resumed(self, timeout=1.0):
+        if self._write_resumed_fut is None:
+            return
+
+        async with async_timeout.timeout(timeout):
+            return await asyncio.shield(self._write_resumed_fut)
 
     def _wakeup_waiters(self):
         if self._readn_waiter is None:
@@ -271,14 +299,3 @@ def make_test_ssl_contexts(cert_file: str | Path, key_file: str | Path):
     client_context.verify_mode = ssl.CERT_NONE
     return server_context, client_context
 
-
-def make_test_connection_types(cert_file: str | Path, key_file: str | Path):
-    server_context, client_context = make_test_ssl_contexts(cert_file, key_file)
-    return (
-        ConnectionType(name="tcp"),
-        ConnectionType(
-            name="ssl",
-            server_ssl_context=server_context,
-            client_ssl_context=client_context,
-        ),
-    )
