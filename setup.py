@@ -14,7 +14,7 @@ if vi < (3, 9):
 
 def _find_macos_openssl_prefix():
     # Python 3.9/3.10 use openssl 1.1.x.
-    openssl_package = "openssl@1.1" if vi <= (3, 10) else "openssl@3"
+    openssl_package = "openssl@1.1" if vi < (3, 11) else "openssl@3"
 
     try:
         out = subprocess.check_output(
