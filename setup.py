@@ -34,6 +34,9 @@ if sys.platform == "darwin":
     is_freethreading = hasattr(sys, "_is_gil_enabled") and not sys._is_gil_enabled()
     sys_prefix = sys.prefix if not is_freethreading else sys.prefix.replace("PythonT", "Python")
     openssl_link_dirs = [str(Path(sys_prefix) / "lib")]
+elif sys.platform == "win32":
+    openssl_include_dirs = ["/usr/include"]
+    openssl_link_dirs = ["/usr/lib/openssl"]
 else:
     openssl_include_dirs = []
     openssl_link_dirs = []
