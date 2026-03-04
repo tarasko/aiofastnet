@@ -2,7 +2,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-import ssl as py_ssl
 
 from Cython.Build import cythonize
 from setuptools import Extension, setup
