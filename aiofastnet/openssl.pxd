@@ -93,7 +93,7 @@ cdef extern from "openssl/ssl.h" nogil:
     const char *SSL_CIPHER_get_version(const SSL_CIPHER *cipher)
     int SSL_CIPHER_get_bits(const SSL_CIPHER *cipher, int *alg_bits)
 
-    X509 *SSL_get0_peer_certificate(const SSL *ssl)
+    X509 *SSL_get_peer_certificate(const SSL *ssl)
     int X509_up_ref(X509 *x)
     X509_VERIFY_PARAM *SSL_get0_param(SSL *ssl)
     X509_VERIFY_PARAM *SSL_CTX_get0_param(SSL_CTX *ctx)

@@ -12,79 +12,37 @@ if vi < (3, 9):
     raise RuntimeError('aiofastnet requires Python 3.9 or greater')
 
 
+def _find_macos_openssl_prefix():
+    # Python 3.9/3.10 use openssl 1.1.x.
+    openssl_package = "openssl@1.1" if vi <= (3, 10) else "openssl@3"
+
+    try:
+        out = subprocess.check_output(
+            ["brew", "--prefix", openssl_package],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+    assert out, "could not find OpenSSL"
+    return out
+
+
+if sys.platform == "darwin":
+    openssl_prefix = _find_macos_openssl_prefix()
+    openssl_include_dirs = str(Path(openssl_prefix) / "include")
+    openssl_link_dirs = str(Path(sys.prefix) / "lib")
+else:
+    openssl_include_dirs = []
+    openssl_link_dirs = []
+
+openssl_libraries = ["ssl", "crypto"]
 if os.name == 'nt':
     base_libraries = ["Ws2_32"]
 else:
     base_libraries = []
 
-openssl_libraries = ["ssl", "crypto"]
-
-def _brew_prefix(formula: str):
-    try:
-        out = subprocess.check_output(
-            ["brew", "--prefix", formula],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
-    return out or None
-
-
-def _openssl_major_from_prefix(prefix: str):
-    openssl_bin = str(Path(prefix) / "bin" / "openssl")
-    try:
-        out = subprocess.check_output(
-            [openssl_bin, "version"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
-
-    # Example output: "OpenSSL 1.1.1w  11 Sep 2023" or "OpenSSL 3.3.1 ..."
-    parts = out.split()
-    if len(parts) < 2:
-        return None
-    version = parts[1]
-    major = version.split(".", 1)[0]
-    return int(major) if major.isdigit() else None
-
-
-def _find_macos_openssl_prefixes():
-    # Keep 3.9/3.10 away from openssl@3 unless no alternative is available.
-    if vi <= (3, 10):
-        formulas = ("openssl", "openssl@1.1", "openssl@3")
-    else:
-        formulas = ("openssl@3", "openssl", "openssl@1.1")
-
-    prefixes = []
-    for formula in formulas:
-        out = _brew_prefix(formula)
-        if not out or out in prefixes:
-            continue
-        prefixes.append(out)
-
-    if not prefixes:
-        return prefixes
-
-    # Prefer a Homebrew OpenSSL with the same major version Python is using at runtime.
-    py_openssl_major = py_ssl.OPENSSL_VERSION_INFO[0]
-    matching = [p for p in prefixes if _openssl_major_from_prefix(p) == py_openssl_major]
-    if matching:
-        return matching + [p for p in prefixes if p not in matching]
-    return prefixes
-
-
-if sys.platform == "darwin":
-    openssl_prefixes = _find_macos_openssl_prefixes()
-    assert openssl_prefixes, "could not find OpenSSL"
-    openssl_include_dirs = [str(Path(p) / "include") for p in openssl_prefixes]
-    openssl_link_dirs = [str(Path(sys.prefix) / "lib")]
-    # openssl_link_dirs = [str(Path(p) / "lib") for p in openssl_prefixes]
-else:
-    openssl_include_dirs = []
-    openssl_link_dirs = []
 
 extensions = [
     Extension("aiofastnet.utils", ["aiofastnet/utils.pyx"],
