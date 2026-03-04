@@ -31,8 +31,8 @@ def _find_macos_openssl_prefix():
 
 if sys.platform == "darwin":
     openssl_prefix = _find_macos_openssl_prefix()
-    openssl_include_dirs = str(Path(openssl_prefix) / "include")
-    openssl_link_dirs = str(Path(sys.prefix) / "lib")
+    openssl_include_dirs = [str(Path(openssl_prefix) / "include")]
+    openssl_link_dirs = [str(Path(sys.prefix) / "lib")]
 else:
     openssl_include_dirs = []
     openssl_link_dirs = []
