@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+import ssl as py_ssl
 
 from Cython.Build import cythonize
 from setuptools import Extension, setup
@@ -18,19 +19,60 @@ else:
 
 openssl_libraries = ["ssl", "crypto"]
 
+def _brew_prefix(formula: str):
+    try:
+        out = subprocess.check_output(
+            ["brew", "--prefix", formula],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    return out or None
+
+
+def _openssl_major_from_prefix(prefix: str):
+    openssl_bin = str(Path(prefix) / "bin" / "openssl")
+    try:
+        out = subprocess.check_output(
+            [openssl_bin, "version"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+    # Example output: "OpenSSL 1.1.1w  11 Sep 2023" or "OpenSSL 3.3.1 ..."
+    parts = out.split()
+    if len(parts) < 2:
+        return None
+    version = parts[1]
+    major = version.split(".", 1)[0]
+    return int(major) if major.isdigit() else None
+
+
 def _find_macos_openssl_prefixes():
+    # Keep 3.9/3.10 away from openssl@3 unless no alternative is available.
+    if vi <= (3, 10):
+        formulas = ("openssl", "openssl@1.1", "openssl@3")
+    else:
+        formulas = ("openssl@3", "openssl", "openssl@1.1")
+
     prefixes = []
-    for formula in ("openssl", "openssl@3"):
-        try:
-            out = subprocess.check_output(
-                ["brew", "--prefix", formula],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            ).strip()
-        except (subprocess.CalledProcessError, FileNotFoundError):
+    for formula in formulas:
+        out = _brew_prefix(formula)
+        if not out or out in prefixes:
             continue
-        if out and out not in prefixes:
-            prefixes.append(out)
+        prefixes.append(out)
+
+    if not prefixes:
+        return prefixes
+
+    # Prefer a Homebrew OpenSSL with the same major version Python is using at runtime.
+    py_openssl_major = py_ssl.OPENSSL_VERSION_INFO[0]
+    matching = [p for p in prefixes if _openssl_major_from_prefix(p) == py_openssl_major]
+    if matching:
+        return matching + [p for p in prefixes if p not in matching]
     return prefixes
 
 
