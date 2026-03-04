@@ -31,7 +31,9 @@ def _find_macos_openssl_prefix():
 if sys.platform == "darwin":
     openssl_prefix = _find_macos_openssl_prefix()
     openssl_include_dirs = [str(Path(openssl_prefix) / "include")]
-    openssl_link_dirs = [str(Path(sys.prefix) / "lib")]
+    is_freethreading = hasattr(sys, "_is_gil_enabled") and not sys._is_gil_enabled()
+    sys_prefix = sys.prefix if not is_freethreading else sys.prefix.replace("PythonT", "Python")
+    openssl_link_dirs = [str(Path(sys_prefix) / "lib")]
 else:
     openssl_include_dirs = []
     openssl_link_dirs = []
