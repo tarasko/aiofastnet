@@ -1,7 +1,8 @@
-# The content of this file was copied from
-# asyncio.base_events and asyncio.selector_events.
-# If only asyncio would allow to pass custom SSLProtocol factory
-# and SocketTransport factory that would allow to not duplicate this code.
+# Portions of this file are derived from CPython's asyncio sources
+# (notably asyncio.base_events and asyncio.selector_events).
+# Copyright (c) Python Software Foundation.
+# Licensed under the Python Software Foundation License Version 2.
+# See LICENSES/PSF-2.0.txt and THIRD_PARTY_NOTICES for details.
 
 import collections
 import errno

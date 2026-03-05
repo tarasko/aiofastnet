@@ -1,3 +1,8 @@
+# Portions of this file are derived from CPython sources.
+# Copyright (c) Python Software Foundation.
+# Licensed under the Python Software Foundation License Version 2.
+# See LICENSES/PSF-2.0.txt and THIRD_PARTY_NOTICES for details.
+
 import ctypes
 import ctypes.util
 import sys

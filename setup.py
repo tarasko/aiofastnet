@@ -21,8 +21,6 @@ extensions = [
               libraries=base_libraries),
     Extension("aiofastnet.sslproto", ["aiofastnet/sslproto.pyx", "aiofastnet/static_mem_bio.c", "aiofastnet/openssl_compat.c"],
               libraries=base_libraries),
-    Extension("aiofastnet.sslproto_stdlib", ["aiofastnet/sslproto_stdlib.pyx"],
-              libraries=base_libraries),
 ]
 
 build_wheel = any(cmd in sys.argv for cmd in ("bdist_wheel",))
