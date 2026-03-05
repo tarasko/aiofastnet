@@ -82,26 +82,9 @@ else:
     elif os.name == "posix" and sys.platform in {"darwin", "ios", "tvos", "watchos"}:
         from ctypes.macholib.dyld import dyld_find as _dyld_find
 
-        def find_library(name):
-            possible = ['lib%s.dylib' % name,
-                        '%s.dylib' % name,
-                        '%s.framework/%s' % (name, name)]
-            for name in possible:
-                try:
-                    return _dyld_find(name)
-                except ValueError:
-                    continue
-            return None
-
-
-        # Listing loaded libraries on Apple systems relies on the following API:
-        # https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/dyld.3.html
-        import ctypes
-
-        _libc = ctypes.CDLL(find_library("c"))
+        _libc = ctypes.CDLL(ctypes.util.find_library("c"))
         _dyld_get_image_name = _libc["_dyld_get_image_name"]
         _dyld_get_image_name.restype = ctypes.c_char_p
-
 
         def dllist():
             """Return a list of loaded shared libraries in the current process."""
@@ -182,3 +165,4 @@ def find_openssl_library_paths():
         )
 
     return libssl_path.encode(), libcrypto_path.encode()
+
