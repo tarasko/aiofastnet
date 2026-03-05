@@ -4,7 +4,22 @@ import asyncio
 import ssl
 from functools import partial
 from pathlib import Path
+
+import matplotlib.pyplot as plt
 import aiofastnet
+
+try:
+    import uvloop
+except ImportError:
+    uvloop = None
+
+
+VARIANTS = {
+    "asyncio": ("asyncio", False),
+    "asyncio+aiofastnet": ("asyncio", True),
+    "uvloop": ("uvloop", False),
+    "uvloop+aiofastnet": ("uvloop", True),
+}
 
 
 class ServerProtocol(asyncio.BufferedProtocol):
@@ -120,17 +135,17 @@ def _build_ssl_contexts() -> tuple[ssl.SSLContext, ssl.SSLContext]:
     return server_ctx, client_ctx
 
 
-async def run_benchmark(args, backend: str, transport_kind: str):
+async def run_benchmark(args, variant: str, use_aiofastnet: bool, transport_kind: str):
     loop = asyncio.get_running_loop()
     host = "127.0.0.1"
     port = 0
 
-    if backend == "asyncio":
-        create_server = loop.create_server
-        create_connection = loop.create_connection
-    else:
+    if use_aiofastnet:
         create_server = partial(aiofastnet.create_server, loop)
         create_connection = partial(aiofastnet.create_connection, loop)
+    else:
+        create_server = loop.create_server
+        create_connection = loop.create_connection
 
     payload = b"x" * args.message_size
 
@@ -159,7 +174,7 @@ async def run_benchmark(args, backend: str, transport_kind: str):
         await client_proto.done
         rps = client_proto.requests / args.duration
 
-        print(f"{transport_kind}-{backend}: {rps:.2f}")
+        print(f"{transport_kind}-{variant}: {rps:.2f}")
 
         transport.close()
         try:
@@ -170,12 +185,18 @@ async def run_benchmark(args, backend: str, transport_kind: str):
         server.close()
         await server.wait_closed()
 
+    return rps
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Echo round-trip benchmark over loopback.")
     parser.add_argument("--message-size", type=int, default=256, help="Message size in bytes")
     parser.add_argument("--transport", default="tcp,ssl", help="Comma-separated transport types (tcp,ssl)")
-    parser.add_argument("--backend", default="asyncio,aiofastnet", help="Comma-separated backends (asyncio,aiofastnet)")
+    parser.add_argument(
+        "--variant",
+        default="asyncio,asyncio+aiofastnet,uvloop,uvloop+aiofastnet",
+        help="Comma-separated variants",
+    )
     parser.add_argument("--duration", type=float, default=2.0, help="Benchmark duration in seconds" )
     args = parser.parse_args()
 
@@ -185,22 +206,70 @@ def parse_args():
         parser.error("--duration must be > 0")
 
     args.transports = args.transport.split(",")
-    args.backends = args.backend.split(",")
+    args.variants = args.variant.split(",")
+
+    unknown_variants = [variant for variant in args.variants if variant not in VARIANTS]
+    if unknown_variants:
+        parser.error(f"Unknown --variant values: {unknown_variants}. Valid: {list(VARIANTS)}")
+
+    if any(VARIANTS[variant][0] == "uvloop" for variant in args.variants) and uvloop is None:
+        parser.error("uvloop variant requested but uvloop is not installed")
 
     return args
 
 
-async def run_all_benchmarks(args):
+async def run_all_benchmarks(args, variant: str, use_aiofastnet: bool):
+    results: dict[str, float] = {}
+
+    for transport_kind in args.transports:
+        rps = await run_benchmark(args, variant, use_aiofastnet, transport_kind)
+        results[transport_kind] = rps
+
+    return results
+
+
+def _plot_results(results: dict[str, dict[str, float]], variants: list[str]) -> None:
+    transports = ["tcp", "ssl"]
+    width = 0.05
+    x_positions = list(range(len(transports)))
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for i, variant in enumerate(variants):
+        bars_x = [x + (i - (len(variants) - 1) / 2) * width for x in x_positions]
+        bars_y = [results.get(transport, {}).get(variant, 0.0) for transport in transports]
+        ax.bar(bars_x, bars_y, width=width, label=variant)
+
+    ax.set_title("Echo Round-Trip Benchmark")
+    ax.set_xlabel("Transport")
+    ax.set_ylabel("Requests per second")
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(transports)
+    ax.legend(title="Backend")
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    plt.show()
+
+
+def main():
+    args = parse_args()
+    all_results: dict[str, dict[str, float]] = {}
+
     print(f"message_size={args.message_size}")
     print(f"duration={args.duration:.3f}s")
 
     for transport_kind in args.transports:
-        for backend in args.backends:
-            await run_benchmark(args, backend, transport_kind)
+        all_results[transport_kind] = {}
+        for variant in args.variants:
+            loop_kind, use_aiofastnet = VARIANTS[variant]
+            if loop_kind == "uvloop":
+                asyncio.set_event_loop(uvloop.Loop())
+            else:
+                asyncio.set_event_loop(asyncio.SelectorEventLoop())
 
+            rps = asyncio.run(run_benchmark(args, variant, use_aiofastnet, transport_kind))
+            all_results[transport_kind][variant] = rps
 
-def main():
-    asyncio.run(run_all_benchmarks(parse_args()))
+    _plot_results(all_results, args.variants)
 
 
 if __name__ == "__main__":
