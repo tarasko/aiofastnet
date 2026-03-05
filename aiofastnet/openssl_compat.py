@@ -103,7 +103,8 @@ if sys.version_info < (3, 14):
                          if (name := _dyld_get_image_name(i)) is not None]
 
             return libraries
-    if (os.name == "posix" and sys.platform not in {"darwin", "ios", "tvos", "watchos"}):
+
+    elif (os.name == "posix" and sys.platform not in {"darwin", "ios", "tvos", "watchos"}):
         if hasattr((_libc := ctypes.CDLL(None)), "dl_iterate_phdr"):
             class _dl_phdr_info(ctypes.Structure):
                 _fields_ = [
