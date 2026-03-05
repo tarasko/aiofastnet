@@ -13,7 +13,7 @@ def _find_openssl_library_paths():
             if libssl_path is None or "ython" in libssl_path:
                 libssl_path = os.path.normpath(lib)
         elif "libcrypto" in lib:
-            if libcrypto_path is None or "ython" in libssl_path:
+            if libcrypto_path is None or "ython" in libcrypto_path:
                 libcrypto_path = os.path.normpath(lib)
 
     if libssl_path is None or libcrypto_path is None:
