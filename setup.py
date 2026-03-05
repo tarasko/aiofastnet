@@ -8,23 +8,17 @@ vi = sys.version_info
 if vi < (3, 9):
     raise RuntimeError('aiofastnet requires Python 3.9 or greater')
 
-# if os.name == 'nt':
-#     base_libraries = ["Ws2_32"]
-# else:
-#     base_libraries = []
-#
+if os.name == 'nt':
+    libs = ["Ws2_32"]
+else:
+    libs = []
 
-base_libraries = []
 
 pkg_extensions = [
-    Extension("aiofastnet.utils", ["aiofastnet/utils.pyx"],
-              libraries=base_libraries),
-    Extension("aiofastnet.transport", ["aiofastnet/transport.pyx"],
-              libraries=base_libraries),
-    Extension("aiofastnet.ssl_protocol", ["aiofastnet/ssl_protocol.pyx", "aiofastnet/static_mem_bio.c", "aiofastnet/openssl_compat.c"],
-              libraries=base_libraries),
-    Extension("examples.benchmark_protocol", ["examples/benchmark_protocol.pyx"],
-              libraries=base_libraries),
+    Extension("aiofastnet.utils", ["aiofastnet/utils.pyx"], libraries=libs),
+    Extension("aiofastnet.transport", ["aiofastnet/transport.pyx"], libraries=libs),
+    Extension("aiofastnet.ssl_protocol", ["aiofastnet/ssl_protocol.pyx", "aiofastnet/static_mem_bio.c", "aiofastnet/openssl_compat.c"], libraries=libs),
+    Extension("examples.benchmark_protocol", ["examples/benchmark_protocol.pyx"], libraries=libs),
 ]
 
 example_extensions = [
@@ -46,7 +40,6 @@ setup(
             'wraparound': False,
             'initializedcheck': False,
             'optimize.use_switch': False,
-            'cdivision': True
         },
         annotate=True,
         gdb_debug=False,
