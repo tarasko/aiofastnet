@@ -2,10 +2,8 @@ import asyncio
 import os
 import socket
 import ssl
-import sys
 import tempfile
 import warnings
-from pathlib import Path
 from logging import getLogger
 
 from cpython.contextvars cimport *
@@ -16,11 +14,11 @@ from cpython.memoryview cimport *
 from cpython.unicode cimport *
 
 from . import constants
+from .openssl_compat import _find_openssl_library_paths
 from .utils cimport *
 from .openssl cimport *
 from .transport cimport *
 
-cdef tuple _openssl_lib_paths
 cdef object _ssl_lib_path
 cdef object _crypto_lib_path
 cdef bytes _ssl_lib_b = b""
@@ -28,56 +26,7 @@ cdef bytes _crypto_lib_b = b""
 cdef char* _ssl_lib_c = NULL
 cdef char* _crypto_lib_c = NULL
 cdef const char* _openssl_missing
-
-def _pick_library(base_dir, prefix, suffix):
-    if not base_dir.exists():
-        return None
-    candidates = sorted(base_dir.glob(f"{prefix}*{suffix}*"))
-    if not candidates:
-        return None
-    for p in candidates:
-        name = p.name
-        if ".so." in name or ".dylib." in name:
-            return str(p)
-    return str(candidates[0])
-
-
-def _find_openssl_library_paths():
-    roots = []
-    for root in (
-        Path(sys.prefix) / "libs",
-        Path(getattr(sys, "base_prefix", sys.prefix)) / "libs",
-        Path(sys.prefix) / "lib",
-        Path(getattr(sys, "base_prefix", sys.prefix)) / "lib",
-    ):
-        if root not in roots:
-            roots.append(root)
-
-    if os.name == "nt":
-        ssl_suffix = ".dll"
-        crypto_suffix = ".dll"
-    elif sys.platform == "darwin":
-        ssl_suffix = ".dylib"
-        crypto_suffix = ".dylib"
-    else:
-        ssl_suffix = ".so"
-        crypto_suffix = ".so"
-
-    ssl_path = None
-    crypto_path = None
-    for root in roots:
-        if ssl_path is None:
-            ssl_path = _pick_library(root, "libssl", ssl_suffix)
-        if crypto_path is None:
-            crypto_path = _pick_library(root, "libcrypto", crypto_suffix)
-        if ssl_path is not None and crypto_path is not None:
-            break
-    return (ssl_path, crypto_path)
-
-
-_openssl_lib_paths = _find_openssl_library_paths()
-_ssl_lib_path = _openssl_lib_paths[0]
-_crypto_lib_path = _openssl_lib_paths[1]
+_ssl_lib_path, _crypto_lib_path = _find_openssl_library_paths()
 if _ssl_lib_path is not None:
     _ssl_lib_b = os.fsencode(_ssl_lib_path)
     _ssl_lib_c = PyBytes_AS_STRING(_ssl_lib_b)

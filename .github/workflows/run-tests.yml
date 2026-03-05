@@ -31,18 +31,6 @@ jobs:
       with:
         python-version: ${{ matrix.pyver }}
 
-    - name: Setup MSYS2 (Windows only)
-      if: runner.os == 'Windows'
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: MSYS
-        update: true
-        install: >-
-          openssl-devel
-          gcc
-          make
-          pkgconf
-
     - name: Show Python build OPT flags (they are automatically added when building extensions)
       run: python -c "import sysconfig; print(sysconfig.get_config_var('OPT'))"
 
