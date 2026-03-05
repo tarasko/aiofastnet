@@ -52,8 +52,6 @@ class ClientProtocol(asyncio.BufferedProtocol):
         self._read_buf = bytearray(262144)
         self._received_for_reply = 0
         self._deadline = 0.0
-        self._stop_handle = None
-        self._stopped = False
         self._warmup_left = self.WARMUP_REQUESTS
         self._measuring = False
 
@@ -69,35 +67,27 @@ class ClientProtocol(asyncio.BufferedProtocol):
         return self._read_buf
 
     def buffer_updated(self, nbytes):
-        if nbytes <= 0 or self._stopped:
+        self._received_for_reply += nbytes
+        if self._received_for_reply < self._payload_size:
             return
 
-        self._received_for_reply += nbytes
-        while self._received_for_reply >= self._payload_size:
-            self._received_for_reply -= self._payload_size
+        self._received_for_reply -= self._payload_size
 
-            if not self._measuring:
-                self._warmup_left -= 1
-                if self._warmup_left <= 0:
-                    self._measuring = True
-                    self.requests = 0
-                    self._deadline = self._loop.time() + self._duration
-                    self._stop_handle = self._loop.call_at(self._deadline, self._stop)
-                self._transport.write(self._payload)
-                continue
-
-            self.requests += 1
+        if self._measuring:
             if self._loop.time() >= self._deadline:
-                self._stop()
+                self._transport.close()
                 return
+            self.requests += 1
+        else:
+            self._warmup_left -= 1
+            if self._warmup_left <= 0:
+                self._measuring = True
+                self.requests = 0
+                self._deadline = self._loop.time() + self._duration
 
-            self._transport.write(self._payload)
+        self._transport.write(self._payload)
 
     def connection_lost(self, exc):
-        if self._stop_handle is not None:
-            self._stop_handle.cancel()
-            self._stop_handle = None
-
         if not self.done.done():
             if exc is None:
                 self.done.set_result(None)
@@ -109,11 +99,6 @@ class ClientProtocol(asyncio.BufferedProtocol):
                 self.closed.set_result(None)
             else:
                 self.closed.set_exception(exc)
-
-    def _stop(self):
-        self._stopped = True
-        if not self.done.done():
-            self.done.set_result(None)
 
 
 def _build_ssl_contexts() -> tuple[ssl.SSLContext, ssl.SSLContext]:
