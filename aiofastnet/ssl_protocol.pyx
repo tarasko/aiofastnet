@@ -376,7 +376,7 @@ cdef class SSLTransport:
         bint _closed
         object context
 
-    def __cinit__(self, loop, SSLProtocol ssl_protocol, context):
+    def __init__(self, loop, SSLProtocol ssl_protocol, context):
         self._loop = loop
         # SSLProtocol instance
         self._ssl_protocol = ssl_protocol
@@ -726,7 +726,7 @@ cdef class SSLProtocol(Protocol):
         for data in self._write_backlog:
             total += len(data)
 
-        if isinstance(self._app_protocol, Protocol):
+        if self._app_protocol_aiofn:
             total += (<Protocol> self._app_protocol).get_local_write_buffer_size()
 
         if self._ssl_connection is not None:
@@ -1123,7 +1123,7 @@ cdef class SSLProtocol(Protocol):
         try:
             if self._write_backlog:
                 self._write_backlog.extend(aiofn_maybe_copy_buffer(data)
-                                           for data in list_of_data if len(data) > 0)
+                                           for data in list_of_data if data)
                 return
 
             for idx in range(data_cnt):
