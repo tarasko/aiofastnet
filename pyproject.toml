@@ -8,7 +8,7 @@ license-files = ["LICENSE"]
 dynamic = ["version", "dependencies"]
 keywords = ["asyncio"]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: Development Status :: 3 - Alpha",
     "Framework :: AsyncIO",
     "Intended Audience :: Developers",
     "Operating System :: POSIX",
