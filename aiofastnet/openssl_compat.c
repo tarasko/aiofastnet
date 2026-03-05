@@ -180,7 +180,7 @@ int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path) {
 #else
     const char *err;
     dlerror();
-    g_ssl_lib = dlopen(ssl_lib_path, RTLD_NOLOAD | RTLD_NOW | RTLD_GLOBAL);
+    g_ssl_lib = dlopen(ssl_lib_path, RTLD_NOLOAD | RTLD_NOW | RTLD_LOCAL);
     err = dlerror();
     if (g_ssl_lib == NULL) {
         set_last_error("dlopen ssl failed for '%s': %s",
@@ -189,7 +189,7 @@ int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path) {
         return 0;
     }
     dlerror();
-    g_crypto_lib = dlopen(crypto_lib_path, RTLD_NOLOAD | RTLD_NOW | RTLD_GLOBAL);
+    g_crypto_lib = dlopen(crypto_lib_path, RTLD_NOLOAD | RTLD_NOW | RTLD_LOCAL);
     err = dlerror();
     if (g_crypto_lib == NULL) {
         set_last_error("dlopen crypto failed for '%s': %s",
