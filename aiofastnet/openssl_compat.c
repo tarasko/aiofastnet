@@ -112,22 +112,11 @@ static HMODULE open_library(const char *path) {
 }
 
 #else
-static void *g_process_lib = NULL;
 static void *g_ssl_lib = NULL;
 static void *g_crypto_lib = NULL;
 
 static void *resolve_symbol(const char *name) {
     void *p = NULL;
-    if (g_process_lib != NULL) {
-        p = dlsym(g_process_lib, name);
-        if (p != NULL) {
-            return p;
-        }
-    }
-    p = dlsym(RTLD_DEFAULT, name);
-    if (p != NULL) {
-        return p;
-    }
     if (g_ssl_lib != NULL) {
         p = dlsym(g_ssl_lib, name);
         if (p != NULL) {
@@ -167,16 +156,7 @@ int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path) {
 #ifdef _WIN32
     g_ssl_lib = open_library(ssl_lib_path);
     g_crypto_lib = open_library(crypto_lib_path);
-#elif defined(__APPLE__)
-    g_process_lib = dlopen(NULL, RTLD_NOW | RTLD_LOCAL);
-    if (ssl_lib_path != NULL && ssl_lib_path[0] != '\0') {
-        g_ssl_lib = dlopen(ssl_lib_path, RTLD_NOW | RTLD_LOCAL);
-    }
-    if (crypto_lib_path != NULL && crypto_lib_path[0] != '\0') {
-        g_crypto_lib = dlopen(crypto_lib_path, RTLD_NOW | RTLD_LOCAL);
-    }
 #else
-    g_process_lib = dlopen(NULL, RTLD_NOW | RTLD_LOCAL);
     if (ssl_lib_path != NULL && ssl_lib_path[0] != '\0') {
         g_ssl_lib = dlopen(ssl_lib_path, RTLD_NOW | RTLD_LOCAL);
     }
