@@ -41,7 +41,7 @@ packages = ["aiofastnet"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
-#version = {attr = "aiofastnet.__version__"}
+version = {attr = "aiofastnet.__version__"}
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
