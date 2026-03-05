@@ -19,30 +19,25 @@ from .utils cimport *
 from .openssl cimport *
 from .transport cimport *
 
-cdef object _ssl_lib_path
-cdef object _crypto_lib_path
-cdef bytes _ssl_lib_b = b""
-cdef bytes _crypto_lib_b = b""
-cdef char* _ssl_lib_c = NULL
-cdef char* _crypto_lib_c = NULL
-cdef const char* _openssl_missing
-_ssl_lib_path, _crypto_lib_path = _find_openssl_library_paths()
-if _ssl_lib_path is not None:
-    _ssl_lib_b = os.fsencode(_ssl_lib_path)
-    _ssl_lib_c = PyBytes_AS_STRING(_ssl_lib_b)
-if _crypto_lib_path is not None:
-    _crypto_lib_b = os.fsencode(_crypto_lib_path)
-    _crypto_lib_c = PyBytes_AS_STRING(_crypto_lib_b)
+cdef init_openssl():
+    cdef:
+        bytes ssl_lib_name
+        bytes crypto_lib_name
+        const char* missing_lib
 
-if init_openssl_compat(_ssl_lib_c, _crypto_lib_c) != 1:
-    _openssl_missing = openssl_compat_last_error()
-    if _openssl_missing != NULL:
-        raise ImportError(
-            f"aiofastnet: failed to initialize OpenSSL compatibility layer; "
-            f"missing symbol: {PyUnicode_FromString(_openssl_missing)}; "
-            f"ssl_lib={_ssl_lib_path!r}, crypto_lib={_crypto_lib_path!r}")
-    raise ImportError("aiofastnet: failed to initialize OpenSSL compatibility layer")
+    ssl_lib_name, crypto_lib_name = _find_openssl_library_paths()
 
+    if init_openssl_compat(ssl_lib_name, crypto_lib_name) != 1:
+        missing_lib = openssl_compat_last_error()
+        if missing_lib != NULL:
+            raise ImportError(
+                f"aiofastnet: failed to initialize OpenSSL compatibility layer; "
+                f"missing symbol: {PyUnicode_FromString(missing_lib)}; "
+                f"ssl_lib={ssl_lib_name.decode()}, crypto_lib={crypto_lib_name.decode()}")
+        raise ImportError("aiofastnet: failed to initialize OpenSSL compatibility layer")
+
+
+init_openssl()
 
 cdef:
     Py_ssize_t SSL_READ_BUFFER_SIZE = 128 * 1024

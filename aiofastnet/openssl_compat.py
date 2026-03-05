@@ -18,20 +18,14 @@ def _pick_library(base_dir: Path, prefix: str, suffix: str):
 
 def _find_openssl_library_paths():
     if sys.platform == "darwin":
-        if sys.version_info < (3, 11):
-            return "libssl.dylib.1", "libcrypto.dylib.1"
-        else:
-            return "libssl.dylib.3", "libcrypto.dylib.3"
+        return b"libssl.dylib", b"libcrypto.dylib"
     elif sys.platform in ("linux", "aix", "freebsd"):
-        if sys.version_info < (3, 11):
-            return "libssl.so.1", "libcrypto.so.1"
-        else:
-            return "libssl.so.3", "libcrypto.so.3"
+        return b"libssl.so", b"libcrypto.so"
     elif sys.platform == "win32":
         if sys.version_info < (3, 11):
-            return "libssl-3.dll", "libcrypto-3.dll"
+            return b"libssl-3.dll", b"libcrypto-3.dll"
         else:
-            return "libssl-1.dll", "libcrypto-1.dll"
+            return b"libssl-1.dll", b"libcrypto-1.dll"
     else:
         return ImportError(f"unsupported platform: {sys.platform}")
 
