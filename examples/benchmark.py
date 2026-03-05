@@ -4,13 +4,7 @@ import asyncio
 import ssl
 from functools import partial
 from pathlib import Path
-import sys
 import aiofastnet
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 
 class ServerProtocol(asyncio.BufferedProtocol):
@@ -31,6 +25,8 @@ class ServerProtocol(asyncio.BufferedProtocol):
 
 
 class ClientProtocol(asyncio.BufferedProtocol):
+    WARMUP_REQUESTS = 10
+
     def __init__(self, payload: bytes, duration: float):
         self._payload = payload
         self._payload_size = len(payload)
@@ -43,6 +39,8 @@ class ClientProtocol(asyncio.BufferedProtocol):
         self._deadline = 0.0
         self._stop_handle = None
         self._stopped = False
+        self._warmup_left = self.WARMUP_REQUESTS
+        self._measuring = False
 
         self.requests = 0
         self.done = self._loop.create_future()
@@ -50,8 +48,6 @@ class ClientProtocol(asyncio.BufferedProtocol):
 
     def connection_made(self, transport):
         self._transport = transport
-        self._deadline = self._loop.time() + self._duration
-        self._stop_handle = self._loop.call_at(self._deadline, self._stop)
         self._transport.write(self._payload)
 
     def get_buffer(self, sizehint):
@@ -64,8 +60,18 @@ class ClientProtocol(asyncio.BufferedProtocol):
         self._received_for_reply += nbytes
         while self._received_for_reply >= self._payload_size:
             self._received_for_reply -= self._payload_size
-            self.requests += 1
 
+            if not self._measuring:
+                self._warmup_left -= 1
+                if self._warmup_left <= 0:
+                    self._measuring = True
+                    self.requests = 0
+                    self._deadline = self._loop.time() + self._duration
+                    self._stop_handle = self._loop.call_at(self._deadline, self._stop)
+                self._transport.write(self._payload)
+                continue
+
+            self.requests += 1
             if self._loop.time() >= self._deadline:
                 self._stop()
                 return
@@ -114,12 +120,12 @@ def _build_ssl_contexts() -> tuple[ssl.SSLContext, ssl.SSLContext]:
     return server_ctx, client_ctx
 
 
-async def run_benchmark(args):
+async def run_benchmark(args, backend: str, transport_kind: str):
     loop = asyncio.get_running_loop()
     host = "127.0.0.1"
     port = 0
 
-    if args.backend == "asyncio":
+    if backend == "asyncio":
         create_server = loop.create_server
         create_connection = loop.create_connection
     else:
@@ -130,7 +136,7 @@ async def run_benchmark(args):
 
     server_ssl_ctx = None
     client_ssl_ctx = None
-    if args.transport == "ssl":
+    if transport_kind == "ssl":
         server_ssl_ctx, client_ssl_ctx = _build_ssl_contexts()
 
     server = await create_server(
@@ -153,12 +159,7 @@ async def run_benchmark(args):
         await client_proto.done
         rps = client_proto.requests / args.duration
 
-        print(f"backend={args.backend}")
-        print(f"transport={args.transport}")
-        print(f"message_size={args.message_size}")
-        print(f"duration={args.duration:.3f}s")
-        print(f"requests={client_proto.requests}")
-        print(f"avg_rps={rps:.2f}")
+        print(f"{transport_kind}-{backend}: {rps:.2f}")
 
         transport.close()
         try:
@@ -171,33 +172,11 @@ async def run_benchmark(args):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Buffered echo round-trip benchmark over loopback."
-    )
-    parser.add_argument(
-        "--message-size",
-        type=int,
-        default=256,
-        help="Message size in bytes (.",
-    )
-    parser.add_argument(
-        "--transport",
-        choices=("tcp", "ssl"),
-        default="tcp",
-        help="Transport type (default: tcp).",
-    )
-    parser.add_argument(
-        "--backend",
-        choices=("asyncio", "aiofastnet"),
-        default="aiofastnet",
-        help="Implementation backend (default: aiofastnet).",
-    )
-    parser.add_argument(
-        "--duration",
-        type=float,
-        default=2.0,
-        help="Benchmark duration in seconds (default: 10).",
-    )
+    parser = argparse.ArgumentParser(description="Echo round-trip benchmark over loopback.")
+    parser.add_argument("--message-size", type=int, default=256, help="Message size in bytes")
+    parser.add_argument("--transport", default="tcp,ssl", help="Comma-separated transport types (tcp,ssl)")
+    parser.add_argument("--backend", default="asyncio,aiofastnet", help="Comma-separated backends (asyncio,aiofastnet)")
+    parser.add_argument("--duration", type=float, default=2.0, help="Benchmark duration in seconds" )
     args = parser.parse_args()
 
     if args.message_size <= 0:
@@ -205,11 +184,23 @@ def parse_args():
     if args.duration <= 0:
         parser.error("--duration must be > 0")
 
+    args.transports = args.transport.split(",")
+    args.backends = args.backend.split(",")
+
     return args
 
 
+async def run_all_benchmarks(args):
+    print(f"message_size={args.message_size}")
+    print(f"duration={args.duration:.3f}s")
+
+    for transport_kind in args.transports:
+        for backend in args.backends:
+            await run_benchmark(args, backend, transport_kind)
+
+
 def main():
-    asyncio.run(run_benchmark(parse_args()))
+    asyncio.run(run_all_benchmarks(parse_args()))
 
 
 if __name__ == "__main__":
