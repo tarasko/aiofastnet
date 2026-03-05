@@ -28,7 +28,7 @@ pkg_extensions = [
 ]
 
 example_extensions = [
-    Extension("examples.echo_client_cython", ["examples/echo_client_cython.pyx"]),
+    Extension("examples.echo_client_cython", ["examples/benchmark_protocol.pyx"]),
 ]
 
 build_wheel = any(cmd in sys.argv for cmd in ("bdist_wheel",))
