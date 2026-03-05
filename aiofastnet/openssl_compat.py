@@ -1,30 +1,28 @@
-import os
+import ctypes.util
 import sys
 from pathlib import Path
 
 
-def _pick_library(base_dir: Path, prefix: str, suffix: str):
-    if not base_dir.exists():
-        return None
-    candidates = sorted(base_dir.glob(f"{prefix}*{suffix}*"))
-    if not candidates:
-        return None
-    for p in candidates:
-        name = p.name
-        if ".so." in name or ".dylib." in name:
-            return str(p)
-    return str(candidates[0])
-
-
 def _find_openssl_library_paths():
-    if sys.platform == "darwin":
-        return b"libssl.dylib", b"libcrypto.dylib"
-    elif sys.platform in ("linux", "aix", "freebsd"):
-        return b"libssl.so", b"libcrypto.so"
-    elif sys.platform == "win32":
-        if sys.version_info < (3, 11):
-            return b"libssl-3.dll", b"libcrypto-3.dll"
-        else:
-            return b"libssl-1.dll", b"libcrypto-1.dll"
-    else:
-        return ImportError(f"unsupported platform: {sys.platform}")
+    libssl_path = None
+    libcrypto_path = None
+
+    for lib in ctypes.util.dllist():
+        if not lib:
+            continue
+        p = Path(lib).resolve(strict=False)
+        s = str(p)
+        if "libssl" in s and libssl_path is None:
+            libssl_path = s
+        elif "libcrypto" in s and libcrypto_path is None:
+            libcrypto_path = s
+        if libssl_path is not None and libcrypto_path is not None:
+            break
+
+    if libssl_path is None or libcrypto_path is None:
+        raise ImportError(
+            "aiofastnet: failed to find loaded OpenSSL libraries via ctypes.util.dllist(); "
+            f"libssl={libssl_path!r}, libcrypto={libcrypto_path!r}"
+        )
+
+    return libssl_path.encode(), libcrypto_path.encode()

@@ -23,11 +23,15 @@ cdef init_openssl():
     cdef:
         bytes ssl_lib_name
         bytes crypto_lib_name
+        const char* ssl_lib_ptr
+        const char* crypto_lib_ptr
         const char* missing_lib
 
     ssl_lib_name, crypto_lib_name = _find_openssl_library_paths()
+    ssl_lib_ptr = PyBytes_AS_STRING(ssl_lib_name)
+    crypto_lib_ptr = PyBytes_AS_STRING(crypto_lib_name)
 
-    if init_openssl_compat(ssl_lib_name, crypto_lib_name) != 1:
+    if init_openssl_compat(ssl_lib_ptr, crypto_lib_ptr) != 1:
         missing_lib = openssl_compat_last_error()
         if missing_lib != NULL:
             raise ImportError(

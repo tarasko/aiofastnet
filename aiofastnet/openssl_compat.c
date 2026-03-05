@@ -1,6 +1,8 @@
 #include "openssl_compat.h"
 
 #include <string.h>
+#include <stdio.h>
+#include <stdarg.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -77,6 +79,16 @@ ASN1_OCTET_STRING *(*aiofn_a2i_IPADDRESS)(const char *ipasc) = NULL;
 
 static int g_initialized = 0;
 static const char *g_last_error = NULL;
+static char g_last_error_buf[1024];
+
+static void set_last_error(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(g_last_error_buf, sizeof(g_last_error_buf), fmt, ap);
+    va_end(ap);
+    g_last_error = g_last_error_buf;
+    fprintf(stderr, "aiofastnet openssl_compat error: %s\n", g_last_error_buf);
+}
 
 #ifdef _WIN32
 static HMODULE g_ssl_lib = NULL;
@@ -142,7 +154,7 @@ static void *resolve_required(const char *name) {
     do {                                                                       \
         fn = resolve_required(sym);                                            \
         if (fn == NULL) {                                                      \
-            g_last_error = sym;                                                \
+            set_last_error("missing symbol: %s", sym);                         \
             return 0;                                                          \
         }                                                                      \
     } while (0)
@@ -152,16 +164,38 @@ int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path) {
         return 1;
     }
     g_last_error = NULL;
+    g_last_error_buf[0] = '\0';
 
 #ifdef _WIN32
     g_ssl_lib = open_library(ssl_lib_path);
     g_crypto_lib = open_library(crypto_lib_path);
-#else
-    if (ssl_lib_path != NULL && ssl_lib_path[0] != '\0') {
-        g_ssl_lib = dlopen(ssl_lib_path, RTLD_NOW | RTLD_LOCAL);
+    if (g_ssl_lib == NULL) {
+        set_last_error("LoadLibrary failed for ssl: %s", ssl_lib_path ? ssl_lib_path : "(null)");
+        return 0;
     }
-    if (crypto_lib_path != NULL && crypto_lib_path[0] != '\0') {
-        g_crypto_lib = dlopen(crypto_lib_path, RTLD_NOW | RTLD_LOCAL);
+    if (g_crypto_lib == NULL) {
+        set_last_error("LoadLibrary failed for crypto: %s", crypto_lib_path ? crypto_lib_path : "(null)");
+        return 0;
+    }
+#else
+    const char *err;
+    dlerror();
+    g_ssl_lib = dlopen(ssl_lib_path, RTLD_NOLOAD | RTLD_NOW | RTLD_GLOBAL);
+    err = dlerror();
+    if (g_ssl_lib == NULL) {
+        set_last_error("dlopen ssl failed for '%s': %s",
+                       ssl_lib_path ? ssl_lib_path : "(null)",
+                       err ? err : "unknown");
+        return 0;
+    }
+    dlerror();
+    g_crypto_lib = dlopen(crypto_lib_path, RTLD_NOLOAD | RTLD_NOW | RTLD_GLOBAL);
+    err = dlerror();
+    if (g_crypto_lib == NULL) {
+        set_last_error("dlopen crypto failed for '%s': %s",
+                       crypto_lib_path ? crypto_lib_path : "(null)",
+                       err ? err : "unknown");
+        return 0;
     }
 #endif
 
@@ -222,7 +256,7 @@ int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path) {
         aiofn_SSL_get_peer_certificate = resolve_symbol("SSL_get_peer_certificate");
     }
     if (aiofn_SSL_get_peer_certificate == NULL) {
-        g_last_error = "SSL_get1_peer_certificate/SSL_get_peer_certificate";
+        set_last_error("missing symbol: SSL_get1_peer_certificate/SSL_get_peer_certificate");
         return 0;
     }
 
