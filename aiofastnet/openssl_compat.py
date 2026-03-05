@@ -3,6 +3,8 @@ import os
 
 
 def _find_openssl_library_paths():
+    import ssl
+
     libssl_path = None
     libcrypto_path = None
 
