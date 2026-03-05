@@ -1,6 +1,5 @@
 import ctypes.util
-import sys
-from pathlib import Path
+import os
 
 
 def _find_openssl_library_paths():
@@ -10,14 +9,10 @@ def _find_openssl_library_paths():
     for lib in ctypes.util.dllist():
         if not lib:
             continue
-        p = Path(lib).resolve(strict=False)
-        s = str(p)
-        if "libssl" in s and libssl_path is None:
-            libssl_path = s
-        elif "libcrypto" in s and libcrypto_path is None:
-            libcrypto_path = s
-        if libssl_path is not None and libcrypto_path is not None:
-            break
+        if "libssl" in lib and libssl_path is None:
+            libssl_path = os.path.normpath(lib)
+        elif "libcrypto" in lib and libcrypto_path is None:
+            libcrypto_path = os.path.normpath(lib)
 
     if libssl_path is None or libcrypto_path is None:
         raise ImportError(
