@@ -5,7 +5,7 @@ from Cython.Build import cythonize
 from setuptools import Extension, setup
 
 vi = sys.version_info
-if vi < (3, 9):
+if vi < (3, 8):
     raise RuntimeError('aiofastnet requires Python 3.9 or greater')
 
 if os.name == 'nt':
