@@ -6,8 +6,8 @@ requires-python = '>=3.9'
 readme = "README.rst"
 license-files = ["LICENSE"]
 dynamic = ["version"]
-keywords = ["websocket", "networking"]
-dependencies = []
+keywords = ["asyncio"]
+dependencies = ['psutil']
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Framework :: AsyncIO",

@@ -1,24 +1,23 @@
 import ctypes.util
 import os
-
+import psutil
 
 def _find_openssl_library_paths():
+    # Make sure ssl module is loaded and libssl, libcrypto with it
     import ssl
 
     libssl_path = None
     libcrypto_path = None
 
-    for lib in ctypes.util.dllist():
-        if not lib:
-            continue
+    for mm in psutil.Process().memory_maps():
         # Find libssl and libcrypto among loaded libraries.
         # Prefer those that were loaded from the python directory
-        if "libssl" in lib:
-            if libssl_path is None or "ython" in lib:
-                libssl_path = os.path.normpath(lib)
-        elif "libcrypto" in lib:
-            if libcrypto_path is None or "ython" in lib:
-                libcrypto_path = os.path.normpath(lib)
+        if "libssl" in mm.path:
+            if libssl_path is None or "ython" in mm.path:
+                libssl_path = os.path.normpath(mm.path)
+        elif "libcrypto" in mm.path:
+            if libcrypto_path is None or "ython" in mm.path:
+                libcrypto_path = os.path.normpath(mm.path)
 
     if libssl_path is None or libcrypto_path is None:
         raise ImportError(
