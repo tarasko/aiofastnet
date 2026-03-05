@@ -11,11 +11,13 @@ def _find_openssl_library_paths():
     for lib in ctypes.util.dllist():
         if not lib:
             continue
+        # Find libssl and libcrypto among loaded libraries.
+        # Prefer those that were loaded from the python directory
         if "libssl" in lib:
-            if libssl_path is None or "ython" in libssl_path:
+            if libssl_path is None or "ython" in lib:
                 libssl_path = os.path.normpath(lib)
         elif "libcrypto" in lib:
-            if libcrypto_path is None or "ython" in libcrypto_path:
+            if libcrypto_path is None or "ython" in lib:
                 libcrypto_path = os.path.normpath(lib)
 
     if libssl_path is None or libcrypto_path is None:
