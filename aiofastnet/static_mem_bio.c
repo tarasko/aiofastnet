@@ -4,8 +4,6 @@
 
 #include "static_mem_bio.h"
 
-#include <openssl/crypto.h>
-
 typedef struct static_mem_bio_state_s {
     unsigned char *begin;
     unsigned char *end;
@@ -15,7 +13,6 @@ typedef struct static_mem_bio_state_s {
 } static_mem_bio_state_t;
 
 static BIO_METHOD *g_static_mem_bio_method = NULL;
-static CRYPTO_ONCE g_static_mem_bio_once = CRYPTO_ONCE_STATIC_INIT;
 
 static size_t
 static_mem_avail(const static_mem_bio_state_t *st) {
@@ -45,7 +42,7 @@ static_mem_bio_destroy(BIO *bio) {
 
     st = (static_mem_bio_state_t *)BIO_get_data(bio);
     if (st != NULL) {
-        OPENSSL_free(st);
+        free(st);
         BIO_set_data(bio, NULL);
     }
     BIO_set_init(bio, 0);
@@ -67,10 +64,10 @@ static_mem_bio_read(BIO *bio, char *out, int outl) {
         return 0;
     }
 
-    BIO_clear_retry_flags(bio);
+    BIO_clear_flags(bio, BIO_FLAGS_RWS | BIO_FLAGS_SHOULD_RETRY);
     avail = static_mem_avail(st);
     if (avail == 0) {
-        BIO_set_retry_read(bio);
+        BIO_set_flags(bio, BIO_FLAGS_READ | BIO_FLAGS_SHOULD_RETRY);
         return st->eof_return;
     }
 
@@ -105,7 +102,7 @@ static_mem_bio_write(BIO *bio, const char *in, int inl) {
         return 0;
     }
 
-    BIO_clear_retry_flags(bio);
+    BIO_clear_flags(bio, BIO_FLAGS_RWS | BIO_FLAGS_SHOULD_RETRY);
     space = static_mem_space(st);
     if (space < (size_t)inl && st->rptr != st->begin) {
         avail = static_mem_avail(st);
@@ -116,7 +113,7 @@ static_mem_bio_write(BIO *bio, const char *in, int inl) {
     }
 
     if (space == 0) {
-        BIO_set_retry_write(bio);
+        BIO_set_flags(bio, BIO_FLAGS_WRITE | BIO_FLAGS_SHOULD_RETRY);
         return -1;
     }
 
@@ -125,7 +122,7 @@ static_mem_bio_write(BIO *bio, const char *in, int inl) {
     st->wptr += n;
 
     if (n < (size_t)inl) {
-        BIO_set_retry_write(bio);
+        BIO_set_flags(bio, BIO_FLAGS_WRITE | BIO_FLAGS_SHOULD_RETRY);
     }
 
     if (n > (size_t)INT_MAX) {
@@ -298,9 +295,8 @@ static void static_mem_bio_init_once(void) {
 }
 
 const BIO_METHOD* BIO_s_static_mem(void) {
-    if (!CRYPTO_THREAD_run_once(&g_static_mem_bio_once,
-                                static_mem_bio_init_once)) {
-        return NULL;
+    if (g_static_mem_bio_method == NULL) {
+        static_mem_bio_init_once();
     }
     return g_static_mem_bio_method;
 }
@@ -325,7 +321,7 @@ BIO_new_static_mem(void *buf, size_t cap) {
         return NULL;
     }
 
-    st = OPENSSL_zalloc(sizeof(*st));
+    st = calloc(1, sizeof(*st));
     if (st == NULL) {
         BIO_free(bio);
         return NULL;

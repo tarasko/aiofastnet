@@ -1,4 +1,4 @@
-cdef extern from "openssl/ssl.h" nogil:
+cdef extern from "openssl_compat.h" nogil:
     ctypedef struct SSL_CTX:
         pass
 
@@ -11,21 +11,16 @@ cdef extern from "openssl/ssl.h" nogil:
     ctypedef struct BIO:
         pass
 
-    ctypedef struct BUF_MEM:
-        size_t length   # current number of bytes
-        char *data
-        size_t max      # size of buffer
-
     ctypedef struct X509:
-        pass
-
-    ctypedef struct X509_NAME:
         pass
 
     ctypedef struct X509_VERIFY_PARAM:
         pass
 
     ctypedef struct SSL_CIPHER:
+        pass
+
+    ctypedef struct ASN1_OCTET_STRING:
         pass
 
     enum:
@@ -38,19 +33,14 @@ cdef extern from "openssl/ssl.h" nogil:
         SSL_ERROR_CERTIFICATE_VERIFY_FAILED
 
     enum:
-        OPENSSL_VERSION_NUMBER
         SSL_VERIFY_PEER
         SSL_RECEIVED_SHUTDOWN
         SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER
         SSL_MODE_ENABLE_PARTIAL_WRITE
         SSL_MODE_AUTO_RETRY
 
-    enum:
-        BIO_FLAGS_NONCLEAR_RST
-
-    const BIO_METHOD *BIO_s_mem()
-
-    int SSL_CTX_get_verify_mode(const SSL_CTX *ctx)
+    int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path)
+    const char* openssl_compat_last_error()
 
     BIO *BIO_new(const BIO_METHOD *type)
     int BIO_free(BIO *a)
@@ -58,10 +48,7 @@ cdef extern from "openssl/ssl.h" nogil:
     int BIO_write(BIO *b, const void *data, int dlen)
     int BIO_pending(BIO *b)
     long BIO_set_nbio(BIO *b, long n)
-    int BIO_seek(BIO *b, int ofs)
     long BIO_get_mem_data(BIO *b, char** pp)
-    void BIO_get_mem_ptr(BIO *b, BUF_MEM** pp)
-    void BIO_set_flags(BIO *b, int flags)
     int BIO_reset(BIO *b)
 
     SSL *SSL_new(SSL_CTX *ctx)
@@ -71,21 +58,14 @@ cdef extern from "openssl/ssl.h" nogil:
     void SSL_set_connect_state(SSL *ssl)
     long SSL_set_mode(SSL *ssl, long mode)
     int SSL_set_tlsext_host_name(const SSL *s, const char *name)
-    int SSL_is_server(const SSL *ssl)
     int SSL_get_error(const SSL *ssl, int ret)
-    int SSL_in_init(const SSL *s)
-    int SSL_in_before(const SSL *s)
     int SSL_is_init_finished(const SSL *s)
     int SSL_pending(const SSL *ssl)
-    int SSL_in_connect_init(SSL *s)
-    int SSL_in_accept_init(SSL *s)
     int SSL_do_handshake(SSL *ssl)
-    int SSL_accept(SSL *ssl)
     int SSL_read_ex(SSL *ssl, void *buf, size_t num, size_t *readbytes)
     int SSL_write_ex(SSL *s, const void *buf, size_t num, size_t *written)
     int SSL_shutdown(SSL *ssl)
     int SSL_get_shutdown(const SSL *ssl)
-    int SSL_get_error(const SSL *ssl, int ret)
     long SSL_get_verify_result(const SSL *ssl)
 
     const SSL_CIPHER *SSL_get_current_cipher(const SSL *ssl)
@@ -94,7 +74,6 @@ cdef extern from "openssl/ssl.h" nogil:
     int SSL_CIPHER_get_bits(const SSL_CIPHER *cipher, int *alg_bits)
 
     X509 *SSL_get_peer_certificate(const SSL *ssl)
-    int X509_up_ref(X509 *x)
     X509_VERIFY_PARAM *SSL_get0_param(SSL *ssl)
     X509_VERIFY_PARAM *SSL_CTX_get0_param(SSL_CTX *ctx)
 
@@ -102,42 +81,12 @@ cdef extern from "openssl/ssl.h" nogil:
     void X509_VERIFY_PARAM_set_hostflags(X509_VERIFY_PARAM *param, unsigned int flags)
     int X509_VERIFY_PARAM_set1_host(X509_VERIFY_PARAM *param, const char *name, size_t namelen)
     int X509_VERIFY_PARAM_set1_ip(X509_VERIFY_PARAM *param, const unsigned char *ip, size_t iplen)
-    const X509_NAME *X509_get_subject_name(const X509 *x)
     const char *X509_verify_cert_error_string(long n)
     void X509_free(X509 *a)
-
-
-cdef extern from "openssl/err.h" nogil:
-    enum:
-        ERR_LIB_SSL
-        ERR_LIB_X509
-        ERR_LIB_X509V3
-        ERR_LIB_PEM
-        ERR_LIB_ASN1
-        ERR_LIB_EVP
-        ERR_LIB_BIO
-        ERR_LIB_SYS
-        ERR_LIB_PKCS12
-        ERR_LIB_PKCS7
-        ERR_LIB_RAND
-        ERR_LIB_CONF
-        ERR_LIB_ENGINE
-        ERR_LIB_OCSP
-        ERR_LIB_UI
-        ERR_LIB_TS
-        ERR_LIB_CMS
-        ERR_LIB_CRYPTO
-
-    enum:
-        SSL_R_CERTIFICATE_VERIFY_FAILED
-
-    enum:
-        X509_V_ERR_HOSTNAME_MISMATCH
-        X509_V_ERR_IP_ADDRESS_MISMATCH
+    int i2d_X509(X509 *x, unsigned char **out)
 
     unsigned long ERR_peek_last_error()
     void ERR_clear_error()
-    void ERR_error_string_n(unsigned long e, char *buf, size_t len)
     const char* ERR_lib_error_string(unsigned long e)
     const char* ERR_reason_error_string(unsigned long e)
     void ERR_print_errors_cb(int (*cb)(const char *str, size_t len, void *u),
@@ -145,22 +94,10 @@ cdef extern from "openssl/err.h" nogil:
     int ERR_GET_LIB(unsigned long e)
     int ERR_GET_REASON(unsigned long e)
 
-
-cdef extern from "openssl/asn1.h" nogil:
-    ctypedef struct ASN1_OCTET_STRING:
-        pass
-
     void ASN1_OCTET_STRING_free(ASN1_OCTET_STRING *a)
     const unsigned char *ASN1_STRING_get0_data(const ASN1_OCTET_STRING *x)
-    int ASN1_STRING_length(ASN1_OCTET_STRING *x);
-
-
-cdef extern from "openssl/x509v3.h" nogil:
+    int ASN1_STRING_length(ASN1_OCTET_STRING *x)
     ASN1_OCTET_STRING* a2i_IPADDRESS(const char *ipasc)
-
-cdef extern from "certdecode.h":
-    object aiofn_decode_certificate(X509 *certificate)
-
 
 cdef extern from "static_mem_bio.h" nogil:
     BIO *BIO_new_static_mem(void *buf, size_t cap)

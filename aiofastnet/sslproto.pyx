@@ -1,7 +1,11 @@
 import asyncio
+import os
 import socket
 import ssl
+import sys
+import tempfile
 import warnings
+from pathlib import Path
 from logging import getLogger
 
 from cpython.contextvars cimport *
@@ -15,6 +19,80 @@ from . import constants
 from .utils cimport *
 from .openssl cimport *
 from .transport cimport *
+
+cdef tuple _openssl_lib_paths
+cdef object _ssl_lib_path
+cdef object _crypto_lib_path
+cdef bytes _ssl_lib_b = b""
+cdef bytes _crypto_lib_b = b""
+cdef char* _ssl_lib_c = NULL
+cdef char* _crypto_lib_c = NULL
+cdef const char* _openssl_missing
+
+def _pick_library(base_dir, prefix, suffix):
+    if not base_dir.exists():
+        return None
+    candidates = sorted(base_dir.glob(f"{prefix}*{suffix}*"))
+    if not candidates:
+        return None
+    for p in candidates:
+        name = p.name
+        if ".so." in name or ".dylib." in name:
+            return str(p)
+    return str(candidates[0])
+
+
+def _find_openssl_library_paths():
+    roots = []
+    for root in (
+        Path(sys.prefix) / "libs",
+        Path(getattr(sys, "base_prefix", sys.prefix)) / "libs",
+        Path(sys.prefix) / "lib",
+        Path(getattr(sys, "base_prefix", sys.prefix)) / "lib",
+    ):
+        if root not in roots:
+            roots.append(root)
+
+    if os.name == "nt":
+        ssl_suffix = ".dll"
+        crypto_suffix = ".dll"
+    elif sys.platform == "darwin":
+        ssl_suffix = ".dylib"
+        crypto_suffix = ".dylib"
+    else:
+        ssl_suffix = ".so"
+        crypto_suffix = ".so"
+
+    ssl_path = None
+    crypto_path = None
+    for root in roots:
+        if ssl_path is None:
+            ssl_path = _pick_library(root, "libssl", ssl_suffix)
+        if crypto_path is None:
+            crypto_path = _pick_library(root, "libcrypto", crypto_suffix)
+        if ssl_path is not None and crypto_path is not None:
+            break
+    return (ssl_path, crypto_path)
+
+
+_openssl_lib_paths = _find_openssl_library_paths()
+_ssl_lib_path = _openssl_lib_paths[0]
+_crypto_lib_path = _openssl_lib_paths[1]
+if _ssl_lib_path is not None:
+    _ssl_lib_b = os.fsencode(_ssl_lib_path)
+    _ssl_lib_c = PyBytes_AS_STRING(_ssl_lib_b)
+if _crypto_lib_path is not None:
+    _crypto_lib_b = os.fsencode(_crypto_lib_path)
+    _crypto_lib_c = PyBytes_AS_STRING(_crypto_lib_b)
+
+if init_openssl_compat(_ssl_lib_c, _crypto_lib_c) != 1:
+    _openssl_missing = openssl_compat_last_error()
+    if _openssl_missing != NULL:
+        raise ImportError(
+            f"aiofastnet: failed to initialize OpenSSL compatibility layer; "
+            f"missing symbol: {PyUnicode_FromString(_openssl_missing)}; "
+            f"ssl_lib={_ssl_lib_path!r}, crypto_lib={_crypto_lib_path!r}")
+    raise ImportError("aiofastnet: failed to initialize OpenSSL compatibility layer")
 
 
 cdef:
@@ -80,28 +158,6 @@ cdef SSL_CTX* _get_ssl_ctx_ptr(object py_ctx) except NULL:
     # The guys from python are reluctant to expose it directly:
     # https://bugs.python.org/issue43902
     return (<PySSLContextHack*> <PyObject*> py_ctx).ctx
-
-
-cdef dict _lib_to_name = {
-    ERR_LIB_SSL: "SSL",
-    ERR_LIB_X509: "X509",
-    ERR_LIB_X509V3: "X509V3",
-    ERR_LIB_PEM: "PEM",
-    ERR_LIB_ASN1: "ASN1",
-    ERR_LIB_EVP: "EVP",
-    ERR_LIB_BIO: "BIO",
-    ERR_LIB_SYS: "SYS",
-    ERR_LIB_PKCS12: "PKCS12",
-    ERR_LIB_PKCS7: "PKCS7",
-    ERR_LIB_RAND: "RAND",
-    ERR_LIB_CONF: "CONF",
-    ERR_LIB_ENGINE: "ENGINE",
-    ERR_LIB_OCSP: "OCSP",
-    ERR_LIB_UI: "UI",
-    ERR_LIB_TS: "TS",
-    ERR_LIB_CMS: "CMS",
-    ERR_LIB_CRYPTO: "CRYPTO",
-}
 
 
 cdef int _print_error_cb(const char* str, size_t len, void* u) noexcept nogil:
@@ -188,12 +244,10 @@ cdef class SSLConnection:
             X509_VERIFY_PARAM* ssl_ctx_verification_params
             unsigned int ssl_ctx_host_flags
 
-        if OPENSSL_VERSION_NUMBER < 0x101010cf:
-            ssl_verification_params = SSL_get0_param(self.ssl_object)
-            ssl_ctx_verification_params = SSL_CTX_get0_param(self.ssl_ctx)
-
-            ssl_ctx_host_flags = X509_VERIFY_PARAM_get_hostflags(ssl_ctx_verification_params)
-            X509_VERIFY_PARAM_set_hostflags(ssl_verification_params, ssl_ctx_host_flags)
+        ssl_verification_params = SSL_get0_param(self.ssl_object)
+        ssl_ctx_verification_params = SSL_CTX_get0_param(self.ssl_ctx)
+        ssl_ctx_host_flags = X509_VERIFY_PARAM_get_hostflags(ssl_ctx_verification_params)
+        X509_VERIFY_PARAM_set_hostflags(ssl_verification_params, ssl_ctx_host_flags)
 
         SSL_set_mode(self.ssl_object,
                      SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_AUTO_RETRY | SSL_MODE_ENABLE_PARTIAL_WRITE)
@@ -226,7 +280,7 @@ cdef class SSLConnection:
         if peer_cert == NULL:
             return None
 
-        cdef int verification = SSL_CTX_get_verify_mode(self.ssl_ctx)
+        cdef int verification = self.ssl_ctx_py.verify_mode
         try:
             return self._decode_certificate(peer_cert) if verification & SSL_VERIFY_PEER else dict()
         finally:
@@ -240,9 +294,6 @@ cdef class SSLConnection:
 
     cdef inline make_exc_from_ssl_error(self, str descr, int err_code):
         assert err_code != SSL_ERROR_NONE, "check logic"
-        cdef char err_string[256]
-        cdef unsigned long last_error
-        cdef int lib, reason
 
         if err_code == SSL_ERROR_WANT_READ:
             return ssl.SSLWantReadError(descr)
@@ -260,27 +311,25 @@ cdef class SSLConnection:
     cdef inline _exc_from_err_last_error(self, str descr):
         cdef unsigned long last_error = _err_last_error()
         cdef int lib = ERR_GET_LIB(last_error)
-        cdef int reason = ERR_GET_REASON(last_error)
+        cdef const char * lib_ptr
+        cdef const char * reason_ptr
+        cdef const char * verify_ptr
 
         _log_error_queue()
 
-        lib_name = _lib_to_name.get(lib, "UNKNOWN")
-        cdef const char * reason_ptr = ERR_reason_error_string(last_error)
+        lib_ptr = ERR_lib_error_string(last_error)
+        lib_name = PyUnicode_FromString(lib_ptr) if lib_ptr != NULL else f"UNKNOWN_{lib}"
+        lib_name = lib_name.upper()
+        reason_ptr = ERR_reason_error_string(last_error)
         reason_name = PyUnicode_FromString(
             reason_ptr) if reason_ptr != NULL else ""
         reason_name = reason_name.upper().replace(" ", "_")
 
-        if reason == SSL_R_CERTIFICATE_VERIFY_FAILED:
+        if reason_name == "CERTIFICATE_VERIFY_FAILED":
             assert self.server_hostname is not None
             verify_code = SSL_get_verify_result(self.ssl_object)
-            if verify_code == X509_V_ERR_HOSTNAME_MISMATCH:
-                txt = f"Hostname mismatch, certificate is not valid for '{self.server_hostname}'"
-            elif verify_code == X509_V_ERR_IP_ADDRESS_MISMATCH:
-                txt = f"IP address mismatch, certificate is not valid for '{self.server_hostname}'"
-            else:
-                verify_str = X509_verify_cert_error_string(verify_code)
-                txt = PyUnicode_FromString(
-                    verify_str) if verify_str != NULL else ""
+            verify_ptr = X509_verify_cert_error_string(verify_code)
+            txt = PyUnicode_FromString(verify_ptr) if verify_ptr != NULL else ""
             str_error = f"[{lib_name}: {reason_name}] {descr}: {txt}"
             exc = ssl.SSLCertVerificationError()
             exc.verify_code = verify_code
@@ -326,7 +375,32 @@ cdef class SSLConnection:
                 ASN1_OCTET_STRING_free(ip)
 
     cdef inline _decode_certificate(self, X509* certificate):
-        return aiofn_decode_certificate(certificate)
+        cdef int der_len = i2d_X509(certificate, NULL)
+        cdef bytes der
+        cdef unsigned char* p
+        cdef str path = ""
+
+        if der_len <= 0:
+            raise ssl.SSLError("i2d_X509 failed")
+
+        der = PyBytes_FromStringAndSize(NULL, der_len)
+        if der is None:
+            raise MemoryError()
+
+        p = <unsigned char*>PyBytes_AS_STRING(der)
+        if i2d_X509(certificate, &p) != der_len:
+            raise ssl.SSLError("i2d_X509 produced invalid DER size")
+
+        pem = ssl.DER_cert_to_PEM_cert(der)
+        tmp = tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="ascii")
+        try:
+            tmp.write(pem)
+            tmp.close()
+            path = tmp.name
+            return ssl._ssl._test_decode_cert(path)
+        finally:
+            if path:
+                os.unlink(path)
 
 
 cdef inline _run_in_context(context, method):

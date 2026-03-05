@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 
-#include <openssl/bio.h>
+#include "openssl_compat.h"
 
 #ifdef __cplusplus
 extern "C" {
