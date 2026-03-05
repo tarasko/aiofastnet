@@ -9,7 +9,7 @@ cdef class Protocol:
     cpdef get_buffer(self, Py_ssize_t hint)
     cpdef buffer_updated(self, Py_ssize_t bytes_read)
     cpdef data_received(self, data)
-    cpdef get_local_write_buffer_size(self)
+    cpdef Py_ssize_t get_local_write_buffer_size(self) except -1
 
 
 cpdef is_buffered_protocol(object)

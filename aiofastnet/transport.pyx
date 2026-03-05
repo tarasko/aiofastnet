@@ -45,7 +45,7 @@ cdef class Protocol:
     cpdef is_buffered_protocol(self):
         return None
 
-    cpdef get_local_write_buffer_size(self):
+    cpdef Py_ssize_t get_local_write_buffer_size(self) except -1:
         return 0
 
     cpdef get_buffer(self, Py_ssize_t hint):
@@ -83,16 +83,16 @@ cdef class SelectorSocketTransport(Transport):
         dict _extra
 
         object _sock
-        int _sock_fd
         object _server
         object _write_backlog
+        object _sock_fd_obj
+        int _sock_fd
         int _conn_lost
         bint _closing
         bint _paused
 
         bint _eof
         object _empty_waiter
-        bint _send_again_after_partial_send
         bint _is_debug
 
         aiofn_iovec _iovecs[256]
@@ -114,9 +114,10 @@ cdef class SelectorSocketTransport(Transport):
             except socket.error:
                 self._extra['peername'] = None
         self._sock = sock
-        self._sock_fd = sock.fileno()
         self._server = server
         self._write_backlog = collections.deque()
+        self._sock_fd_obj = sock.fileno()
+        self._sock_fd = self._sock_fd_obj
         self._conn_lost = 0  # Set when call to connection_lost scheduled.
         self._closing = False  # Set when close() called.
         self._paused = False  # Set when pause_reading() called
@@ -126,10 +127,6 @@ cdef class SelectorSocketTransport(Transport):
 
         self._eof = False
         self._empty_waiter = None
-
-        # Enable this to experiment with calling send again until we get EAGAIN
-        # after successful partial send
-        self._send_again_after_partial_send = False
         self._is_debug = loop.get_debug()
 
         _set_nodelay(self._sock)
@@ -137,7 +134,7 @@ cdef class SelectorSocketTransport(Transport):
         self._loop.call_soon(self._protocol.connection_made, self)
         # only start reading when connection_made() has been called
         self._loop.call_soon(self._loop.add_reader,
-                             self._sock_fd, self._read_ready)
+                             self._sock_fd_obj, self._read_ready)
         if waiter is not None:
             # only wake up the waiter when connection_made() has been called
             self._loop.call_soon(_set_result_unless_cancelled, waiter, None)
@@ -148,7 +145,7 @@ cdef class SelectorSocketTransport(Transport):
             info.append('closed')
         elif self._closing:
             info.append('closing')
-        info.append(f'fd={self._sock_fd}')
+        info.append(f'fd={self._sock_fd_obj}')
         # test if the transport was closed
         if self._loop is not None and not self._loop.is_closed():
             bufsize = self.get_write_buffer_size()
@@ -196,7 +193,7 @@ cdef class SelectorSocketTransport(Transport):
         if not self.is_reading():
             return
         self._paused = True
-        self._loop.remove_reader(self._sock_fd)
+        self._loop.remove_reader(self._sock_fd_obj)
         if self._is_debug:
             _logger.debug("%r pauses reading", self)
 
@@ -207,7 +204,7 @@ cdef class SelectorSocketTransport(Transport):
 
         if not self.is_reading():
             return
-        self._loop.add_reader(self._sock_fd, self._read_ready)
+        self._loop.add_reader(self._sock_fd_obj, self._read_ready)
 
         if self._is_debug:
             _logger.debug("%r resumes reading", self)
@@ -216,10 +213,10 @@ cdef class SelectorSocketTransport(Transport):
         if self._closing:
             return
         self._closing = True
-        self._loop.remove_reader(self._sock_fd)
+        self._loop.remove_reader(self._sock_fd_obj)
         if not self._write_backlog:
             self._conn_lost += 1
-            self._loop.remove_writer(self._sock_fd)
+            self._loop.remove_writer(self._sock_fd_obj)
             self._loop.call_soon(self._call_connection_lost, None)
 
     cpdef get_write_buffer_size(self):
@@ -339,7 +336,7 @@ cdef class SelectorSocketTransport(Transport):
             # We're keeping the connection open so the
             # protocol can write more, but we still can't
             # receive more, so remove the reader callback.
-            self._loop.remove_reader(self._sock_fd)
+            self._loop.remove_reader(self._sock_fd_obj)
         else:
             self.close()
 
@@ -372,7 +369,7 @@ cdef class SelectorSocketTransport(Transport):
                 return
 
             # Not all was written; register write handler.
-            self._loop.add_writer(self._sock_fd, self._write_ready)
+            self._loop.add_writer(self._sock_fd_obj, self._write_ready)
         else:
             data = aiofn_maybe_copy_buffer(data)
 
@@ -395,7 +392,7 @@ cdef class SelectorSocketTransport(Transport):
                 return
 
             # Not all was written; register write handler.
-            self._loop.add_writer(self._sock_fd, self._write_ready)
+            self._loop.add_writer(self._sock_fd_obj, self._write_ready)
         else:
             data = PyBytes_FromStringAndSize(ptr, sz)
 
@@ -428,7 +425,7 @@ cdef class SelectorSocketTransport(Transport):
 
         # If the entire buffer couldn't be written, register a write handler
         if self._write_backlog:
-            self._loop.add_writer(self._sock_fd, self._write_ready)
+            self._loop.add_writer(self._sock_fd_obj, self._write_ready)
             self._maybe_pause_protocol()
 
     cpdef can_write_eof(self):
@@ -469,11 +466,6 @@ cdef class SelectorSocketTransport(Transport):
 
                 data_ptr += bytes_sent
                 data_len -= bytes_sent
-
-                # if _send_again_after_partial_send is True, retry send
-                # until EAGAIN
-                if not self._send_again_after_partial_send:
-                    return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
 
     cdef inline _adjust_leftover_buffer(self, list_of_data, Py_ssize_t bytes_sent):
         cdef:
@@ -541,7 +533,7 @@ cdef class SelectorSocketTransport(Transport):
         except (SystemExit, KeyboardInterrupt):
             raise
         except BaseException as exc:
-            self._loop.remove_writer(self._sock_fd)
+            self._loop.remove_writer(self._sock_fd_obj)
             self._write_backlog.clear()
             self._fatal_error(exc, 'Fatal write error on socket transport')
             if self._empty_waiter is not None:
@@ -549,7 +541,7 @@ cdef class SelectorSocketTransport(Transport):
         else:
             self._maybe_resume_protocol()
             if not self._write_backlog:
-                self._loop.remove_writer(self._sock_fd)
+                self._loop.remove_writer(self._sock_fd_obj)
                 if self._empty_waiter is not None:
                     self._empty_waiter.set_result(None)
                 if self._closing:
@@ -659,10 +651,10 @@ cdef class SelectorSocketTransport(Transport):
             return
         if self._write_backlog:
             self._write_backlog.clear()
-            self._loop.remove_writer(self._sock_fd)
+            self._loop.remove_writer(self._sock_fd_obj)
         if not self._closing:
             self._closing = True
-            self._loop.remove_reader(self._sock_fd)
+            self._loop.remove_reader(self._sock_fd_obj)
         self._conn_lost += 1
         self._loop.call_soon(self._call_connection_lost, exc)
 

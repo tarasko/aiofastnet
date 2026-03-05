@@ -197,7 +197,7 @@ cdef class SSLConnection:
         X509_VERIFY_PARAM_set_hostflags(ssl_verification_params, ssl_ctx_host_flags)
 
         SSL_set_mode(self.ssl_object,
-                     SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_AUTO_RETRY | SSL_MODE_ENABLE_PARTIAL_WRITE)
+                     SSL_MODE_AUTO_RETRY | SSL_MODE_ENABLE_PARTIAL_WRITE)
 
         if self.server_hostname is not None:
             self._configure_hostname()
@@ -721,7 +721,7 @@ cdef class SSLProtocol(Protocol):
 
     # Underlying transport use this to take into account upstream write buffer
     # size when deciding to report pause_writing()/resume_writing()
-    cpdef get_local_write_buffer_size(self):
+    cpdef Py_ssize_t get_local_write_buffer_size(self) except -1:
         cdef Py_ssize_t total = 0
         for data in self._write_backlog:
             total += len(data)

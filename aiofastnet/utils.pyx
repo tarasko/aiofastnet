@@ -22,10 +22,10 @@ cdef object aiofn_maybe_copy_buffer(object buffer):
     if buffer is None:
         raise ValueError("cannot copy None buffer")
 
-    if PyBytes_CheckExact(buffer):
+    if isinstance(buffer, bytes):
         return buffer
 
-    return bytes(buffer)
+    return PyBytes_FromObject(buffer)
 
 
 cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz):
@@ -33,12 +33,12 @@ cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz
         return PyBytes_FromStringAndSize(ptr, sz)
 
     # Do not copy bytes content, it is safe to make a memory view
-    if PyBytes_CheckExact(buffer):
+    if isinstance(buffer, bytes):
         return memoryview(buffer)[PyBytes_GET_SIZE(buffer) - sz:]
 
     # Always copy bytearray, bytearray may be used as a permanent write buffer
     # in the upper level protocol.
-    if PyByteArray_CheckExact(buffer):
+    if isinstance(buffer, bytearray):
         return PyBytes_FromStringAndSize(ptr, sz)
 
     # For memoryview we check if it is made from bytes object.
@@ -46,7 +46,7 @@ cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz
     cdef Py_buffer pybuf
     PyObject_GetBuffer(buffer, &pybuf, PyBUF_SIMPLE)
     cdef:
-        bint is_bytes = (<PyObject*>pybuf.obj != NULL) and PyBytes_CheckExact(pybuf.obj)
+        bint is_bytes = (<PyObject*>pybuf.obj != NULL) and isinstance(pybuf.obj, bytes)
         Py_ssize_t buffer_size = pybuf.len
     PyBuffer_Release(&pybuf)
 
