@@ -19,7 +19,7 @@ extensions = [
               libraries=base_libraries),
     Extension("aiofastnet.transport", ["aiofastnet/transport.pyx"],
               libraries=base_libraries),
-    Extension("aiofastnet.sslproto", ["aiofastnet/sslproto.pyx", "aiofastnet/static_mem_bio.c", "aiofastnet/openssl_compat.c"],
+    Extension("aiofastnet.sslproto", ["aiofastnet/ssl_protocol.pyx", "aiofastnet/static_mem_bio.c", "aiofastnet/openssl_compat.c"],
               libraries=base_libraries),
 ]
 

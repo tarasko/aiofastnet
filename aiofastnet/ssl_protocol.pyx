@@ -14,10 +14,11 @@ from cpython.memoryview cimport *
 from cpython.unicode cimport *
 
 from . import constants
-from .openssl_compat import _find_openssl_library_paths
+from .openssl_compat import find_openssl_library_paths
 from .utils cimport *
 from .openssl cimport *
 from .transport cimport *
+
 
 cdef init_openssl():
     cdef:
@@ -27,7 +28,7 @@ cdef init_openssl():
         const char* crypto_lib_ptr
         const char* missing_lib
 
-    ssl_lib_name, crypto_lib_name = _find_openssl_library_paths()
+    ssl_lib_name, crypto_lib_name = find_openssl_library_paths()
 
     if init_openssl_compat(ssl_lib_name, crypto_lib_name) != 1:
         missing_lib = openssl_compat_last_error()

@@ -9,7 +9,9 @@ import sys
 import os
 
 
-if sys.version_info < (3, 14):
+if sys.version_info >= (3, 14):
+    dllist = ctypes.util.dllist
+else:
     if os.name == "nt":
         # Listing loaded DLLs on Windows relies on the following APIs:
         # https://learn.microsoft.com/windows/win32/api/psapi/nf-psapi-enumprocessmodules
@@ -148,12 +150,10 @@ if sys.version_info < (3, 14):
                                      ctypes.py_object(libraries)))
                 return libraries
     else:
-        dllist = None
-else:
-    dllist = ctypes.util.dllist
+        raise ImportError(f"unsupported platform {os.name}-{sys.platform}")
 
 
-def _find_openssl_library_paths():
+def find_openssl_library_paths():
     # Make sure ssl module is loaded and libssl, libcrypto with it
     import ssl
 
@@ -165,7 +165,9 @@ def _find_openssl_library_paths():
             continue
 
         # Find libssl and libcrypto among loaded libraries.
-        # Prefer those that were loaded from the python directory
+        # There could be multiple loaded ssl libraries.
+        # Prefer those that were loaded from the python directory, since it is
+        # what ssl module was build against.
         if "libssl" in dl:
             if libssl_path is None or "ython" in dl:
                 libssl_path = os.path.normpath(dl)
