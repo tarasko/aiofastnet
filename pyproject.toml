@@ -5,9 +5,8 @@ authors = [{name = "Taras Kozlov", email = "tarasko.projects@gmail.com"}]
 requires-python = '>=3.9'
 readme = "README.rst"
 license-files = ["LICENSE"]
-dynamic = ["version"]
+dynamic = ["version", "dependencies"]
 keywords = ["asyncio"]
-dependencies = ['psutil']
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Framework :: AsyncIO",
@@ -40,7 +39,8 @@ Documentation = "https://aiofastnet.readthedocs.io/en/latest"
 [tool.setuptools]
 packages = ["aiofastnet"]
 
-#[tool.setuptools.dynamic]
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
 #version = {attr = "aiofastnet.__version__"}
 
 [tool.pytest.ini_options]
