@@ -155,6 +155,9 @@ def _find_openssl_library_paths():
     libcrypto_path = None
 
     for dl in dllist():
+        if not dl:
+            continue
+
         # Find libssl and libcrypto among loaded libraries.
         # Prefer those that were loaded from the python directory
         if "libssl" in dl:
