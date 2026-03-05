@@ -5,6 +5,9 @@ dist
 *.c
 *.html
 *.pyc
+perf.data
+perf.data.old
+playground.py
 
 !static_mem_bio.c
 !certdecode.c

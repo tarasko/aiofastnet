@@ -8,6 +8,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import aiofastnet
 
+from examples.benchmark_protocol import ServerProtocol, ClientProtocol
+
 try:
     import uvloop
 except ImportError:
@@ -20,85 +22,6 @@ VARIANTS = {
     "uvloop": ("uvloop", False),
     "uvloop+aiofastnet": ("uvloop", True),
 }
-
-
-class ServerProtocol(asyncio.BufferedProtocol):
-    def __init__(self, read_buf_size: int = 262144):
-        self._transport = None
-        self._read_buf = bytearray(read_buf_size)
-
-    def connection_made(self, transport):
-        self._transport = transport
-
-    def get_buffer(self, sizehint):
-        return self._read_buf
-
-    def buffer_updated(self, nbytes):
-        if nbytes > 0:
-            # bytearray slicing creates a copy, so write is safe.
-            self._transport.write(self._read_buf[:nbytes])
-
-
-class ClientProtocol(asyncio.BufferedProtocol):
-    WARMUP_REQUESTS = 10
-
-    def __init__(self, payload: bytes, duration: float):
-        self._payload = payload
-        self._payload_size = len(payload)
-        self._duration = duration
-        self._loop = asyncio.get_running_loop()
-
-        self._transport = None
-        self._read_buf = bytearray(262144)
-        self._received_for_reply = 0
-        self._deadline = 0.0
-        self._warmup_left = self.WARMUP_REQUESTS
-        self._measuring = False
-
-        self.requests = 0
-        self.done = self._loop.create_future()
-        self.closed = self._loop.create_future()
-
-    def connection_made(self, transport):
-        self._transport = transport
-        self._transport.write(self._payload)
-
-    def get_buffer(self, sizehint):
-        return self._read_buf
-
-    def buffer_updated(self, nbytes):
-        self._received_for_reply += nbytes
-        if self._received_for_reply < self._payload_size:
-            return
-
-        self._received_for_reply -= self._payload_size
-
-        if self._measuring:
-            if self._loop.time() >= self._deadline:
-                self._transport.close()
-                return
-            self.requests += 1
-        else:
-            self._warmup_left -= 1
-            if self._warmup_left <= 0:
-                self._measuring = True
-                self.requests = 0
-                self._deadline = self._loop.time() + self._duration
-
-        self._transport.write(self._payload)
-
-    def connection_lost(self, exc):
-        if not self.done.done():
-            if exc is None:
-                self.done.set_result(None)
-            else:
-                self.done.set_exception(exc)
-
-        if not self.closed.done():
-            if exc is None:
-                self.closed.set_result(None)
-            else:
-                self.closed.set_exception(exc)
 
 
 def _build_ssl_contexts() -> tuple[ssl.SSLContext, ssl.SSLContext]:
@@ -132,7 +55,7 @@ async def run_benchmark(args, variant: str, use_aiofastnet: bool, transport_kind
         create_server = loop.create_server
         create_connection = loop.create_connection
 
-    payload = b"x" * args.message_size
+    payload = b"x" * args.msg_size
 
     server_ssl_ctx = None
     client_ssl_ctx = None
@@ -156,37 +79,35 @@ async def run_benchmark(args, variant: str, use_aiofastnet: bool, transport_kind
             ssl=client_ssl_ctx,
         )
 
-        await client_proto.done
-        rps = client_proto.requests / args.duration
-
-        print(f"{transport_kind}-{variant}: {rps:.2f}")
-
-        transport.close()
         try:
-            await asyncio.wait_for(client_proto.closed, timeout=2.0)
+            await client_proto.closed
         except TimeoutError:
             transport.abort()
     finally:
         server.close()
         await server.wait_closed()
 
+    rps = client_proto.requests / args.duration
+    print(f"{transport_kind}-{variant}: {rps:.2f}")
+
     return rps
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Echo round-trip benchmark over loopback.")
-    parser.add_argument("--message-size", type=int, default=256, help="Message size in bytes")
+    parser.add_argument("--msg-size", type=int, default=256, help="Message size in bytes")
     parser.add_argument("--transport", default="tcp,ssl", help="Comma-separated transport types (tcp,ssl)")
     parser.add_argument(
         "--variant",
         default="asyncio,asyncio+aiofastnet,uvloop,uvloop+aiofastnet",
         help="Comma-separated variants",
     )
-    parser.add_argument("--duration", type=float, default=2.0, help="Benchmark duration in seconds" )
+    parser.add_argument("--duration", type=float, default=10.0, help="Benchmark duration in seconds" )
+    parser.add_argument("--no-plot", action="store_true", help="Disable plotting")
     args = parser.parse_args()
 
-    if args.message_size <= 0:
-        parser.error("--message-size must be > 0")
+    if args.msg_size <= 0:
+        parser.error("--msg-size must be > 0")
     if args.duration <= 0:
         parser.error("--duration must be > 0")
 
@@ -239,7 +160,7 @@ def main():
     args = parse_args()
     all_results: dict[str, dict[str, float]] = {}
 
-    print(f"message_size={args.message_size}")
+    print(f"msg_size={args.msg_size}")
     print(f"duration={args.duration:.3f}s")
 
     for transport_kind in args.transports:
@@ -254,7 +175,8 @@ def main():
             rps = asyncio.run(run_benchmark(args, variant, use_aiofastnet, transport_kind))
             all_results[transport_kind][variant] = rps
 
-    _plot_results(all_results, args.variants)
+    if not args.no_plot:
+        _plot_results(all_results, args.variants)
 
 
 if __name__ == "__main__":

@@ -5,30 +5,17 @@ from libc cimport errno
 
 
 cdef aiofn_unpack_buffer(object bytes_like_obj, char** ptr_out, Py_ssize_t* size_out):
-    cdef Py_buffer pybuf
-
-    if PyBytes_CheckExact(bytes_like_obj):
-        ptr_out[0] = PyBytes_AS_STRING(bytes_like_obj)
-        size_out[0] = PyBytes_GET_SIZE(bytes_like_obj)
-    elif PyByteArray_CheckExact(bytes_like_obj):
-        ptr_out[0] = PyByteArray_AS_STRING(bytes_like_obj)
-        size_out[0] = PyByteArray_GET_SIZE(bytes_like_obj)
-    elif bytes_like_obj is None:
+    if bytes_like_obj is None:
         ptr_out[0] = NULL
         size_out[0] = 0
-    else:
-        PyObject_GetBuffer(bytes_like_obj, &pybuf, PyBUF_SIMPLE)
-        ptr_out[0] = <char*>pybuf.buf
-        size_out[0] = pybuf.len
-        # We can already release because we still keep the reference to the message
-        PyBuffer_Release(&pybuf)
+        return
 
-
-cdef bytes aiofn_shrink_bytes(PyObject* obj, Py_ssize_t new_size):
-    _PyBytes_Resize(&obj, new_size)
-    cdef bytes maybe_new_object = <bytes>obj
-    # Py_DECREF(maybe_new_object)
-    return maybe_new_object
+    cdef Py_buffer pybuf
+    PyObject_GetBuffer(bytes_like_obj, &pybuf, PyBUF_SIMPLE)
+    ptr_out[0] = <char*>pybuf.buf
+    size_out[0] = pybuf.len
+    # We can already release because we still keep the reference to the message
+    PyBuffer_Release(&pybuf)
 
 
 cdef object aiofn_maybe_copy_buffer(object buffer):
