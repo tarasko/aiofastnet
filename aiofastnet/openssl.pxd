@@ -30,7 +30,6 @@ cdef extern from "openssl_compat.h" nogil:
         SSL_ERROR_WANT_READ
         SSL_ERROR_ZERO_RETURN
         SSL_ERROR_SYSCALL
-        SSL_ERROR_CERTIFICATE_VERIFY_FAILED
 
     enum:
         SSL_VERIFY_PEER
@@ -44,8 +43,6 @@ cdef extern from "openssl_compat.h" nogil:
 
     BIO *BIO_new(const BIO_METHOD *type)
     int BIO_free(BIO *a)
-    int BIO_read(BIO *b, void *data, int dlen)
-    int BIO_write(BIO *b, const void *data, int dlen)
     int BIO_pending(BIO *b)
     long BIO_set_nbio(BIO *b, long n)
     long BIO_get_mem_data(BIO *b, char** pp)
@@ -92,7 +89,6 @@ cdef extern from "openssl_compat.h" nogil:
     void ERR_print_errors_cb(int (*cb)(const char *str, size_t len, void *u),
                              void *u)
     int ERR_GET_LIB(unsigned long e)
-    int ERR_GET_REASON(unsigned long e)
 
     void ASN1_OCTET_STRING_free(ASN1_OCTET_STRING *a)
     const unsigned char *ASN1_STRING_get0_data(const ASN1_OCTET_STRING *x)

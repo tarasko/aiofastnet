@@ -12,8 +12,6 @@
 
 BIO *(*aiofn_BIO_new)(const BIO_METHOD *type) = NULL;
 int (*aiofn_BIO_free)(BIO *a) = NULL;
-int (*aiofn_BIO_read)(BIO *b, void *data, int dlen) = NULL;
-int (*aiofn_BIO_write)(BIO *b, const void *data, int dlen) = NULL;
 long (*aiofn_BIO_ctrl)(BIO *bp, int cmd, long larg, void *parg) = NULL;
 void (*aiofn_BIO_set_flags)(BIO *b, int flags) = NULL;
 void (*aiofn_BIO_clear_flags)(BIO *b, int flags) = NULL;
@@ -201,8 +199,6 @@ int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path) {
 
     LOAD_REQUIRED(aiofn_BIO_new, "BIO_new");
     LOAD_REQUIRED(aiofn_BIO_free, "BIO_free");
-    LOAD_REQUIRED(aiofn_BIO_read, "BIO_read");
-    LOAD_REQUIRED(aiofn_BIO_write, "BIO_write");
     LOAD_REQUIRED(aiofn_BIO_ctrl, "BIO_ctrl");
     LOAD_REQUIRED(aiofn_BIO_set_flags, "BIO_set_flags");
     LOAD_REQUIRED(aiofn_BIO_clear_flags, "BIO_clear_flags");
@@ -306,10 +302,6 @@ int aiofn_BIO_reset(BIO *b) {
 
 int aiofn_ERR_GET_LIB(unsigned long e) {
     return (int)((e >> 23) & 0xFFUL);
-}
-
-int aiofn_ERR_GET_REASON(unsigned long e) {
-    return (int)(e & 0x7FFFFFUL);
 }
 
 const char *openssl_compat_last_error(void) {

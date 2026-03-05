@@ -14,7 +14,6 @@ typedef struct bio_st BIO;
 typedef struct bio_method_st BIO_METHOD;
 typedef struct ssl_cipher_st SSL_CIPHER;
 typedef struct x509_st X509;
-typedef struct X509_name_st X509_NAME;
 typedef struct X509_VERIFY_PARAM_st X509_VERIFY_PARAM;
 typedef struct asn1_string_st ASN1_OCTET_STRING;
 
@@ -34,7 +33,6 @@ typedef int (*err_print_errors_cb_fn)(const char *str, size_t len, void *u);
 #define SSL_ERROR_WANT_WRITE 3
 #define SSL_ERROR_SYSCALL 5
 #define SSL_ERROR_ZERO_RETURN 6
-#define SSL_ERROR_CERTIFICATE_VERIFY_FAILED 12
 
 #define SSL_VERIFY_PEER 0x01
 #define SSL_RECEIVED_SHUTDOWN 2
@@ -69,8 +67,6 @@ const char *openssl_compat_last_error(void);
 
 extern BIO *(*aiofn_BIO_new)(const BIO_METHOD *type);
 extern int (*aiofn_BIO_free)(BIO *a);
-extern int (*aiofn_BIO_read)(BIO *b, void *data, int dlen);
-extern int (*aiofn_BIO_write)(BIO *b, const void *data, int dlen);
 extern long (*aiofn_BIO_ctrl)(BIO *bp, int cmd, long larg, void *parg);
 extern void (*aiofn_BIO_set_flags)(BIO *b, int flags);
 extern void (*aiofn_BIO_clear_flags)(BIO *b, int flags);
@@ -142,12 +138,9 @@ long aiofn_BIO_get_mem_data(BIO *b, char **pp);
 long aiofn_BIO_set_nbio(BIO *b, long n);
 int aiofn_BIO_reset(BIO *b);
 int aiofn_ERR_GET_LIB(unsigned long e);
-int aiofn_ERR_GET_REASON(unsigned long e);
 
 #define BIO_new aiofn_BIO_new
 #define BIO_free aiofn_BIO_free
-#define BIO_read aiofn_BIO_read
-#define BIO_write aiofn_BIO_write
 #define BIO_ctrl aiofn_BIO_ctrl
 #define BIO_set_flags aiofn_BIO_set_flags
 #define BIO_clear_flags aiofn_BIO_clear_flags
@@ -208,7 +201,6 @@ int aiofn_ERR_GET_REASON(unsigned long e);
 #define ERR_reason_error_string aiofn_ERR_reason_error_string
 #define ERR_print_errors_cb aiofn_ERR_print_errors_cb
 #define ERR_GET_LIB aiofn_ERR_GET_LIB
-#define ERR_GET_REASON aiofn_ERR_GET_REASON
 
 #define ASN1_OCTET_STRING_free aiofn_ASN1_OCTET_STRING_free
 #define ASN1_STRING_get0_data aiofn_ASN1_STRING_get0_data
