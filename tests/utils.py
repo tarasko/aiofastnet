@@ -47,10 +47,7 @@ def multiloop_event_loop_policy():
 
         if name == "asyncio":
             if os.name == "nt":
-                if sys.version_info >= (3, 10):
-                    return asyncio.DefaultEventLoopPolicy()
-                else:
-                    return asyncio.WindowsSelectorEventLoopPolicy()
+                return asyncio.WindowsSelectorEventLoopPolicy()
             else:
                 return asyncio.DefaultEventLoopPolicy()
         elif name == "uvloop":
