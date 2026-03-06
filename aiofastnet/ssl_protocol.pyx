@@ -1199,6 +1199,7 @@ cdef class SSLProtocol(Protocol):
             Py_ssize_t data_len
             bint add_to_backlog = False
             Py_ssize_t idx = 0
+            Py_ssize_t items_completed = 0
 
         if backlog_size == 0:
             return
@@ -1213,7 +1214,9 @@ cdef class SSLProtocol(Protocol):
                 if tail is not None:
                     self._write_backlog[idx] = tail
                     break
-            del self._write_backlog[:idx]
+                else:
+                    items_completed += 1
+            del self._write_backlog[:items_completed]
         except Exception as ex:
             self._fatal_error(ex, 'Fatal error on SSL protocol')
 

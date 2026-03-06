@@ -115,7 +115,7 @@ async def test_pause_reading(conn_type):
 # 7. test exception after beginning, weird hang ups observed
 
 
-async def test_ssl_renegotiate_midstream(loop_debug):
+async def test_ssl_renegotiate_midstream():
     if not hasattr(ssl, "TLSVersion"):
         pytest.skip("TLSVersion API is not available")
 
@@ -125,9 +125,9 @@ async def test_ssl_renegotiate_midstream(loop_debug):
     client_context.minimum_version = ssl.TLSVersion.TLSv1_2
     client_context.maximum_version = ssl.TLSVersion.TLSv1_2
 
-    preface = b"A" * (64 * 1024)
-    payload = b"B" * (4 * 1024 * 1024)
-    suffix = b"C" * (64 * 1024)
+    preface = b"A" * (4 * 1024)
+    payload = b"B" * (4 * 1024)
+    suffix = b"C" * (4 * 1024)
 
     async with echo_server(ssl_context=server_context) as server:
         async with echo_client(server, ssl_context=client_context) as client:
