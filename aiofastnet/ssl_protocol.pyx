@@ -45,6 +45,8 @@ init_openssl()
 cdef:
     Py_ssize_t SSL_READ_BUFFER_SIZE = 128 * 1024
     Py_ssize_t SSL_WRITE_BUFFER_SIZE = 128 * 1024
+    int SSL_OP_ALLOW_CLIENT_RENEGOTIATION = (1 << 8)
+    int SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION = (1 << 18)
 
     # Number of seconds to wait for SSL handshake to complete
     # The default timeout matches that of Nginx.
@@ -182,6 +184,7 @@ cdef class SSLConnection:
             SSL_set_accept_state(self.ssl_object)
         else:
             SSL_set_connect_state(self.ssl_object)
+
         SSL_set_bio(self.ssl_object, self.incoming, self.outgoing)
         BIO_set_nbio(self.incoming, 1)
         BIO_set_nbio(self.outgoing, 1)
@@ -502,9 +505,6 @@ cdef class SSLTransport:
         """
         self._force_close(None)
 
-    def renegotiate(self):
-        self._ssl_protocol.renegotiate()
-
     def _force_close(self, exc):
         self._closed = True
         self._ssl_protocol._abort(exc)
@@ -782,6 +782,8 @@ cdef class SSLProtocol(Protocol):
     cdef inline _get_extra_info(self, name, default=None):
         if name == "ssl_object":
             return self._ssl_connection
+        elif name == "ssl_protocol":
+            return self
         elif name in self._extra:
             return self._extra[name]
         elif self._transport is not None:
@@ -1178,29 +1180,6 @@ cdef class SSLProtocol(Protocol):
     cpdef resume_writing(self):
         self._app_protocol.resume_writing()
 
-    cpdef renegotiate(self):
-        if self._state != WRAPPED:
-            raise RuntimeError("renegotiation requires an active wrapped SSL connection")
-
-        cipher = self._extra.get("cipher")
-        if cipher is not None and len(cipher) >= 2 and cipher[1] == "TLSv1.3":
-            raise NotImplementedError("TLS 1.3 does not support classic SSL renegotiation")
-
-        cdef:
-            int rc
-            int ssl_error
-            SSL* ssl_object = self._ssl_connection.ssl_object
-
-        try:
-            rc = SSL_renegotiate(ssl_object)
-            if rc != 1:
-                raise RuntimeError(f"ssl renegotiation request failed")
-
-            # self._set_state(DO_HANDSHAKE)
-            self._do_handshake()
-        except Exception as ex:
-            self._fatal_error(ex, "Fatal error on SSL renegotiation")
-
     cdef inline bint _is_protocol_ready(self) except -1:
         if self._state in (FLUSHING, SHUTDOWN, UNWRAPPED):
             if self._conn_lost >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
@@ -1520,4 +1499,37 @@ cdef class SSLProtocol(Protocol):
                 'transport': self._transport,
                 'protocol': self,
             })
-#
+
+    # Used for testing only
+    def _allow_renegotiation(self):
+        SSL_set_options(
+            self._ssl_connection.ssl_object,
+            SSL_OP_ALLOW_CLIENT_RENEGOTIATION |
+            SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION
+        )
+
+    # Used for testing only
+    def _renegotiate(self):
+        if self._state != WRAPPED:
+            raise RuntimeError(
+                "renegotiation requires an active wrapped SSL connection")
+
+        cipher = self._extra.get("cipher")
+        if cipher is not None and len(cipher) >= 2 and cipher[1] == "TLSv1.3":
+            raise NotImplementedError(
+                "TLS 1.3 does not support classic SSL renegotiation")
+
+        cdef:
+            int rc
+            int ssl_error
+            SSL * ssl_object = self._ssl_connection.ssl_object
+
+        try:
+            rc = SSL_renegotiate(ssl_object)
+            if rc != 1:
+                raise RuntimeError(f"ssl renegotiation request failed")
+
+            # self._set_state(DO_HANDSHAKE)
+            self._do_handshake()
+        except Exception as ex:
+            self._fatal_error(ex, "Fatal error on SSL renegotiation")

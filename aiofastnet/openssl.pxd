@@ -53,6 +53,7 @@ cdef extern from "openssl_compat.h" nogil:
     void SSL_set_bio(SSL *ssl, BIO *rbio, BIO *wbio)
     void SSL_set_accept_state(SSL *ssl)
     void SSL_set_connect_state(SSL *ssl)
+    unsigned long long SSL_set_options(SSL *ssl, unsigned long long op)
     long SSL_set_mode(SSL *ssl, long mode)
     int SSL_set_tlsext_host_name(const SSL *s, const char *name)
     int SSL_get_error(const SSL *ssl, int ret)

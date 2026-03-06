@@ -131,10 +131,11 @@ async def test_ssl_renegotiate_midstream(loop_debug):
 
     async with echo_server(ssl_context=server_context) as server:
         async with echo_client(server, ssl_context=client_context) as client:
+
             client.write(preface)
             assert await client.readn(len(preface)) == preface
 
-            client.transport.renegotiate()
+            client.transport.get_extra_info('ssl_protocol')._renegotiate()
             client.write(payload)
             try:
                 echoed_payload = await client.readn(len(payload), timeout=20.0)
