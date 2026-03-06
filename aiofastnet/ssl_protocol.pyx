@@ -710,6 +710,9 @@ cdef class SSLProtocol(Protocol):
                 <size_t>nbytes) != 1:
             raise RuntimeError("incoming BIO: unable to publish received bytes")
 
+        if self._is_debug:
+            _logger.debug("%r: buffer_updated(%d)", self, nbytes)
+
         if self._state == DO_HANDSHAKE:
             self._do_handshake()
 
@@ -790,7 +793,7 @@ cdef class SSLProtocol(Protocol):
         cdef bint allowed = False
 
         if self._is_debug:
-            _logger.debug("%s change state to %s", self, SSLProtocolState(new_state).name)
+            _logger.debug("%s: change state to %s", self, SSLProtocolState(new_state).name)
 
         if new_state == UNWRAPPED:
             allowed = True
@@ -799,6 +802,10 @@ cdef class SSLProtocol(Protocol):
             allowed = True
 
         elif self._state == DO_HANDSHAKE and new_state == WRAPPED:
+            allowed = True
+
+        # User requested re-negotiate
+        elif self._state == WRAPPED and new_state == DO_HANDSHAKE:
             allowed = True
 
         elif self._state == WRAPPED and new_state == FLUSHING:
@@ -822,7 +829,7 @@ cdef class SSLProtocol(Protocol):
 
     cdef inline _start_handshake(self):
         if self._is_debug:
-            _logger.debug("%r starts SSL handshake", self)
+            _logger.debug("%r: starts SSL handshake", self)
             self._handshake_start_time = self._loop.time()
         else:
             self._handshake_start_time = None
@@ -862,6 +869,8 @@ cdef class SSLProtocol(Protocol):
         while True:
             rc = SSL_do_handshake(self._ssl_connection.ssl_object)
             if rc == 1:
+                if self._is_debug:
+                    _logger.debug("%r: SSL_do_handshake() = %d", self, rc)
                 self._on_handshake_complete(None)
                 self._maybe_send_outgoing(True)
                 return
@@ -870,6 +879,9 @@ cdef class SSLProtocol(Protocol):
             # SSL_ERROR_WANT_WRITE. Handshake does not need much space, but for
             # correctness-sake we need flush and re-try
             ssl_error = SSL_get_error(self._ssl_connection.ssl_object, rc)
+            if self._is_debug:
+                _logger.debug("%r: SSL_do_handshake() = %d, ssl_error=%d", self, rc, ssl_error)
+
             if ssl_error == SSL_ERROR_WANT_WRITE:
                 self._maybe_send_outgoing(True)
                 continue
@@ -1080,6 +1092,8 @@ cdef class SSLProtocol(Protocol):
             tail = self._write_impl(data, data_ptr, data_len, True)
             if tail is not None:
                 self._write_backlog.append(tail)
+                if self._is_debug:
+                    _logger.debug("%r: appended %d bytes to write_backlog", self, len(tail))
                 return
         except Exception as ex:
             self._fatal_error(ex, 'Fatal error on SSL protocol')
@@ -1180,32 +1194,10 @@ cdef class SSLProtocol(Protocol):
         try:
             rc = SSL_renegotiate(ssl_object)
             if rc != 1:
-                ssl_error = SSL_get_error(ssl_object, rc)
-                if ssl_error == SSL_ERROR_WANT_WRITE:
-                    self._maybe_send_outgoing(True)
-                    return
-                if ssl_error == SSL_ERROR_WANT_READ:
-                    self._maybe_send_outgoing(True)
-                    return
-                raise self._ssl_connection.make_exc_from_ssl_error(
-                    "ssl renegotiation failed", ssl_error)
+                raise RuntimeError(f"ssl renegotiation request failed")
 
-            while True:
-                rc = SSL_do_handshake(ssl_object)
-                if rc == 1:
-                    self._maybe_send_outgoing(True)
-                    return
-
-                ssl_error = SSL_get_error(ssl_object, rc)
-                if ssl_error == SSL_ERROR_WANT_WRITE:
-                    self._maybe_send_outgoing(True)
-                    continue
-                if ssl_error == SSL_ERROR_WANT_READ:
-                    self._maybe_send_outgoing(True)
-                    return
-
-                raise self._ssl_connection.make_exc_from_ssl_error(
-                    "ssl renegotiation handshake failed", ssl_error)
+            # self._set_state(DO_HANDSHAKE)
+            self._do_handshake()
         except Exception as ex:
             self._fatal_error(ex, "Fatal error on SSL renegotiation")
 
@@ -1276,8 +1268,11 @@ cdef class SSLProtocol(Protocol):
             # SSL_write_ex call.
             rc = SSL_write_ex(self._ssl_connection.ssl_object, data_ptr, data_len, &bytes_written)
 
-            # _logger.info("SSL_write_ex(..., %d, %d) = %d", data_len, bytes_written, rc)
             if rc:
+                if self._is_debug:
+                    _logger.debug("%r: SSL_write_ex(..., %d, %d) = %d", self,
+                                  data_len, bytes_written, rc)
+
                 # Success path, we wrote all or some data
                 if data_len == <Py_ssize_t>bytes_written:
                     self._maybe_send_outgoing(is_last)
@@ -1292,13 +1287,16 @@ cdef class SSLProtocol(Protocol):
             else:
                 ssl_error = SSL_get_error(self._ssl_connection.ssl_object, rc)
 
+                if self._is_debug:
+                    _logger.debug("%r: SSL_write_ex(..., %d, %d) = %d, ssl_error = %d",
+                                  self, data_len, bytes_written, rc, ssl_error)
+
                 # On any error we always need to flush outgoing BIO
                 self._maybe_send_outgoing(True)
 
                 # Since outgoing BIO is a static memory it may simply run out
                 # of capacity
                 if ssl_error == SSL_ERROR_WANT_WRITE:
-                    # _logger.info("SSL_ERROR_WANT_WRITE from SSL_write_ex(..., %d, %d)", data_len, bytes_written)
                     continue
 
                 # This is rare but still possible. SSL may refuse to send data
@@ -1332,7 +1330,9 @@ cdef class SSLProtocol(Protocol):
             return
 
         self._transport.write_mem(ptr, sz)
-        # _logger.info("Send now: outgoing_sz=%d, is_last=%d", sz, is_last)
+        if self._is_debug:
+            _logger.debug("Wrote %d bytes to TCP: is_last=%d", sz, is_last)
+
         if BIO_static_mem_consume(self._ssl_connection.outgoing, <size_t>sz) != 1:
             raise RuntimeError("BIO_static_mem_consume(outgoing) failed")
 
@@ -1341,7 +1341,6 @@ cdef class SSLProtocol(Protocol):
     cpdef _do_read(self):
         if self._state not in (WRAPPED, FLUSHING):
             return
-
         try:
             if not self._reading_paused:
                 if self._app_protocol_is_buffered:
@@ -1349,6 +1348,7 @@ cdef class SSLProtocol(Protocol):
                 else:
                     self._do_read__copied()
 
+                self._maybe_send_outgoing(True)
                 if self._write_backlog:
                     self._flush_write_backlog()
         except Exception as ex:
@@ -1378,13 +1378,21 @@ cdef class SSLProtocol(Protocol):
             rc = SSL_read_ex(
                 self._ssl_connection.ssl_object,
                 buf_ptr, buf_len, &last_bytes_read)
+
             if not rc:
                 break
             buf_ptr += last_bytes_read
             buf_len -= last_bytes_read
             total_bytes_read += last_bytes_read
+            if self._is_debug:
+                _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d",
+                              self, buf_len, last_bytes_read, rc)
+
 
         cdef int last_error = SSL_get_error(self._ssl_connection.ssl_object, rc)
+        if self._is_debug:
+            _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d, ssl_error=%d",
+                          self, buf_len, last_bytes_read, rc, last_error)
 
         if total_bytes_read > 0:
             if self._app_protocol_aiofn:
@@ -1403,15 +1411,7 @@ cdef class SSLProtocol(Protocol):
             self._loop.call_soon(self._do_read)
             return
 
-        if last_error in (SSL_ERROR_WANT_READ, SSL_ERROR_WANT_WRITE):
-            return
-
-        if last_error == SSL_ERROR_ZERO_RETURN and SSL_get_shutdown(self._ssl_connection.ssl_object) == SSL_RECEIVED_SHUTDOWN:
-            self._call_eof_received()
-            self._start_shutdown()
-            return
-
-        raise self._ssl_connection.make_exc_from_ssl_error("SSL_read_ex failed", last_error)
+        self._post_read(last_error)
 
     cdef inline _do_read__copied(self):
         cdef:
@@ -1433,11 +1433,16 @@ cdef class SSLProtocol(Protocol):
                              bytes_buffer_ptr,
                              bytes_estimated,
                              &bytes_read)
+
             if not rc:
                 curr_chunk = aiofn_finalize_bytes(bytes_obj, 0)
                 break
             else:
                 curr_chunk = aiofn_finalize_bytes(bytes_obj, bytes_read)
+
+            if self._is_debug:
+                _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d",
+                              self, bytes_estimated, bytes_read, rc)
 
             if first_chunk is None:
                 first_chunk = curr_chunk
@@ -1447,6 +1452,9 @@ cdef class SSLProtocol(Protocol):
                 data.append(curr_chunk)
 
         cdef int last_error = SSL_get_error(self._ssl_connection.ssl_object, rc)
+        if self._is_debug:
+            _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d, ssl_error=%d",
+                          self, bytes_estimated, bytes_read, rc, last_error)
 
         user_data = None
         if data is not None:
@@ -1460,6 +1468,9 @@ cdef class SSLProtocol(Protocol):
             else:
                 self._app_protocol.data_received(user_data)
 
+        self._post_read(last_error)
+
+    cdef inline _post_read(self, int last_error):
         if last_error in (SSL_ERROR_WANT_READ, SSL_ERROR_WANT_WRITE):
             return
 

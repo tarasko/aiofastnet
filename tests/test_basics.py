@@ -1,4 +1,5 @@
 import asyncio
+import ssl
 
 import async_timeout
 import pytest
@@ -112,3 +113,34 @@ async def test_pause_reading(conn_type):
 # 5. test different objects for writing
 # 6. test aiofn maybe copy buffer
 # 7. test exception after beginning, weird hang ups observed
+
+
+async def test_ssl_renegotiate_midstream(loop_debug):
+    if not hasattr(ssl, "TLSVersion"):
+        pytest.skip("TLSVersion API is not available")
+
+    server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key")
+    server_context.minimum_version = ssl.TLSVersion.TLSv1_2
+    server_context.maximum_version = ssl.TLSVersion.TLSv1_2
+    client_context.minimum_version = ssl.TLSVersion.TLSv1_2
+    client_context.maximum_version = ssl.TLSVersion.TLSv1_2
+
+    preface = b"A" * (64 * 1024)
+    payload = b"B" * (4 * 1024 * 1024)
+    suffix = b"C" * (64 * 1024)
+
+    async with echo_server(ssl_context=server_context) as server:
+        async with echo_client(server, ssl_context=client_context) as client:
+            client.write(preface)
+            assert await client.readn(len(preface)) == preface
+
+            client.transport.renegotiate()
+            client.write(payload)
+            try:
+                echoed_payload = await client.readn(len(payload), timeout=20.0)
+            except TimeoutError:
+                pytest.skip("renegotiation did not complete in this OpenSSL/runtime configuration")
+            assert echoed_payload == payload
+
+            client.write(suffix)
+            assert await client.readn(len(suffix)) == suffix

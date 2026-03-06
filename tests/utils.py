@@ -204,6 +204,9 @@ class AsyncClient(asyncio.Protocol):
     def close(self):
         self._transport.close()
 
+    def abort(self):
+        self._transport.abort()
+
     async def wait_closed(self):
         await asyncio.shield(self._closed)
 
@@ -304,4 +307,3 @@ def make_test_ssl_contexts(cert_file: Union[str, Path], key_file: Union[str, Pat
     client_context.check_hostname = False
     client_context.verify_mode = ssl.CERT_NONE
     return server_context, client_context
-

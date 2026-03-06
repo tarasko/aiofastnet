@@ -7,6 +7,14 @@
 extern "C" {
 #endif
 
+/* Values copied from OpenSSL headers */
+#define SSL_ERROR_NONE 0
+#define SSL_ERROR_SSL 1
+#define SSL_ERROR_WANT_READ 2
+#define SSL_ERROR_WANT_WRITE 3
+#define SSL_ERROR_SYSCALL 5
+#define SSL_ERROR_ZERO_RETURN 6
+
 /* Opaque OpenSSL types */
 typedef struct ssl_ctx_st SSL_CTX;
 typedef struct ssl_st SSL;
@@ -25,14 +33,6 @@ typedef long (*bio_ctrl_fn)(BIO *, int, long, void *);
 typedef int (*bio_create_fn)(BIO *);
 typedef int (*bio_destroy_fn)(BIO *);
 typedef int (*err_print_errors_cb_fn)(const char *str, size_t len, void *u);
-
-/* Values copied from OpenSSL headers */
-#define SSL_ERROR_NONE 0
-#define SSL_ERROR_SSL 1
-#define SSL_ERROR_WANT_READ 2
-#define SSL_ERROR_WANT_WRITE 3
-#define SSL_ERROR_SYSCALL 5
-#define SSL_ERROR_ZERO_RETURN 6
 
 #define SSL_VERIFY_PEER 0x01
 #define SSL_RECEIVED_SHUTDOWN 2

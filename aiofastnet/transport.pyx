@@ -264,6 +264,8 @@ cdef class SelectorSocketTransport(Transport):
 
             try:
                 bytes_read = aiofn_recv(self._sock_fd, buf_ptr, buf_len)
+                if self._is_debug:
+                    _logger.debug("%r aiofn_recv(,len=%d) = %d", self, buf_len, bytes_read)
                 if bytes_read == -1:    # without exception this means EGAIN
                     return
             except (BlockingIOError, InterruptedError):
