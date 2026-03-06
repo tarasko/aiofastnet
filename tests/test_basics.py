@@ -135,11 +135,11 @@ async def test_ssl_renegotiate_midstream():
             assert await client.readn(len(preface)) == preface
 
             client.transport.get_extra_info('ssl_protocol')._renegotiate()
+            wbuf_size = client.transport.get_write_buffer_size()
             client.write(payload)
-            try:
-                echoed_payload = await client.readn(len(payload), timeout=20.0)
-            except TimeoutError:
-                pytest.skip("renegotiation did not complete in this OpenSSL/runtime configuration")
+            wbuf_size_2 = client.transport.get_write_buffer_size()
+            assert wbuf_size + len(payload) == wbuf_size_2
+            echoed_payload = await client.readn(len(payload), timeout=1.0)
             assert echoed_payload == payload
 
             client.write(suffix)
