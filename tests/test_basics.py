@@ -106,7 +106,6 @@ async def test_pause_reading(conn_type):
 
 
 # TODO:
-# 1. SSL: re-negotiation in the middle of writing
 # 2. Exception from send due to file error should cause fatal error
 # 3. test eof_received event
 # 4. exceptions from each callback should cause fatal error
