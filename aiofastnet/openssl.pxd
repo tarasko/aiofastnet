@@ -58,6 +58,7 @@ cdef extern from "openssl_compat.h" nogil:
     int SSL_get_error(const SSL *ssl, int ret)
     int SSL_is_init_finished(const SSL *s)
     int SSL_pending(const SSL *ssl)
+    int SSL_renegotiate(SSL *ssl)
     int SSL_do_handshake(SSL *ssl)
     int SSL_read_ex(SSL *ssl, void *buf, size_t num, size_t *readbytes)
     int SSL_write_ex(SSL *s, const void *buf, size_t num, size_t *written)

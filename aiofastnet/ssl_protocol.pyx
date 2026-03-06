@@ -502,6 +502,9 @@ cdef class SSLTransport:
         """
         self._force_close(None)
 
+    def renegotiate(self):
+        self._ssl_protocol.renegotiate()
+
     def _force_close(self, exc):
         self._closed = True
         self._ssl_protocol._abort(exc)
@@ -1160,6 +1163,51 @@ cdef class SSLProtocol(Protocol):
 
     cpdef resume_writing(self):
         self._app_protocol.resume_writing()
+
+    cpdef renegotiate(self):
+        if self._state != WRAPPED:
+            raise RuntimeError("renegotiation requires an active wrapped SSL connection")
+
+        cipher = self._extra.get("cipher")
+        if cipher is not None and len(cipher) >= 2 and cipher[1] == "TLSv1.3":
+            raise NotImplementedError("TLS 1.3 does not support classic SSL renegotiation")
+
+        cdef:
+            int rc
+            int ssl_error
+            SSL* ssl_object = self._ssl_connection.ssl_object
+
+        try:
+            rc = SSL_renegotiate(ssl_object)
+            if rc != 1:
+                ssl_error = SSL_get_error(ssl_object, rc)
+                if ssl_error == SSL_ERROR_WANT_WRITE:
+                    self._maybe_send_outgoing(True)
+                    return
+                if ssl_error == SSL_ERROR_WANT_READ:
+                    self._maybe_send_outgoing(True)
+                    return
+                raise self._ssl_connection.make_exc_from_ssl_error(
+                    "ssl renegotiation failed", ssl_error)
+
+            while True:
+                rc = SSL_do_handshake(ssl_object)
+                if rc == 1:
+                    self._maybe_send_outgoing(True)
+                    return
+
+                ssl_error = SSL_get_error(ssl_object, rc)
+                if ssl_error == SSL_ERROR_WANT_WRITE:
+                    self._maybe_send_outgoing(True)
+                    continue
+                if ssl_error == SSL_ERROR_WANT_READ:
+                    self._maybe_send_outgoing(True)
+                    return
+
+                raise self._ssl_connection.make_exc_from_ssl_error(
+                    "ssl renegotiation handshake failed", ssl_error)
+        except Exception as ex:
+            self._fatal_error(ex, "Fatal error on SSL renegotiation")
 
     cdef inline bint _is_protocol_ready(self) except -1:
         if self._state in (FLUSHING, SHUTDOWN, UNWRAPPED):

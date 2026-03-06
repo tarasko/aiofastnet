@@ -83,9 +83,6 @@ async def test_write_paused(conn_type, buffered_protocol):
             await client.wait_write_resumed()
             await client.readn(total_bytes_written)
 
-# TODO: test pause_reading
-# TODO: test exception after beginning, weird hang ups observed
-
 
 async def test_pause_reading(conn_type):
     payload = b"x" * (20*1024*1024)
@@ -106,3 +103,12 @@ async def test_pause_reading(conn_type):
 
             client.transport.resume_reading()
 
+
+# TODO:
+# 1. SSL: re-negotiation in the middle of writing
+# 2. Exception from send due to file error should cause fatal error
+# 3. test eof_received event
+# 4. exceptions from each callback should cause fatal error
+# 5. test different objects for writing
+# 6. test aiofn maybe copy buffer
+# 7. test exception after beginning, weird hang ups observed
