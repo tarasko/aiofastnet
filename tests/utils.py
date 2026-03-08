@@ -92,6 +92,9 @@ class EchoServerProtocol(asyncio.Protocol):
     def resume_writing(self):
         _logger.debug("EchoServer.resume_writing")
 
+    def eof_received(self):
+        _logger.debug("EchoServer.eof_received")
+
 
 class AsyncClient(asyncio.Protocol):
     def __init__(self, is_buffered: bool):
@@ -104,6 +107,7 @@ class AsyncClient(asyncio.Protocol):
         self._is_writing_paused = False
         self._write_resumed_fut = None
         self._new_data_ev = asyncio.Event()
+        self._is_eof_received = False
 
     @property
     def transport(self):
@@ -112,6 +116,10 @@ class AsyncClient(asyncio.Protocol):
     @property
     def is_writing_paused(self):
         return self._is_writing_paused
+
+    @property
+    def is_eof_received(self):
+        return self._is_eof_received
 
     def is_buffered_protocol(self):
         return self._is_buffered
@@ -152,7 +160,7 @@ class AsyncClient(asyncio.Protocol):
         self._write_resumed_fut = None
 
     def eof_received(self):
-        pass
+        self._is_eof_received = True
 
     def connection_lost(self, exc):
         if not self._closed.done():

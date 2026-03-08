@@ -106,12 +106,12 @@ async def test_pause_reading(conn_type):
 
 
 # TODO:
-# 2. Exception from send due to file error should cause fatal error
-# 3. test eof_received event
-# 4. exceptions from each callback should cause fatal error
-# 5. test different objects for writing
-# 6. test aiofn maybe copy buffer
-# 7. test exception after beginning, weird hang ups observed
+# Exception from send due to file error should cause fatal error
+# exceptions from each callback should cause fatal error
+# Graceful disconnect should flush all data
+# test different objects for writing
+# test aiofn maybe copy buffer
+# test eof_received event
 
 
 async def test_ssl_renegotiate_midstream():

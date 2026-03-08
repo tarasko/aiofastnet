@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import socket
 import ssl
+import sys
 from functools import partial
 from pathlib import Path
 
@@ -16,12 +18,9 @@ except ImportError:
     uvloop = None
 
 
-VARIANTS = {
-    "asyncio": ("asyncio", False),
-    "asyncio+aiofastnet": ("asyncio", True),
-    "uvloop": ("uvloop", False),
-    "uvloop+aiofastnet": ("uvloop", True),
-}
+def _set_socket_sndbuf(sock: socket.socket, size: int) -> int:
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, max(1, size // 2))
+    return sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
 
 
 def _build_ssl_contexts() -> tuple[ssl.SSLContext, ssl.SSLContext]:
@@ -43,7 +42,7 @@ def _build_ssl_contexts() -> tuple[ssl.SSLContext, ssl.SSLContext]:
     return server_ctx, client_ctx
 
 
-async def run_benchmark(args, variant: str, use_aiofastnet: bool, transport_kind: str):
+async def run_benchmark(args, variant: str, use_aiofastnet: bool, transport_kind: str, msg_size: int):
     loop = asyncio.get_running_loop()
     host = "127.0.0.1"
     port = 0
@@ -55,7 +54,7 @@ async def run_benchmark(args, variant: str, use_aiofastnet: bool, transport_kind
         create_server = loop.create_server
         create_connection = loop.create_connection
 
-    payload = b"x" * args.msg_size
+    payload = b"x" * msg_size
 
     server_ssl_ctx = None
     client_ssl_ctx = None
@@ -68,6 +67,8 @@ async def run_benchmark(args, variant: str, use_aiofastnet: bool, transport_kind
         port=port,
         ssl=server_ssl_ctx,
     )
+    for server_sock in server.sockets:
+        _set_socket_sndbuf(server_sock, args.sndbuf_size)
 
     client_proto = ClientProtocol(payload, args.duration)
     try:
@@ -78,6 +79,9 @@ async def run_benchmark(args, variant: str, use_aiofastnet: bool, transport_kind
             port=bound_port,
             ssl=client_ssl_ctx,
         )
+        client_sock = transport.get_extra_info("socket")
+        if client_sock is not None:
+            _set_socket_sndbuf(client_sock, args.sndbuf_size)
 
         try:
             await client_proto.closed
@@ -88,95 +92,148 @@ async def run_benchmark(args, variant: str, use_aiofastnet: bool, transport_kind
         await server.wait_closed()
 
     rps = client_proto.requests / args.duration
-    print(f"{transport_kind}-{variant}: {rps:.2f}")
+    print(f"{transport_kind}-{variant}-msg_size={msg_size}: {rps:.2f}")
 
     return rps
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Echo round-trip benchmark over loopback.")
-    parser.add_argument("--msg-size", type=int, default=256, help="Message size in bytes")
-    parser.add_argument("--transport", default="tcp,ssl", help="Comma-separated transport types (tcp,ssl)")
-    parser.add_argument(
-        "--variant",
-        default="asyncio,asyncio+aiofastnet,uvloop,uvloop+aiofastnet",
-        help="Comma-separated variants",
-    )
-    parser.add_argument("--duration", type=float, default=10.0, help="Benchmark duration in seconds" )
-    parser.add_argument("--no-plot", action="store_true", help="Disable plotting")
-    args = parser.parse_args()
-
-    if args.msg_size <= 0:
-        parser.error("--msg-size must be > 0")
-    if args.duration <= 0:
-        parser.error("--duration must be > 0")
-
-    args.transports = args.transport.split(",")
-    args.variants = args.variant.split(",")
-
-    unknown_variants = [variant for variant in args.variants if variant not in VARIANTS]
-    if unknown_variants:
-        parser.error(f"Unknown --variant values: {unknown_variants}. Valid: {list(VARIANTS)}")
-
-    if any(VARIANTS[variant][0] == "uvloop" for variant in args.variants) and uvloop is None:
-        parser.error("uvloop variant requested but uvloop is not installed")
-
-    return args
 
 
 async def run_all_benchmarks(args, variant: str, use_aiofastnet: bool):
     results: dict[str, float] = {}
 
     for transport_kind in args.transports:
-        rps = await run_benchmark(args, variant, use_aiofastnet, transport_kind)
+        rps = await run_benchmark(args, variant, use_aiofastnet, transport_kind, args.msg_sizes[0])
         results[transport_kind] = rps
 
     return results
 
 
-def _plot_results(results: dict[str, dict[str, float]], variants: list[str]) -> None:
-    transports = ["tcp", "ssl"]
-    width = 0.05
-    x_positions = list(range(len(transports)))
+def _plot_results(
+    results: dict[str, dict[int, dict[str, float]]],
+    variants: list[str],
+    msg_sizes: list[int],
+    python_version: str,
+    sndbuf_size: int,
+) -> None:
+    transports = [transport for transport in ("ssl", "tcp") if transport in results]
+    if not transports:
+        return
 
-    fig, ax = plt.subplots(figsize=(8, 5))
-    for i, variant in enumerate(variants):
-        bars_x = [x + (i - (len(variants) - 1) / 2) * width for x in x_positions]
-        bars_y = [results.get(transport, {}).get(variant, 0.0) for transport in transports]
-        ax.bar(bars_x, bars_y, width=width, label=variant)
+    fig, axes = plt.subplots(len(transports), 1, figsize=(10, 4.5 * len(transports)), sharey=True)
+    if len(transports) == 1:
+        axes = [axes]
 
-    ax.set_title("Echo Round-Trip Benchmark")
-    ax.set_xlabel("Transport")
-    ax.set_ylabel("Requests per second")
-    ax.set_xticks(x_positions)
-    ax.set_xticklabels(transports)
-    ax.legend(title="Backend")
-    ax.grid(axis="y", alpha=0.25)
+    y_max = max((
+        results.get(transport, {}).get(msg_size, {}).get(variant, 0.0)
+        for transport in transports
+        for msg_size in msg_sizes
+        for variant in variants
+    ), default=0.0)
+    y_limit = y_max * 1.1 if y_max > 0 else 1.0
+    x_positions = list(range(len(msg_sizes)))
+    width = 0.8 / len(variants)
+
+    for ax, transport in zip(axes, transports):
+        for i, variant in enumerate(variants):
+            bars_x = [x + (i - (len(variants) - 1) / 2) * width for x in x_positions]
+            bars_y = [results.get(transport, {}).get(msg_size, {}).get(variant, 0.0) for msg_size in msg_sizes]
+            ax.bar(bars_x, bars_y, width=width, label=variant)
+        ax.set_title(f"{transport.upper()} benchmark")
+        ax.set_xlabel("Message size (bytes)")
+        ax.set_xticks(x_positions)
+        ax.set_xticklabels([str(msg_size) for msg_size in msg_sizes])
+        ax.set_ylim(0, y_limit)
+        ax.grid(axis="y", alpha=0.25)
+        ax.legend(title="Backend")
+
+    axes[0].set_ylabel("Requests per second")
+    fig.suptitle(f"Echo Round-Trip Benchmark | Python {python_version} | SO_SNDBUF={sndbuf_size}")
     fig.tight_layout()
     plt.show()
 
 
 def main():
-    args = parse_args()
-    all_results: dict[str, dict[str, float]] = {}
+    parser = argparse.ArgumentParser(description="Echo round-trip benchmark over loopback.")
+    parser.add_argument(
+        "--msg-sizes",
+        default="256,8192,32768,100000,150000",
+        help="Comma-separated message sizes in bytes",
+    )
+    parser.add_argument(
+        "--loops",
+        default="asyncio",
+        help="Comma-separated event loops (asyncio,uvloop)",
+    )
+    parser.add_argument(
+        "--variant",
+        default="native,aiofastnet",
+        help="Comma-separated backend variants (native,aiofastnet)",
+    )
+    parser.add_argument("--transport", default="ssl", help="Comma-separated transport types (tcp,ssl)")
+    parser.add_argument("--duration", type=float, default=5.0, help="Benchmark duration in seconds" )
+    parser.add_argument(
+        "--sndbuf-size",
+        type=int,
+        default=65536,
+        help="Socket SO_SNDBUF value to request",
+    )
+    parser.add_argument("--no-plot", action="store_true", help="Disable plotting")
+    args = parser.parse_args()
 
-    print(f"msg_size={args.msg_size}")
+    if args.duration <= 0:
+        parser.error("--duration must be > 0")
+    if args.sndbuf_size <= 0:
+        parser.error("--sndbuf-size must be > 0")
+
+    args.transports = [transport.strip() for transport in args.transport.split(",") if transport.strip()]
+    args.loops = [loop_name.strip() for loop_name in args.loops.split(",") if loop_name.strip()]
+    args.variants = [kind.strip() for kind in args.variant.split(",") if kind.strip()]
+    args.msg_sizes = [int(part.strip()) for part in args.msg_sizes.split(",") if part.strip()]
+    if any(msg_size <= 0 for msg_size in args.msg_sizes):
+        parser.error("--msg-sizes must contain integers > 0")
+
+    SUPPORTED_LOOPS = ["asyncio", "uvloop"]
+    unknown_loops = [loop_name for loop_name in args.loops if loop_name not in SUPPORTED_LOOPS]
+    if unknown_loops:
+        parser.error(f"Unknown --loops values: {unknown_loops}. Valid: {SUPPORTED_LOOPS}")
+
+    if any(loop_name == "uvloop" for loop_name in args.loops) and uvloop is None:
+        parser.error("uvloop variant requested but uvloop is not installed")
+
+    all_results: dict[str, dict[int, dict[str, float]]] = {}
+    uvloop_version = getattr(uvloop, "__version__", "not installed")
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe_sock:
+        effective_sndbuf = _set_socket_sndbuf(probe_sock, args.sndbuf_size)
+
+    print(f"msg_sizes={','.join(str(x) for x in args.msg_sizes)}")
+    print(f"loops={','.join(args.loops)}")
     print(f"duration={args.duration:.3f}s")
+    print(f"python={sys.version.split()[0]}")
+    print(f"uvloop={uvloop_version}")
+    print(f"SO_SNDBUF={effective_sndbuf} (requested={args.sndbuf_size})")
 
     for transport_kind in args.transports:
         all_results[transport_kind] = {}
-        for variant in args.variants:
-            loop_kind, use_aiofastnet = VARIANTS[variant]
-            if loop_kind == "uvloop":
-                asyncio.set_event_loop(uvloop.Loop())
-            else:
-                asyncio.set_event_loop(asyncio.SelectorEventLoop())
+        for msg_size in args.msg_sizes:
+            all_results[transport_kind][msg_size] = {}
+            for loop_kind in args.loops:
+                for variant in args.variants:
+                    use_aiofastnet = variant == "aiofastnet"
+                    if loop_kind == "uvloop":
+                        asyncio.set_event_loop(uvloop.Loop())
+                    else:
+                        asyncio.set_event_loop(asyncio.SelectorEventLoop())
 
-            rps = asyncio.run(run_benchmark(args, variant, use_aiofastnet, transport_kind))
-            all_results[transport_kind][variant] = rps
+                    rps = asyncio.run(run_benchmark(args, variant, use_aiofastnet, transport_kind, msg_size))
+                    all_results[transport_kind][msg_size][variant] = rps
 
     if not args.no_plot:
-        _plot_results(all_results, args.variants)
+        _plot_results(
+            all_results,
+            args.variants,
+            args.msg_sizes,
+            sys.version.split()[0],
+            effective_sndbuf,
+        )
 
 
 if __name__ == "__main__":
