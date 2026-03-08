@@ -102,6 +102,8 @@ def _plot_results(
     msg_sizes: list[int],
     python_version: str,
     sndbuf_size: int,
+    uvloop_version: str,
+    save_plot: bool,
 ) -> None:
     transports = [transport for transport in ("ssl", "tcp") if transport in results]
     if not transports:
@@ -134,9 +136,14 @@ def _plot_results(
         ax.legend(title="Backend")
 
     axes[0].set_ylabel("Requests per second")
-    fig.suptitle(f"Echo Round-Trip Benchmark | Python {python_version} | uvloop-{uvloop.__version__} | SO_SNDBUF={sndbuf_size}")
+    fig.suptitle(f"Echo Round-Trip Benchmark | Python {python_version} | uvloop-{uvloop_version} | SO_SNDBUF={sndbuf_size}")
     fig.tight_layout()
-    plt.show()
+    if save_plot:
+        output_path = Path(__file__).with_name("benchmark.png")
+        fig.savefig(output_path, dpi=150)
+        print(f"saved plot to {output_path}")
+    else:
+        plt.show()
 
 
 def main():
@@ -164,6 +171,7 @@ def main():
         default=65536,
         help="Socket SO_SNDBUF value to request",
     )
+    parser.add_argument("--save-plot", action="store_true", help="Save plot to examples/benchmark.png")
     parser.add_argument("--no-plot", action="store_true", help="Disable plotting")
     args = parser.parse_args()
 
@@ -217,6 +225,8 @@ def main():
             args.msg_sizes,
             sys.version.split()[0],
             effective_sndbuf,
+            uvloop_version,
+            args.save_plot,
         )
 
 
