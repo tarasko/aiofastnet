@@ -42,7 +42,7 @@ def _build_ssl_contexts() -> tuple[ssl.SSLContext, ssl.SSLContext]:
     return server_ctx, client_ctx
 
 
-async def run_benchmark(args, variant: str, use_aiofastnet: bool, transport_kind: str, msg_size: int):
+async def run_benchmark(args, loop_kind: str, use_aiofastnet: bool, transport_kind: str, msg_size: int):
     loop = asyncio.get_running_loop()
     host = "127.0.0.1"
     port = 0
@@ -92,19 +92,9 @@ async def run_benchmark(args, variant: str, use_aiofastnet: bool, transport_kind
         await server.wait_closed()
 
     rps = client_proto.requests / args.duration
-    print(f"{transport_kind}-{variant}-msg_size={msg_size}: {rps:.2f}")
+    print(f"{transport_kind}-{loop_kind}-{'aiofastnet' if use_aiofastnet else 'native'}-{msg_size}: {rps:.2f}")
 
     return rps
-
-
-async def run_all_benchmarks(args, variant: str, use_aiofastnet: bool):
-    results: dict[str, float] = {}
-
-    for transport_kind in args.transports:
-        rps = await run_benchmark(args, variant, use_aiofastnet, transport_kind, args.msg_sizes[0])
-        results[transport_kind] = rps
-
-    return results
 
 
 def _plot_results(
@@ -218,12 +208,8 @@ def main():
             for loop_kind in args.loops:
                 for variant in args.variants:
                     use_aiofastnet = variant == "aiofastnet"
-                    if loop_kind == "uvloop":
-                        asyncio.set_event_loop(uvloop.Loop())
-                    else:
-                        asyncio.set_event_loop(asyncio.SelectorEventLoop())
-
-                    rps = asyncio.run(run_benchmark(args, variant, use_aiofastnet, transport_kind, msg_size))
+                    loop_factory = uvloop.Loop if loop_kind == "uvloop" else asyncio.SelectorEventLoop
+                    rps = asyncio.run(run_benchmark(args, loop_kind, use_aiofastnet, transport_kind, msg_size), loop_factory=loop_factory)
                     all_results[transport_kind][msg_size][variant] = rps
 
     if not args.no_plot:
