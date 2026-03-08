@@ -19,28 +19,28 @@ Use it similarly to stdlib ``asyncio`` APIs by passing the running loop:
 .. code-block:: python
 
    import asyncio
-   from aiofastnet import create_connection, create_server
+   import aiofastnet
 
-   class Echo(asyncio.Protocol):
-       def connection_made(self, transport):
-           self.transport = transport
+   loop = asyncio.get_running_loop()
+   # Instead of
+   # transport, protocol = await loop.create_connection(...)
+   transport, protocol = await aiofastnet.create_connection(loop, ...)
 
-       def data_received(self, data):
-           self.transport.write(data)
+   # Instead of
+   # server = await loop.create_server(...)
+   server = await aiofastnet.create_server(loop, ...)
 
-   async def main():
-       loop = asyncio.get_running_loop()
+Benchmark
+----------
 
-       server = await create_server(loop, Echo, host="127.0.0.1", port=9000)
-       transport, protocol = await create_connection(
-           loop, Echo, host="127.0.0.1", port=9000
-       )
+.. image:: https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark.png
+    :target: https://github.com/tarasko/websocket-benchmark/blob/master
+    :align: center
 
-       transport.close()
-       server.close()
-       await server.wait_closed()
+Why to use aiofastnet?
+----------------------
 
-   asyncio.run(main())
+
 
 Status
 ------
