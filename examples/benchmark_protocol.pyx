@@ -6,13 +6,16 @@ cdef class ServerProtocol(Protocol, asyncio.BufferedProtocol):
     cdef:
         object _transport
         bytearray _read_buf
+        bint _aiofn_transport
 
     def __init__(self, read_buf_size: int = 262144):
         self._transport = None
         self._read_buf = bytearray(read_buf_size)
+        self._aiofn_transport = False
 
     def connection_made(self, transport):
         self._transport = transport
+        self._aiofn_transport = isinstance(transport, Transport)
 
     cpdef get_buffer(self, Py_ssize_t sizehint):
         return self._read_buf
@@ -20,7 +23,10 @@ cdef class ServerProtocol(Protocol, asyncio.BufferedProtocol):
     cpdef buffer_updated(self, Py_ssize_t nbytes):
         if nbytes > 0:
             # bytearray slicing creates a copy, so write is safe.
-            self._transport.write(memoryview(self._read_buf)[:nbytes])
+            if self._aiofn_transport:
+                (<Transport>self._transport).write(memoryview(self._read_buf)[:nbytes])
+            else:
+                self._transport.write(memoryview(self._read_buf)[:nbytes])
 
 
 cdef class ClientProtocol(Protocol, asyncio.BufferedProtocol):
@@ -79,7 +85,10 @@ cdef class ClientProtocol(Protocol, asyncio.BufferedProtocol):
                 self.requests = 0
                 self._deadline = self._loop.time() + self._duration
 
-        self._transport.write(self._payload)
+        if isinstance(self._transport, Transport):
+            (<Transport>self._transport).write(self._payload)
+        else:
+            self._transport.write(self._payload)
 
     def connection_lost(self, exc):
         if not self.closed.done():

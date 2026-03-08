@@ -163,7 +163,7 @@ def main():
         default="native,aiofastnet",
         help="Comma-separated backend variants (native,aiofastnet)",
     )
-    parser.add_argument("--transport", default="ssl", help="Comma-separated transport types (tcp,ssl)")
+    parser.add_argument("--transport", default="ssl,tcp", help="Comma-separated transport types (tcp,ssl)")
     parser.add_argument("--duration", type=float, default=5.0, help="Benchmark duration in seconds" )
     parser.add_argument(
         "--sndbuf-size",
