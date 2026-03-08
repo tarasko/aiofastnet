@@ -99,7 +99,6 @@ async def run_benchmark(args, loop_kind: str, use_aiofastnet: bool, transport_ki
 
 def _plot_results(
     results: dict[str, dict[int, dict[str, float]]],
-    variants: list[str],
     msg_sizes: list[int],
     python_version: str,
     sndbuf_size: int,
@@ -112,15 +111,14 @@ def _plot_results(
     if len(transports) == 1:
         axes = [axes]
 
-    y_max = max((
-        results.get(transport, {}).get(msg_size, {}).get(variant, 0.0)
-        for transport in transports
-        for msg_size in msg_sizes
-        for variant in variants
-    ), default=0.0)
+    y_max = max((val for t, r_t in results.items() for mz, r_mz in r_t.items() for v, val in r_mz.items()), default=0.0)
+    variants = []
+    for t, r_t in results.items():
+        for mz, r_mz in r_t.items():
+            variants = list(r_mz.keys())
     y_limit = y_max * 1.1 if y_max > 0 else 1.0
     x_positions = list(range(len(msg_sizes)))
-    width = 0.8 / len(variants)
+    width = 0.5 / len(variants)
 
     for ax, transport in zip(axes, transports):
         for i, variant in enumerate(variants):
@@ -136,7 +134,7 @@ def _plot_results(
         ax.legend(title="Backend")
 
     axes[0].set_ylabel("Requests per second")
-    fig.suptitle(f"Echo Round-Trip Benchmark | Python {python_version} | SO_SNDBUF={sndbuf_size}")
+    fig.suptitle(f"Echo Round-Trip Benchmark | Python {python_version} | uvloop-{uvloop.__version__} | SO_SNDBUF={sndbuf_size}")
     fig.tight_layout()
     plt.show()
 
@@ -210,12 +208,12 @@ def main():
                     use_aiofastnet = variant == "aiofastnet"
                     loop_factory = uvloop.Loop if loop_kind == "uvloop" else asyncio.SelectorEventLoop
                     rps = asyncio.run(run_benchmark(args, loop_kind, use_aiofastnet, transport_kind, msg_size), loop_factory=loop_factory)
-                    all_results[transport_kind][msg_size][variant] = rps
+                    name = f"{loop_kind}{'+aiofastnet' if use_aiofastnet else ''}"
+                    all_results[transport_kind][msg_size][name] = rps
 
     if not args.no_plot:
         _plot_results(
             all_results,
-            args.variants,
             args.msg_sizes,
             sys.version.split()[0],
             effective_sndbuf,
