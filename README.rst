@@ -1,8 +1,11 @@
 aiofastnet
 ==========
 
-``aiofastnet`` provides highly optimized ``asyncio`` loop
-``create_connection`` and ``create_server`` implementations.
+``aiofastnet`` provides highly optimized ``asyncio``
+`loop.create_connection <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_connection>`_
+and
+`loop.create_server <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_server>`_
+implementations.
 It is a drop-in replacement for the standard ``asyncio`` functions.
 
 Internally, it reimplements parts of CPython's transport/SSL stack with Cython
