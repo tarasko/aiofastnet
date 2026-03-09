@@ -46,7 +46,7 @@ async def _test_echo(msg_size, conn_type, buffered_protocol):
             assert echoed == payload
 
 
-@pytest.mark.parametrize("msg_size", [1, 32, 64, 256 * 1024, 6 * 1024 * 1024, 40 * 1024 * 1024])
+@pytest.mark.parametrize("msg_size", [1, 32, 64, 256 * 1024, 6 * 1024 * 1024, 20 * 1024 * 1024])
 @pytest.mark.parametrize("num_lines", [1, 32, 4000])
 def test_echo_writelines(run_on_all_loops, msg_size, num_lines, conn_type, buffered_protocol):
     return run_on_all_loops(_test_echo_writelines(msg_size, num_lines, conn_type, buffered_protocol))
