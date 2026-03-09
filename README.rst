@@ -13,8 +13,16 @@ Internally, it reimplements parts of CPython's transport/SSL stack with Cython
 and C to reduce overhead on hot I/O paths, especially for protocol libraries
 that spend significant CPU time in transport and TLS plumbing.
 
+Installation
+============
+
+picows requires Python 3.9 or greater and is available on PyPI.
+Use pip to install it::
+
+    $ pip install picows
+
 Basic Usage
------------
+============
 
 Use it similarly to stdlib ``asyncio`` APIs by passing the running loop:
 
@@ -33,7 +41,7 @@ Use it similarly to stdlib ``asyncio`` APIs by passing the running loop:
    server = await aiofastnet.create_server(loop, ...)
 
 Benchmark
-----------
+============
 
 The benchmark below compares echo round-trips over loopback for TCP and TLS.
 The exact gains depend on workload, message sizes, and how much time your
@@ -46,7 +54,7 @@ Benchmark source:
     :align: center
 
 Why to use aiofastnet?
-----------------------
+============
 
 If you maintain a high-level networking library, ``aiofastnet`` gives you a
 way to make the hot path faster without redesigning your library around a new
@@ -86,7 +94,7 @@ while replacing one of the most expensive layers underneath it.
 
 
 Platform Compatibility
-----------------------
+============
 
 ``aiofastnet`` is built and tested on Linux, macOS, and Windows.
 
