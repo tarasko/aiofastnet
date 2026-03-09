@@ -85,6 +85,18 @@ and performance matters, ``aiofastnet`` lets you keep the same architecture
 while replacing one of the most expensive layers underneath it.
 
 
+Platform Compatibility
+----------------------
+
+``aiofastnet`` is built and tested on Linux, macOS, and Windows.
+
+On Windows it works with ``SelectorEventLoop`` and ``winloop``.
+With ``ProactorEventLoop`` it falls back to standard ``asyncio``
+behavior, because the proactor loop does not provide
+``add_reader()`` / ``add_writer()`` hooks required by
+``aiofastnet``'s transport implementation.
+
+
 Contributing / Building From Source
 ===================================
 
