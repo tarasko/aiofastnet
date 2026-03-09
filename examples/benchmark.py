@@ -207,7 +207,7 @@ def main():
     print(f"duration={args.duration:.3f}s")
     print(f"python={sys.version.split()[0]}")
     print(f"uvloop={uvloop_version}")
-    print(f"SO_SNDBUF={effective_sndbuf} (requested={args.sndbuf_size})")
+    print(f"SNDBUF={effective_sndbuf})")
 
     for transport_kind in args.transports:
         all_results[transport_kind] = {}
