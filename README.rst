@@ -17,7 +17,6 @@ Installation
 ============
 
 ``aiofastnet`` requires Python 3.9 or greater and is available on PyPI.
-Use pip to install it::
 
     $ pip install aiofastnet
 
