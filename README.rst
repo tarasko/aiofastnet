@@ -60,30 +60,30 @@ If you maintain a high-level networking library, ``aiofastnet`` gives you a
 way to make the hot path faster without redesigning your library around a new
 runtime or custom socket layer.
 
-- Drop-in replacement for ``loop.create_connection()`` and
+- **Drop-in replacement** for ``loop.create_connection()`` and
   ``loop.create_server()``. You keep the standard ``asyncio``
   transport/protocol model and your existing integration points.
 - Useful for library authors, not only applications. If you build WebSocket,
   HTTP, RPC, database, proxy, message-broker, or custom binary protocol
   libraries, your users can get better throughput and lower CPU cost without
   changing your public API.
-- Lower transport and TLS overhead. ``aiofastnet`` reimplements the expensive
+- **Lower transport and TLS overhead**. ``aiofastnet`` reimplements the expensive
   parts of CPython's transport and SSL stack in Cython/C, so more CPU time is
   spent in your protocol logic instead of framework plumbing.
-- Clearer and safer ``write()`` / ``writelines()`` behavior. ``aiofastnet``
+- **Clearer and safer ``write()`` / ``writelines()`` behavior**. ``aiofastnet``
   tries to push data to the socket before returning. If the socket can not
   accept everything immediately, only ``bytes`` and ``memoryview`` objects
   backed by ``bytes`` are retained without copying; everything else, including
   ``bytearray`` and ``memoryview`` objects backed by other exporters, is
   copied before being queued. This makes it safe to reuse application write
   buffers after ``write()`` or ``writelines()`` returns.
-- Better backpressure semantics for TLS transports. ``get_write_buffer_size()``
+- **Better backpressure semantics for TLS transports**. ``get_write_buffer_size()``
   reports total queued output across the whole stack, and
   ``set_write_buffer_limits()`` applies to the whole stack as well, so flow
   control reflects what is actually buffered for transmission.
-- No ecosystem lock-in. You do not need to migrate to another concurrency
+- **No ecosystem lock-in**. You do not need to migrate to another concurrency
   framework or ask users to rewrite their code around non-stdlib primitives.
-- Especially attractive when TLS matters. Python libraries often pay a large
+- **Especially attractive when TLS matters**. Python libraries often pay a large
   premium for SSL-heavy workloads; ``aiofastnet`` uses OpenSSL more directly
   and avoids several extra buffer copies present in standard ``asyncio`` and
   ``uvloop`` SSL paths to reduce that cost.
