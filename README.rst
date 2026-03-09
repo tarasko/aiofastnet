@@ -54,7 +54,7 @@ Benchmark source:
     :align: center
 
 Why to use aiofastnet?
-============
+======================
 
 If you maintain a high-level networking library, ``aiofastnet`` gives you a
 way to make the hot path faster without redesigning your library around a new
@@ -94,7 +94,7 @@ while replacing one of the most expensive layers underneath it.
 
 
 Platform Compatibility
-============
+======================
 
 ``aiofastnet`` is built and tested on Linux, macOS, and Windows.
 
