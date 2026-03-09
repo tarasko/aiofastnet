@@ -83,9 +83,30 @@ and performance matters, ``aiofastnet`` lets you keep the same architecture
 while replacing one of the most expensive layers underneath it.
 
 
-Status
-------
+Contributing / Building From Source
+===================================
 
-This project is focused on performance-sensitive ``asyncio`` networking on
-CPython. It is currently alpha-quality software and is intended for users who
-care about transport-level behavior, benchmarking, and performance tuning.
+Contributions are welcome!
+
+1. Fork and clone the repository::
+
+    $ git clone git@github.com:tarasko/aiofastnet.git
+    $ cd aiofastnet
+
+2. Create a virtual environment and activate it::
+
+    $ python3 -m venv aiofn-dev
+    $ source aiofn-dev/bin/activate
+
+
+3. Install development dependencies::
+
+    $ pip install -r requirements-test.txt
+
+4. Build in place and run tests::
+
+    $ python setup.py build_ext --inplace
+    $ pytest -s -v
+
+    # Run specific test with debug logs enabled
+    $ pytest -s -v -k test_echo[asyncio-ssl-buffered-32-64] --log-cli-level DEBUG
