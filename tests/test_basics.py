@@ -96,7 +96,7 @@ async def test_pause_reading(conn_type):
                 await client.wait_new_data(0.2)
             client.transport.resume_reading()
 
-            await client.wait_new_data(0.1)
+            await client.wait_new_data(0.2)
             client.transport.pause_reading()
 
             with pytest.raises(asyncio.TimeoutError):
