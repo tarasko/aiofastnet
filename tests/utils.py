@@ -50,7 +50,7 @@ def multiloop_event_loop_policy():
         elif name == "asyncio_sel":
             return asyncio.WindowsSelectorEventLoopPolicy()
         elif name == "asyncio_pro":
-            return asyncio.ProactorEventLoop()
+            return asyncio.WindowsProactorEventLoopPolicy()
         elif name == "uvloop":
             return uvloop.EventLoopPolicy()
         elif name == "winloop":
