@@ -15,6 +15,42 @@ from aiofastnet import create_connection, create_server
 
 _logger = getLogger("tests.utils")
 
+
+def _available_loops():
+    if os.name == "nt":
+        # Winloop doesn't work with python 3.9
+        if sys.version_info >= (3, 10):
+            return "asyncio-sel", "asyncio-pro", "winloop"
+        else:
+            return "asyncio-sel", "asyncio-pro"
+    else:
+        return "asyncio", "uvloop"
+
+
+@pytest.fixture(params=_available_loops())
+def run_on_all_loops(request):
+    loop_factory = None
+    if request.param == "asyncio":
+        loop_factory = asyncio.EventLoop
+    elif request.param == "asyncio-sel":
+        loop_factory = asyncio.SelectorEventLoop
+    elif request.param == "asyncio-pro":
+        loop_factory = asyncio.ProactorEventLoop
+    elif request.param == "uvloop":
+        uvloop = importlib.import_module("uvloop")
+        loop_factory = uvloop.Loop
+    elif request.param == "winloop":
+        winloop = importlib.import_module("winloop")
+        loop_factory = winloop.Loop
+    else:
+        assert False, f"unknown loop {request.param}"
+
+    try:
+        yield lambda coro: asyncio.run(coro, loop_factory=loop_factory)
+    finally:
+        pass
+
+
 def multiloop_event_loop_policy():
     """
     Returns a pytest fixture function named `event_loop_policy` (by assignment in the test module).
