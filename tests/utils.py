@@ -33,9 +33,9 @@ def multiloop_event_loop_policy():
     if os.name == "nt":
         # Winloop doesn't work with python 3.9
         if sys.version_info >= (3, 10):
-            params = ("asyncio", "winloop")
+            params = ("asyncio_sel", "asyncio_pro", "winloop")
         else:
-            params = ("asyncio", )
+            params = ("asyncio_sel", "asyncio_pro",)
         winloop = importlib.import_module("winloop")
     else:
         params = ("asyncio", "uvloop")
@@ -46,10 +46,11 @@ def multiloop_event_loop_policy():
         name = request.param
 
         if name == "asyncio":
-            if os.name == "nt":
-                return asyncio.WindowsSelectorEventLoopPolicy()
-            else:
-                return asyncio.DefaultEventLoopPolicy()
+            return asyncio.DefaultEventLoopPolicy()
+        elif name == "asyncio_sel":
+            return asyncio.WindowsSelectorEventLoopPolicy()
+        elif name == "asyncio_pro":
+            return asyncio.ProactorEventLoop()
         elif name == "uvloop":
             return uvloop.EventLoopPolicy()
         elif name == "winloop":
