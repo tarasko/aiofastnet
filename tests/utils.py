@@ -11,7 +11,7 @@ from typing import Tuple, Optional, Union
 
 import async_timeout
 import pytest
-from aiofastnet import create_connection, create_server
+from aiofastnet import create_connection, create_server, Transport as aiofn_Transport
 
 _logger = getLogger("tests.utils")
 
@@ -61,7 +61,7 @@ def multiloop_event_loop_policy():
     return event_loop_policy
 
 
-class EchoServerProtocol(asyncio.Protocol):
+class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
     def __init__(self, is_buffered: bool):
         self._is_buffered = is_buffered
         self._read_buffer = bytearray(b"X") * (128*1024)
@@ -99,7 +99,7 @@ class EchoServerProtocol(asyncio.Protocol):
         _logger.debug("EchoServer.eof_received")
 
 
-class AsyncClient(asyncio.Protocol):
+class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
     def __init__(self, is_buffered: bool):
         self._is_buffered = is_buffered
         self._closed = asyncio.get_running_loop().create_future()
@@ -135,7 +135,8 @@ class AsyncClient(asyncio.Protocol):
             ssl_protocol._allow_renegotiation()
 
     def data_received(self, data):
-        assert not self._is_buffered
+        if isinstance(self.transport, aiofn_Transport):
+            assert not self._is_buffered
         self._data.extend(data)
         _logger.debug("AsyncClient.data_received: received=%d, total=%d", len(data), len(self._data))
         self._wakeup_waiters()
