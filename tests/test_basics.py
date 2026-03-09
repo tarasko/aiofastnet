@@ -1,4 +1,5 @@
 import asyncio
+import os
 import ssl
 
 import async_timeout
@@ -115,8 +116,8 @@ async def test_pause_reading(conn_type):
 
 
 async def test_ssl_renegotiate_midstream():
-    if not hasattr(ssl, "TLSVersion"):
-        pytest.skip("TLSVersion API is not available")
+    if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
+        pytest.skip("aiofastnet doesn't work with ProactorEventLoop")
 
     server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key")
     server_context.minimum_version = ssl.TLSVersion.TLSv1_2
