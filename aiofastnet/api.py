@@ -239,22 +239,26 @@ async def create_server(
     This method is a coroutine.
     """
     if _should_fallback_to_asyncio(loop):
-        return await loop.create_server(
-            protocol_factory,
-            host=host,
-            port=port,
-            family=family,
-            flags=flags,
-            sock=sock,
-            backlog=backlog,
-            ssl=ssl,
-            reuse_address=reuse_address,
-            reuse_port=reuse_port,
-            keep_alive=keep_alive,
-            ssl_handshake_timeout=ssl_handshake_timeout,
-            ssl_shutdown_timeout=ssl_shutdown_timeout,
-            start_serving=start_serving,
-        )
+        kwargs = {
+            'host': host,
+            'port': port,
+            'family': family,
+            'flags': flags,
+            'sock': sock,
+            'backlog': backlog,
+            'ssl': ssl,
+            'reuse_address': reuse_address,
+            'reuse_port': reuse_port,
+            'ssl_handshake_timeout': ssl_handshake_timeout,
+            'start_serving': start_serving
+        }
+        if sys.version_info >= (3, 13):
+            kwargs['keep_alive'] = keep_alive
+
+        if sys.version_info >= (3, 11):
+            kwargs['ssl_shutdown_timeout'] = ssl_shutdown_timeout
+
+        return await loop.create_server(protocol_factory, **kwargs)
 
     if isinstance(ssl, bool):
         raise TypeError('ssl argument must be an SSLContext or None')
