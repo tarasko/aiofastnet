@@ -16,7 +16,7 @@ that spend significant CPU time in transport and SSL plumbing.
 Installation
 ============
 
-``aiofastnet`` requires Python 3.9 or greater and is available on PyPI.
+``aiofastnet`` requires Python 3.9 or greater and is available on PyPI::
 
     $ pip install aiofastnet
 
