@@ -109,20 +109,22 @@ def _plot_results(
     if not transports:
         return
 
-    fig, axes = plt.subplots(len(transports), 1, figsize=(10, 4.5 * len(transports)), sharey=True)
+    fig, axes = plt.subplots(len(transports), 1, figsize=(10, 4.5 * len(transports)))
     if len(transports) == 1:
         axes = [axes]
 
-    y_max = max((val for t, r_t in results.items() for mz, r_mz in r_t.items() for v, val in r_mz.items()), default=0.0)
     variants = []
     for t, r_t in results.items():
         for mz, r_mz in r_t.items():
             variants = list(r_mz.keys())
-    y_limit = y_max * 1.1 if y_max > 0 else 1.0
     x_positions = list(range(len(msg_sizes)))
     width = 0.5 / len(variants)
 
     for ax, transport in zip(axes, transports):
+        y_max = max(
+            (val for mz, r_mz in results[transport].items() for
+             v, val in r_mz.items()), default=0.0)
+        y_limit = y_max * 1.1 if y_max > 0 else 1.0
         for i, variant in enumerate(variants):
             bars_x = [x + (i - (len(variants) - 1) / 2) * width for x in x_positions]
             bars_y = [results.get(transport, {}).get(msg_size, {}).get(variant, 0.0) for msg_size in msg_sizes]
@@ -150,7 +152,7 @@ def main():
     parser = argparse.ArgumentParser(description="Echo round-trip benchmark over loopback.")
     parser.add_argument(
         "--msg-sizes",
-        default="256,8192,32768,100000,150000",
+        default="256,8192,32768,100000",
         help="Comma-separated message sizes in bytes",
     )
     parser.add_argument(
