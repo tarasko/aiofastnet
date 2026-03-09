@@ -58,23 +58,24 @@ async def create_connection(
     (transport, protocol) pair.
     """
     if _should_fallback_to_asyncio(loop):
-        return await loop.create_connection(
-            protocol_factory,
-            host=host,
-            port=port,
-            ssl=ssl,
-            family=family,
-            proto=proto,
-            flags=flags,
-            sock=sock,
-            local_addr=local_addr,
-            server_hostname=server_hostname,
-            ssl_handshake_timeout=ssl_handshake_timeout,
-            ssl_shutdown_timeout=ssl_shutdown_timeout,
-            happy_eyeballs_delay=happy_eyeballs_delay,
-            interleave=interleave,
-            all_errors=all_errors,
-        )
+        kwargs = {
+            'host': host,
+            'port': port,
+            'ssl': ssl,
+            'family': family,
+            'proto': proto,
+            'flags': flags,
+            'sock': sock,
+            'local_addr': local_addr,
+            'server_hostname': server_hostname,
+            'ssl_handshake_timeout': ssl_handshake_timeout,
+            'happy_eyeballs_delay': happy_eyeballs_delay,
+            'interleave': interleave,
+            'all_errors': all_errors
+        }
+        if sys.version_info >= (3, 11):
+            kwargs['ssl_shutdown_timeout'] = ssl_shutdown_timeout
+        return await loop.create_connection(protocol_factory, **kwargs)
 
     if server_hostname is not None and not ssl:
         raise ValueError('server_hostname is only meaningful with ssl')
