@@ -81,12 +81,14 @@ class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
 
     def buffer_updated(self, bytes_read):
         _logger.debug("EchoServer.buffer_updated: received=%d", bytes_read)
-        assert self._is_buffered
+        if isinstance(self.transport, aiofn_Transport):
+            assert self._is_buffered
         self.transport.write(self._read_buffer[:bytes_read])
 
     def data_received(self, data):
         _logger.debug("EchoServer.data_received: %d", len(data))
-        assert not self._is_buffered
+        if isinstance(self.transport, aiofn_Transport):
+            assert not self._is_buffered
         self.transport.write(data)
 
     def pause_writing(self):
