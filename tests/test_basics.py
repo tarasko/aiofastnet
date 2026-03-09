@@ -5,8 +5,10 @@ import async_timeout
 import pytest
 
 from tests.utils import echo_client, echo_server, \
-    make_test_ssl_contexts, ConnectionType, \
-    run_on_all_loops
+    multiloop_event_loop_policy, make_test_ssl_contexts, ConnectionType
+
+
+event_loop_policy = multiloop_event_loop_policy()
 
 
 @pytest.fixture
@@ -32,11 +34,7 @@ def buffered_protocol(request):
 
 
 @pytest.mark.parametrize("msg_size", [1, 2, 3, 4, 5, 6, 7, 8, 29, 64, 256 * 1024, 6 * 1024 * 1024])
-def test_echo(run_on_all_loops, msg_size, conn_type, buffered_protocol):
-    return run_on_all_loops(_test_echo(msg_size, conn_type, buffered_protocol))
-
-
-async def _test_echo(msg_size, conn_type, buffered_protocol):
+async def test_echo(msg_size, conn_type, buffered_protocol):
     payload = b"x" * msg_size
 
     async with echo_server(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
@@ -48,11 +46,7 @@ async def _test_echo(msg_size, conn_type, buffered_protocol):
 
 @pytest.mark.parametrize("msg_size", [1, 32, 64, 256 * 1024, 6 * 1024 * 1024, 20 * 1024 * 1024])
 @pytest.mark.parametrize("num_lines", [1, 32, 4000])
-def test_echo_writelines(run_on_all_loops, msg_size, num_lines, conn_type, buffered_protocol):
-    return run_on_all_loops(_test_echo_writelines(msg_size, num_lines, conn_type, buffered_protocol))
-
-
-async def _test_echo_writelines(msg_size, num_lines, conn_type, buffered_protocol):
+async def test_echo_writelines(msg_size, num_lines, conn_type, buffered_protocol):
     payload = b"x" * msg_size
 
     async with echo_server(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
