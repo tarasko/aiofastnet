@@ -147,7 +147,8 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         return self._read_buffer
 
     def buffer_updated(self, bytes_read):
-        assert self._is_buffered
+        if isinstance(self.transport, aiofn_Transport):
+            assert self._is_buffered
         self._data += self._read_buffer[:bytes_read]
         _logger.debug("AsyncClient.buffer_updated: received=%d, total=%d", bytes_read, len(self._data))
         self._wakeup_waiters()
