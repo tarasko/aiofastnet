@@ -24,6 +24,17 @@ _HAS_IPv6 = hasattr(socket, 'AF_INET6')
 _logger = getLogger('fastnet')
 
 
+def _should_fallback_to_asyncio(loop: asyncio.AbstractEventLoop) -> bool:
+    if os.name != "nt":
+        return False
+
+    proactor_event_loop = getattr(asyncio, "ProactorEventLoop", None)
+    if proactor_event_loop is None:
+        return False
+
+    return isinstance(loop, proactor_event_loop)
+
+
 async def create_connection(
         loop: asyncio.AbstractEventLoop,
         protocol_factory, host=None, port=None,
@@ -45,6 +56,25 @@ async def create_connection(
     in the background.  When successful, the coroutine returns a
     (transport, protocol) pair.
     """
+    if _should_fallback_to_asyncio(loop):
+        return await loop.create_connection(
+            protocol_factory,
+            host=host,
+            port=port,
+            ssl=ssl,
+            family=family,
+            proto=proto,
+            flags=flags,
+            sock=sock,
+            local_addr=local_addr,
+            server_hostname=server_hostname,
+            ssl_handshake_timeout=ssl_handshake_timeout,
+            ssl_shutdown_timeout=ssl_shutdown_timeout,
+            happy_eyeballs_delay=happy_eyeballs_delay,
+            interleave=interleave,
+            all_errors=all_errors,
+        )
+
     if server_hostname is not None and not ssl:
         raise ValueError('server_hostname is only meaningful with ssl')
 
@@ -207,6 +237,24 @@ async def create_server(
 
     This method is a coroutine.
     """
+    if _should_fallback_to_asyncio(loop):
+        return await loop.create_server(
+            protocol_factory,
+            host=host,
+            port=port,
+            family=family,
+            flags=flags,
+            sock=sock,
+            backlog=backlog,
+            ssl=ssl,
+            reuse_address=reuse_address,
+            reuse_port=reuse_port,
+            keep_alive=keep_alive,
+            ssl_handshake_timeout=ssl_handshake_timeout,
+            ssl_shutdown_timeout=ssl_shutdown_timeout,
+            start_serving=start_serving,
+        )
+
     if isinstance(ssl, bool):
         raise TypeError('ssl argument must be an SSLContext or None')
 
