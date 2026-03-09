@@ -38,6 +38,8 @@ Benchmark
 The benchmark below compares echo round-trips over loopback for TCP and TLS.
 The exact gains depend on workload, message sizes, and how much time your
 application spends in transport/SSL overhead.
+Benchmark source:
+`examples/benchmark.py <https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark.py>`_
 
 .. image:: https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark.png
     :target: https://github.com/tarasko/websocket-benchmark/blob/master
@@ -110,3 +112,7 @@ Contributions are welcome!
 
     # Run specific test with debug logs enabled
     $ pytest -s -v -k test_echo[asyncio-ssl-buffered-32-64] --log-cli-level DEBUG
+
+5. Run the benchmark::
+
+    $ python -m examples.benchmark

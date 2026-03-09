@@ -155,7 +155,7 @@ def main():
     )
     parser.add_argument(
         "--loops",
-        default="asyncio",
+        default="asyncio,uvloop",
         help="Comma-separated event loops (asyncio,uvloop)",
     )
     parser.add_argument(
