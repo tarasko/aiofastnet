@@ -70,11 +70,13 @@ async def create_connection(
             'server_hostname': server_hostname,
             'ssl_handshake_timeout': ssl_handshake_timeout,
             'happy_eyeballs_delay': happy_eyeballs_delay,
-            'interleave': interleave,
-            'all_errors': all_errors
+            'interleave': interleave
         }
         if sys.version_info >= (3, 11):
             kwargs['ssl_shutdown_timeout'] = ssl_shutdown_timeout
+        if sys.version_info >= (3, 12):
+            kwargs['all_errors'] = all_errors
+
         return await loop.create_connection(protocol_factory, **kwargs)
 
     if server_hostname is not None and not ssl:
