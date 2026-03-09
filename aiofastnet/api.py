@@ -22,10 +22,11 @@ from asyncio.trsock import TransportSocket
 
 _HAS_IPv6 = hasattr(socket, 'AF_INET6')
 _logger = getLogger('fastnet')
+_IS_WINDOWS = os.name == "nt"
 
 
 def _should_fallback_to_asyncio(loop: asyncio.AbstractEventLoop) -> bool:
-    if os.name != "nt":
+    if not _IS_WINDOWS:
         return False
 
     proactor_event_loop = getattr(asyncio, "ProactorEventLoop", None)
