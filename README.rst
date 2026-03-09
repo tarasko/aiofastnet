@@ -16,10 +16,10 @@ that spend significant CPU time in transport and TLS plumbing.
 Installation
 ============
 
-picows requires Python 3.9 or greater and is available on PyPI.
+``aiofastnet`` requires Python 3.9 or greater and is available on PyPI.
 Use pip to install it::
 
-    $ pip install picows
+    $ pip install aiofastnet
 
 Basic Usage
 ============
