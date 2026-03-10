@@ -58,10 +58,17 @@ class _WrappedTransport(asyncio.Transport):
         return self._transport.close()
 
     def set_protocol(self, protocol):
-        return self._transport.set_protocol(protocol)
+        if is_buffered_protocol(protocol):
+            wrapped_protocol = _WrappedBufferedProtocol(protocol)
+        else:
+            wrapped_protocol = _WrappedProtocol(protocol)
+        self._transport.set_protocol(wrapped_protocol)
 
     def get_protocol(self):
-        return self._transport.get_protocol()
+        wrapped_protocol: _WrappedProtocolBase = self._transport.get_protocol()
+        assert isinstance(wrapped_protocol, _WrappedProtocolBase), \
+            "must be our protocol wrapper"
+        return wrapped_protocol._protocol
 
     def is_reading(self):
         return self._transport.is_reading()
@@ -111,9 +118,7 @@ class _WrappedProtocolBase(asyncio.BaseProtocol):
         return self._protocol.connection_made(self._wrapped_transport)
 
     def connection_lost(self, exc):
-        protocol = self._protocol
-        self._protocol = None
-        return protocol.connection_lost(exc)
+        return self._protocol.connection_lost(exc)
 
     def pause_writing(self):
         return self._protocol.pause_writing()
