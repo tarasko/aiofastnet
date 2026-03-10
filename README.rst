@@ -55,13 +55,6 @@ Benchmark source:
 Why to use aiofastnet?
 ======================
 
-If you maintain a high-level networking library, ``aiofastnet`` gives you a
-way to make the hot path faster without redesigning your library around a new
-runtime or custom socket layer.
-
-- **Drop-in replacement** for ``loop.create_connection()`` and
-  ``loop.create_server()``. You keep the standard ``asyncio``
-  transport/protocol model and your existing integration points.
 - **Lower transport and SSL overhead**. ``aiofastnet`` reimplements the expensive
   parts of CPython's transport and SSL stack in Cython/C, so more CPU time is
   spent in your protocol logic instead of framework plumbing.
@@ -73,6 +66,9 @@ runtime or custom socket layer.
   HTTP, RPC, database, proxy, message-broker, or custom binary protocol
   libraries, your users can get better throughput and lower CPU cost without
   changing your public API.
+- **Drop-in replacement** for ``loop.create_connection()`` and
+  ``loop.create_server()``. You keep the standard ``asyncio``
+  transport/protocol model and your existing integration points.
 - **No ecosystem lock-in**. You do not need to migrate to another concurrency
   framework or ask users to rewrite their code around non-stdlib primitives.
 - **Clearer and safer ``write()`` / ``writelines()`` behavior**. ``aiofastnet``
@@ -98,10 +94,12 @@ Platform Compatibility
 ``aiofastnet`` is built and tested on Linux, macOS, and Windows.
 
 On Windows it works with ``SelectorEventLoop`` and ``winloop``.
-With ``ProactorEventLoop`` it falls back to standard ``asyncio``
-behavior, because the proactor loop does not provide
-``add_reader()`` / ``add_writer()`` hooks required by
-``aiofastnet``'s transport implementation.
+With ``ProactorEventLoop`` it falls back to ``asyncio``'s native
+connection and server implementation underneath, because the proactor
+loop does not provide ``add_reader()`` / ``add_writer()`` hooks
+required by ``aiofastnet``'s transport implementation. For transports
+created through ``aiofastnet``, a compatibility wrapper preserves the
+documented ``write()`` / ``writelines()`` buffer-safety behavior.
 
 
 Contributing / Building From Source
