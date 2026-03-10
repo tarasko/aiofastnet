@@ -61,7 +61,7 @@ Why to use aiofastnet?
   often pay a large premium for SSL-heavy workloads; ``aiofastnet`` uses OpenSSL more directly
   and avoids several extra buffer copies present in standard ``asyncio`` and
   ``uvloop`` SSL paths to reduce that cost.
-- **Clearer and safer ``write()`` / ``writelines()`` behavior**. ``aiofastnet``
+- **Clearer and safer write() / writelines() behavior**. ``aiofastnet``
   tries to push data to the socket before returning. If the socket can not
   accept everything immediately, only ``bytes`` and ``memoryview`` objects
   backed by ``bytes`` are retained without copying; everything else, including

@@ -1,4 +1,5 @@
 import asyncio
+import weakref
 from collections import deque
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
@@ -68,7 +69,9 @@ def multiloop_event_loop_policy():
 
 
 class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
-    def __init__(self, is_buffered: bool):
+    def __init__(self, clients: set, is_buffered: bool):
+        self.transport = None
+        self._clients = clients
         self._is_buffered = is_buffered
         self._read_buffer = bytearray(b"X") * (128*1024)
 
@@ -77,24 +80,25 @@ class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
 
     def connection_made(self, transport):
         _logger.debug("EchoServer.connection_made")
+        self._clients.add(weakref.ref(self))
         self.transport = transport
         ssl_protocol = self.transport.get_extra_info('ssl_protocol')
         if ssl_protocol is not None and hasattr(ssl_protocol, '_allow_renegotiation'):
             ssl_protocol._allow_renegotiation()
+
+    def connection_lost(self, exc):
+        _logger.debug("EchoServer.connection_lost")
+        self._clients.remove(weakref.ref(self))
 
     def get_buffer(self, hint):
         return memoryview(self._read_buffer)
 
     def buffer_updated(self, bytes_read):
         _logger.debug("EchoServer.buffer_updated: received=%d", bytes_read)
-        if isinstance(self.transport, aiofn_Transport):
-            assert self._is_buffered
         self.transport.write(self._read_buffer[:bytes_read])
 
     def data_received(self, data):
         _logger.debug("EchoServer.data_received: %d", len(data))
-        if isinstance(self.transport, aiofn_Transport):
-            assert not self._is_buffered
         self.transport.write(data)
 
     def pause_writing(self):
@@ -278,13 +282,15 @@ class ConnectionType:
 @asynccontextmanager
 async def echo_server(host="127.0.0.1", port=0, ssl_context=None, is_buffered=False):
     loop = asyncio.get_running_loop()
+    clients = set()
     server = await create_server(
         loop,
-        lambda: EchoServerProtocol(is_buffered),
+        lambda: EchoServerProtocol(clients, is_buffered),
         host=host,
         port=port,
         ssl=ssl_context,
     )
+    server.clients = clients
     try:
         resolved_port = server.sockets[0].getsockname()[1]
         yield EchoServerHandle(server=server, port=resolved_port, host=host)

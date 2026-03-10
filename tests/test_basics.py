@@ -112,7 +112,6 @@ async def test_pause_reading(conn_type):
 
 # TODO:
 # Exception from send due to file error should cause fatal error
-# exceptions from each callback (except connection_made, connection_lost) should cause fatal error
 # Graceful disconnect should flush all data
 # test different objects for writing
 # test aiofn maybe copy buffer
@@ -149,7 +148,6 @@ async def test_ssl_renegotiate_midstream():
 
             client.write(suffix)
             assert await client.readn(len(suffix)) == suffix
-
 
 
 async def test_callback_exceptions(conn_type):
@@ -210,6 +208,16 @@ async def test_callback_exceptions(conn_type):
             with exc_queue() as excq:
                 client.transport.write(payload)
                 with pytest.raises(TestException, match="buffer_updated"):
+                    await client.wait_closed()
+                assert isinstance(excq[0]["exception"], TestException)
+
+        async with echo_client(server, protocol_factory=ClientRaiseEofReceived, ssl_context=conn_type.client_ssl_context, is_buffered=True) as client:
+            with exc_queue() as excq:
+                # Initiate disconnect from the server side
+                server_client = next(iter(server.server.clients))()
+                server_client.transport.close()
+
+                with pytest.raises(TestException, match="eof_received"):
                     await client.wait_closed()
                 assert isinstance(excq[0]["exception"], TestException)
 
