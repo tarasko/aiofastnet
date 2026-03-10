@@ -146,6 +146,9 @@ async def test_ssl_renegotiate_midstream():
 
 
 async def test_exc_eof_received(conn_type):
+    if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
+        pytest.skip("aiofastnet doesn't work with ProactorEventLoop")
+
     class ClientRaiseEofReceived(AsyncClient):
         def eof_received(self):
             raise TestException("eof_received")
