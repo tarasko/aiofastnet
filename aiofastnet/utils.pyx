@@ -34,7 +34,7 @@ cpdef object aiofn_maybe_copy_buffer(object buffer):
 
     cdef:
         PyObject* obj
-        bint is_bytes = False
+        bint is_bytes
     if isinstance(buffer, memoryview):
         obj = PyMemoryView_GET_BASE(<PyObject*>buffer)
         is_bytes = obj != NULL and PyBytes_Check(obj)
