@@ -304,7 +304,7 @@ async def echo_client(server_or_host, port=None, ssl_context=None, server_hostna
             raise ValueError("port must be provided when host is passed directly")
 
     loop = asyncio.get_running_loop()
-    _, client = await create_connection(
+    transport, client = await create_connection(
         loop,
         lambda: protocol_factory(is_buffered),
         host=host,
@@ -315,12 +315,12 @@ async def echo_client(server_or_host, port=None, ssl_context=None, server_hostna
     try:
         yield client
     finally:
-        client.close()
+        transport.close()
         try:
             await client.wait_closed(1.0)
         except TimeoutError:
             # SSL close_notify can hang in edge cases (for example no payload).
-            client.abort()
+            transport.abort()
         except TestException:
             pass
 

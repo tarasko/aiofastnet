@@ -1,9 +1,6 @@
 import asyncio
 import os
 import ssl
-from collections import deque
-
-import async_timeout
 import pytest
 
 from tests.utils import echo_client, echo_server, \
@@ -157,13 +154,18 @@ async def test_ssl_renegotiate_midstream():
 
 async def test_callback_exceptions(conn_type):
     # aiofastnet preserves original un-documented behavior of asyncio
-    # Exceptions from data callbacks: datareceived, get_buffer, buffer_updated
+    # Exceptions from data callbacks: data_received, get_buffer, buffer_updated
     # shutdown connection.
-    # Exceptions from flow control callbacks: pause_writing, resume_writing
-    # do not shutdown connection
+    # Exceptions from flow control callbacks: connection_made, pause_writing, resume_writing
+    # do not shut down connection
     # All exceptions are reported through loop exception callback
 
     payload = b"x" * (20*1024*1024)
+
+    class ClientRaiseConnectionMade(AsyncClient):
+        def connection_made(self, transport):
+            super().connection_made(transport)
+            raise TestException("connection_made")
 
     class ClientRaiseDataReceived(AsyncClient):
         def data_received(self, data):
@@ -210,6 +212,15 @@ async def test_callback_exceptions(conn_type):
                 with pytest.raises(TestException, match="buffer_updated"):
                     await client.wait_closed()
                 assert isinstance(excq[0]["exception"], TestException)
+
+        with exc_queue() as excq:
+            async with echo_client(server, protocol_factory=ClientRaiseConnectionMade, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
+                assert isinstance(excq[0]["exception"], TestException)
+                client.transport.write(payload)
+                reply = await client.readn(len(payload))
+                assert reply == payload
+                client.close()
+                await client.wait_closed()
 
         async with echo_client(server, protocol_factory=ClientRaisePauseWriting, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
             with exc_queue() as excq:
