@@ -92,7 +92,6 @@ cdef class SelectorSocketTransport(Transport):
         bint _paused
 
         bint _eof
-        object _empty_waiter
         bint _is_debug
 
         aiofn_iovec _iovecs[256]
@@ -126,7 +125,6 @@ cdef class SelectorSocketTransport(Transport):
             self._server._attach(self)
 
         self._eof = False
-        self._empty_waiter = None
         self._is_debug = loop.get_debug()
 
         _set_nodelay(self._sock)
@@ -268,10 +266,6 @@ cdef class SelectorSocketTransport(Transport):
                     _logger.debug("%r aiofn_recv(,len=%d) = %d", self, buf_len, bytes_read)
                 if bytes_read == -1:    # without exception this means EGAIN
                     return
-            except (BlockingIOError, InterruptedError):
-                return
-            except (SystemExit, KeyboardInterrupt):
-                raise
             except BaseException as exc:
                 self._fatal_error(exc, 'Fatal read error on socket transport')
                 return
@@ -298,8 +292,6 @@ cdef class SelectorSocketTransport(Transport):
             # Already a good wrapper, returns bytes object.
             # Exactly what we need for non-buffered protocols
             data = self._sock.recv(_DATA_RECEIVED_MAX_SIZE)
-        except (BlockingIOError, InterruptedError):
-            return
         except (SystemExit, KeyboardInterrupt):
             raise
         except BaseException as exc:
@@ -347,8 +339,6 @@ cdef class SelectorSocketTransport(Transport):
 
         if self._eof:
             raise RuntimeError('Cannot call write() after write_eof()')
-        if self._empty_waiter is not None:
-            raise RuntimeError('unable to write; sendfile is in progress')
         if not data:
             return
 
@@ -403,8 +393,6 @@ cdef class SelectorSocketTransport(Transport):
     cpdef writelines(self, list_of_data):
         if self._eof:
             raise RuntimeError('Cannot call writelines() after write_eof()')
-        if self._empty_waiter is not None:
-            raise RuntimeError('unable to writelines; sendfile is in progress')
         if list_of_data:
             for data in list_of_data:
                 aiofn_validate_buffer(data)
@@ -425,12 +413,15 @@ cdef class SelectorSocketTransport(Transport):
             self._maybe_pause_protocol()
             return
 
-        self._write_many(list_of_data)
-
-        # If the entire buffer couldn't be written, register a write handler
-        if self._write_backlog:
-            self._loop.add_writer(self._sock_fd_obj, self._write_ready)
-            self._maybe_pause_protocol()
+        try:
+            self._write_many(list_of_data)
+        except BaseException as exc:
+            self._fatal_error(exc, 'Fatal write error on socket transport')
+        else:
+            # If the entire buffer couldn't be written, register a write handler
+            if self._write_backlog:
+                self._loop.add_writer(self._sock_fd_obj, self._write_ready)
+                self._maybe_pause_protocol()
 
     cpdef can_write_eof(self):
         return True
@@ -454,10 +445,6 @@ cdef class SelectorSocketTransport(Transport):
                 if self._is_debug:
                     _logger.debug("%r write(...,len=%d)=%d", self,
                                   bytes_sent, data_len)
-            except (BlockingIOError, InterruptedError):
-                pass
-            except (SystemExit, KeyboardInterrupt):
-                raise
             except BaseException as exc:
                 self._fatal_error(exc, 'Fatal write error on socket transport')
                 return
@@ -508,6 +495,7 @@ cdef class SelectorSocketTransport(Transport):
             Py_ssize_t idx = 0
             char* data_ptr
             Py_ssize_t data_len
+            Py_ssize_t bytes_sent
 
         for data in list_of_data:
             aiofn_unpack_buffer(data, &data_ptr, &data_len)
@@ -519,7 +507,8 @@ cdef class SelectorSocketTransport(Transport):
             if idx == AIOFN_MAX_IOVEC:
                 break
 
-        cdef Py_ssize_t bytes_sent = aiofn_writev(self._sock_fd, self._iovecs, idx)
+        bytes_sent = aiofn_writev(self._sock_fd, self._iovecs, idx)
+
         if self._is_debug:
             _logger.debug("%r writev sent %d out of %d iovecs", self, bytes_sent, idx)
         self._adjust_leftover_buffer(list_of_data, bytes_sent)
@@ -532,22 +521,14 @@ cdef class SelectorSocketTransport(Transport):
             if self._is_debug:
                 _logger.debug("%r write_ready event, resume writing from backlog", self)
             self._write_many(self._write_backlog)
-        except (BlockingIOError, InterruptedError):
-            pass
-        except (SystemExit, KeyboardInterrupt):
-            raise
         except BaseException as exc:
             self._loop.remove_writer(self._sock_fd_obj)
             self._write_backlog.clear()
             self._fatal_error(exc, 'Fatal write error on socket transport')
-            if self._empty_waiter is not None:
-                self._empty_waiter.set_exception(exc)
         else:
             self._maybe_resume_protocol()
             if not self._write_backlog:
                 self._loop.remove_writer(self._sock_fd_obj)
-                if self._empty_waiter is not None:
-                    self._empty_waiter.set_result(None)
                 if self._closing:
                     self._conn_lost += 1
                     self._call_connection_lost(None)
@@ -556,33 +537,17 @@ cdef class SelectorSocketTransport(Transport):
 
     cpdef _call_connection_lost(self, exc):
         try:
-            try:
-                if self._protocol_connected:
-                    self._protocol.connection_lost(exc)
-            finally:
-                self._sock.close()
-                self._sock = None
-                self._protocol = None
-                self._loop = None
-                server = self._server
-                if server is not None:
-                    server._detach(self)
-                    self._server = None
+            if self._protocol_connected:
+                self._protocol.connection_lost(exc)
         finally:
-            if self._empty_waiter is not None:
-                self._empty_waiter.set_exception(
-                    ConnectionError("Connection is closed by peer"))
-
-    cdef inline _make_empty_waiter(self):
-        if self._empty_waiter is not None:
-            raise RuntimeError("Empty waiter is already set")
-        self._empty_waiter = self._loop.create_future()
-        if not self._write_backlog:
-            self._empty_waiter.set_result(None)
-        return self._empty_waiter
-
-    cdef inline _reset_empty_waiter(self):
-        self._empty_waiter = None
+            self._sock.close()
+            self._sock = None
+            self._protocol = None
+            self._loop = None
+            server = self._server
+            if server is not None:
+                server._detach(self)
+                self._server = None
 
     cdef inline _maybe_pause_protocol(self):
         cdef Py_ssize_t size = self.get_write_buffer_size()

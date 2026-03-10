@@ -79,8 +79,6 @@ Why to use aiofastnet?
 - **Drop-in replacement** for ``loop.create_connection()`` and
   ``loop.create_server()``. You keep the standard ``asyncio``
   transport/protocol model and your existing integration points.
-- **No ecosystem lock-in**. You do not need to migrate to another concurrency
-  framework or ask users to rewrite their code around non-stdlib primitives.
 
 In short: if your library already fits ``asyncio``'s transport/protocol model
 and performance matters, ``aiofastnet`` lets you keep the same architecture
