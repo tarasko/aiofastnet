@@ -38,9 +38,8 @@ cpdef object aiofn_maybe_copy_buffer(object buffer):
     if isinstance(buffer, memoryview):
         obj = PyMemoryView_GET_BASE(<PyObject*>buffer)
         is_bytes = obj != NULL and PyBytes_Check(obj)
-
-    if is_bytes:
-        return buffer
+        if is_bytes:
+            return buffer
 
     return PyBytes_FromObject(buffer)
 
@@ -55,11 +54,17 @@ cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz
     if isinstance(buffer, bytes):
         return memoryview(buffer)[PyBytes_GET_SIZE(buffer) - sz:]
 
+    cdef:
+        bint is_bytes
+        PyObject* obj
+        memoryview mv
+
     if isinstance(buffer, memoryview):
         obj = PyMemoryView_GET_BASE(<PyObject*>buffer)
         is_bytes = obj != NULL and PyBytes_Check(obj)
         if is_bytes:
-            return buffer[len(buffer) - sz:]
+            mv = <memoryview>buffer
+            return mv[len(mv) - sz:]
 
     return PyBytes_FromStringAndSize(ptr, sz)
 
