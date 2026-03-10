@@ -928,7 +928,12 @@ cdef class SSLProtocol(Protocol):
         )
         if self._app_state == STATE_INIT:
             self._app_state = STATE_CON_MADE
-            self._app_protocol.connection_made(self.get_app_transport())
+            try:
+                self._app_protocol.connection_made(self.get_app_transport())
+            except (SystemExit, KeyboardInterrupt):
+                raise
+            except Exception as exc:
+                self._fatal_error_no_close(exc, "user connection_made raised an exception")
         self._wakeup_waiter()
 
         # We should wakeup user code before sending the first data below. In
@@ -1492,6 +1497,18 @@ cdef class SSLProtocol(Protocol):
             if self._loop.get_debug():
                 _logger.debug("%r: %s", self, message, exc_info=True)
         elif not isinstance(exc, asyncio.CancelledError):
+            self._loop.call_exception_handler({
+                'message': message,
+                'exception': exc,
+                'transport': self._transport,
+                'protocol': self,
+            })
+
+    cdef inline _fatal_error_no_close(self, exc, message='Fatal error on transport'):
+        if isinstance(exc, OSError):
+            if self._loop.get_debug():
+                _logger.debug("%r: %s", self, message, exc_info=True)
+        else:
             self._loop.call_exception_handler({
                 'message': message,
                 'exception': exc,
