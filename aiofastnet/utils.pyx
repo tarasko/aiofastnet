@@ -1,7 +1,11 @@
-from cpython.bytes cimport *
-from cpython.bytearray cimport *
-from cpython.buffer cimport *
+from cpython.bytes cimport PyBytes_FromObject, PyBytes_FromStringAndSize, PyBytes_GET_SIZE
+from cpython.buffer cimport PyObject_GetBuffer, PyBuffer_Release, PyBUF_SIMPLE
 from libc cimport errno
+
+
+cdef extern from "Python.h":
+    PyObject *PyMemoryView_GET_BASE(PyObject *mview)
+    int PyBytes_Check(PyObject *o)
 
 
 cpdef aiofn_validate_buffer(buffer):
@@ -24,11 +28,18 @@ cdef aiofn_unpack_buffer(object bytes_like_obj, char** ptr_out, Py_ssize_t* size
     PyBuffer_Release(&pybuf)
 
 
-cdef object aiofn_maybe_copy_buffer(object buffer):
-    if buffer is None:
-        raise ValueError("cannot copy None buffer")
-
+cpdef object aiofn_maybe_copy_buffer(object buffer):
     if isinstance(buffer, bytes):
+        return buffer
+
+    cdef:
+        PyObject* obj
+        bint is_bytes = False
+    if isinstance(buffer, memoryview):
+        obj = PyMemoryView_GET_BASE(<PyObject*>buffer)
+        is_bytes = obj != NULL and PyBytes_Check(obj)
+
+    if is_bytes:
         return buffer
 
     return PyBytes_FromObject(buffer)
@@ -40,31 +51,18 @@ cpdef object aiofn_validate_and_maybe_copy_buffer(object buffer):
 
 
 cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz):
-    if buffer is None:
-        return PyBytes_FromStringAndSize(ptr, sz)
-
     # Do not copy bytes content, it is safe to make a memory view
     if isinstance(buffer, bytes):
         return memoryview(buffer)[PyBytes_GET_SIZE(buffer) - sz:]
 
-    # Always copy bytearray, bytearray may be used as a permanent write buffer
-    # in the upper level protocol.
-    if isinstance(buffer, bytearray):
-        return PyBytes_FromStringAndSize(ptr, sz)
+    if isinstance(buffer, memoryview):
+        obj = PyMemoryView_GET_BASE(<PyObject*>buffer)
+        is_bytes = obj != NULL and PyBytes_Check(obj)
+        if is_bytes:
+            return buffer[len(buffer) - sz:]
 
-    # For memoryview we check if it is made from bytes object.
-    # In such case it is safe to create another memoryview
-    cdef Py_buffer pybuf
-    PyObject_GetBuffer(buffer, &pybuf, PyBUF_SIMPLE)
-    cdef:
-        bint is_bytes = (<PyObject*>pybuf.obj != NULL) and isinstance(pybuf.obj, bytes)
-        Py_ssize_t buffer_size = pybuf.len
-    PyBuffer_Release(&pybuf)
+    return PyBytes_FromStringAndSize(ptr, sz)
 
-    if is_bytes:
-        return memoryview(buffer)[buffer_size - sz:]
-    else:
-        return PyBytes_FromStringAndSize(ptr, sz)
 
 cdef Py_ssize_t aiofn_recv(int sockfd, void* buf, Py_ssize_t len) except? -1:
     cdef:

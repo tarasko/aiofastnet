@@ -3,6 +3,7 @@ import os
 import ssl
 import pytest
 
+from aiofastnet.utils import aiofn_maybe_copy_buffer
 from tests.utils import echo_client, echo_server, \
     multiloop_event_loop_policy, make_test_ssl_contexts, ConnectionType, \
     AsyncClient, TestException, exc_queue
@@ -108,14 +109,6 @@ async def test_pause_reading(conn_type):
                 await client.wait_new_data(0.2)
 
             client.transport.resume_reading()
-
-
-# TODO:
-# Exception from send due to file error should cause fatal error
-# Graceful disconnect should flush all data
-# test different objects for writing
-# test aiofn maybe copy buffer
-# test eof_received event
 
 
 async def test_ssl_renegotiate_midstream():
@@ -260,4 +253,50 @@ async def test_exc_all(conn_type):
                 assert isinstance(excq[0]["exception"], TestException)
                 client.close()
                 await client.wait_closed()
+
+
+async def test_write_wrong_type(conn_type):
+    async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
+        async with echo_client(server, ssl_context=conn_type.client_ssl_context) as client:
+            with pytest.raises(TypeError):
+                client.transport.write(42)
+
+            with pytest.raises(TypeError):
+                client.transport.writelines([42])
+
+            with pytest.raises(TypeError):
+                client.transport.writelines(42)
+
+
+async def test_maybe_copy():
+    bytes_obj = bytes(b"abcd")
+    assert aiofn_maybe_copy_buffer(bytes_obj) is bytes_obj
+
+    mv_bytes_obj = memoryview(bytes_obj)
+    mv_bytes_obj_copy = aiofn_maybe_copy_buffer(mv_bytes_obj)
+    assert mv_bytes_obj_copy is mv_bytes_obj
+
+    mv_bytes_obj = mv_bytes_obj[1:]
+    mv_bytes_obj_copy = aiofn_maybe_copy_buffer(mv_bytes_obj)
+    assert mv_bytes_obj_copy is mv_bytes_obj
+
+    ba_obj = bytearray(b"abcd")
+    ba_obj_copy = aiofn_maybe_copy_buffer(ba_obj)
+    assert ba_obj_copy is not ba_obj
+    assert isinstance(ba_obj_copy, bytes)
+    assert ba_obj_copy == ba_obj
+
+    mv_ba_obj = memoryview(ba_obj)
+    mv_ba_obj_copy = aiofn_maybe_copy_buffer(mv_ba_obj)
+    assert mv_ba_obj_copy is not mv_ba_obj
+    assert isinstance(mv_ba_obj_copy, bytes)
+    assert mv_ba_obj_copy == ba_obj
+
+
+
+# TODO:
+# Exception from send due to file error should cause fatal error
+# Graceful disconnect should flush all data
+# test different objects for writing
+# test aiofn maybe copy buffer\
 

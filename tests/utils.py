@@ -195,7 +195,6 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
             self._write_resumed_fut.set_exception(RuntimeError("connection closed"))
             self._write_resumed_fut = None
 
-
     def write(self, data: bytes):
         _logger.debug("AsyncClient.write(len=%d)", len(data))
         self._transport.write(data)
