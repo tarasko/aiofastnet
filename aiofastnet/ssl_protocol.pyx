@@ -353,14 +353,6 @@ cdef class SSLConnection:
                 os.unlink(path)
 
 
-cdef inline _run_in_context(context, method):
-    PyContext_Enter(context)
-    try:
-        return method()
-    finally:
-        PyContext_Exit(context)
-
-
 cdef inline _create_transport_context(server_side, server_hostname):
     # Client side may pass ssl=True to use a default
     # context; in that case the sslcontext passed is None.
@@ -379,14 +371,11 @@ cdef class SSLTransport:
         bint _closed
         object context
 
-    def __init__(self, loop, SSLProtocol ssl_protocol, context):
+    def __init__(self, loop, SSLProtocol ssl_protocol):
         self._loop = loop
         # SSLProtocol instance
         self._ssl_protocol = ssl_protocol
         self._closed = False
-        if context is None:
-            context = PyContext_CopyCurrent()
-        self.context = context
 
     def get_extra_info(self, name, default=None):
         """Get optional transport information."""
@@ -410,7 +399,7 @@ cdef class SSLTransport:
         with None as its argument.
         """
         self._closed = True
-        self._ssl_protocol._start_shutdown(self.context.copy())
+        self._ssl_protocol._start_shutdown()
 
     def __dealloc__(self):
         if not self._closed:
@@ -631,9 +620,9 @@ cdef class SSLProtocol(Protocol):
     cpdef get_app_protocol(self):
         return self._app_protocol
 
-    cpdef get_app_transport(self, context=None):
+    cpdef get_app_transport(self):
         if self._app_transport is None:
-            self._app_transport = SSLTransport(self._loop, self, context)
+            self._app_transport = SSLTransport(self._loop, self)
         return self._app_transport
 
     cdef inline Transport get_tcp_transport(self):
@@ -946,7 +935,7 @@ cdef class SSLProtocol(Protocol):
 
     # Shutdown flow
 
-    cdef inline _start_shutdown(self, object context=None):
+    cdef inline _start_shutdown(self):
         if self._state in (FLUSHING, SHUTDOWN, UNWRAPPED):
             return
         # we don't need the context for _abort or the timeout, because
@@ -961,14 +950,14 @@ cdef class SSLProtocol(Protocol):
             self._shutdown_timeout_handle = \
                 self._loop.call_later(self._ssl_shutdown_timeout,
                                       lambda: self._check_shutdown_timeout())
-            self._do_flush(context)
+            self._do_flush()
 
     cdef inline _check_shutdown_timeout(self):
         if self._state in (FLUSHING, SHUTDOWN):
             self._transport._force_close(
                 asyncio.TimeoutError('SSL shutdown timed out'))
 
-    cdef inline _do_read_into_void(self, object context):
+    cdef inline _do_read_into_void(self):
         """Consume and discard incoming application data.
 
         If close_notify is received for the first time, call eof_received.
@@ -988,12 +977,12 @@ cdef class SSLProtocol(Protocol):
             return
 
         if ssl_error == SSL_ERROR_ZERO_RETURN:
-            self._call_eof_received(context)
+            self._call_eof_received()
             return
 
         raise self._ssl_connection.make_exc_from_ssl_error("SSL_read_ex failed", ssl_error)
 
-    cdef inline _do_flush(self, object context=None):
+    cdef inline _do_flush(self):
         """Flush the write backlog, discarding new data received.
 
         We don't send close_notify in FLUSHING because we still want to send
@@ -1002,16 +991,16 @@ cdef class SSLProtocol(Protocol):
         in FLUSHING, as we could fully manage the flow control internally.
         """
         try:
-            self._do_read_into_void(context)
+            self._do_read_into_void()
             self._flush_write_backlog()
         except Exception as ex:
             self._on_shutdown_complete(ex)
         else:
             if not self.get_local_write_buffer_size():
                 self._set_state(SHUTDOWN)
-                self._do_shutdown(context)
+                self._do_shutdown()
 
-    cdef inline _do_shutdown(self, object context=None):
+    cdef inline _do_shutdown(self):
         """Send close_notify and wait for the same from the peer."""
         cdef:
             int rc
@@ -1019,7 +1008,7 @@ cdef class SSLProtocol(Protocol):
 
         try:
             # we must skip all application data (if any) before unwrap
-            self._do_read_into_void(context)
+            self._do_read_into_void()
 
             while True:
                 rc = SSL_shutdown(self._ssl_connection.ssl_object)
@@ -1465,19 +1454,11 @@ cdef class SSLProtocol(Protocol):
 
         raise self._ssl_connection.make_exc_from_ssl_error("SSL_read_ex failed", last_error)
 
-    cdef inline _call_eof_received(self, object context=None):
+    cdef inline _call_eof_received(self):
         if self._app_state == STATE_CON_MADE:
             self._app_state = STATE_EOF
             try:
-                if context is None:
-                    # If the caller didn't provide a context, we assume the
-                    # caller is already in the right context, which is usually
-                    # inside the upstream callbacks like buffer_updated()
-                    keep_open = self._app_protocol.eof_received()
-                else:
-                    keep_open = _run_in_context(
-                        context, self._app_protocol.eof_received,
-                    )
+                keep_open = self._app_protocol.eof_received()
             except (KeyboardInterrupt, SystemExit):
                 raise
             except BaseException as ex:

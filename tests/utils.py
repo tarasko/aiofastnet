@@ -9,7 +9,7 @@ from logging import getLogger
 from pathlib import Path
 import ssl
 import sys
-from typing import Tuple, Optional, Union
+from typing import Tuple, Optional, Union, Any, List
 
 import async_timeout
 import pytest
@@ -69,9 +69,10 @@ def multiloop_event_loop_policy():
 
 
 class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
-    def __init__(self, clients: set, is_buffered: bool):
+    def __init__(self, clients: set, client_waiters: List[Any], is_buffered: bool):
         self.transport = None
         self._clients = clients
+        self._client_waiters = client_waiters
         self._is_buffered = is_buffered
         self._read_buffer = bytearray(b"X") * (128*1024)
 
@@ -85,6 +86,10 @@ class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
         ssl_protocol = self.transport.get_extra_info('ssl_protocol')
         if ssl_protocol is not None and hasattr(ssl_protocol, '_allow_renegotiation'):
             ssl_protocol._allow_renegotiation()
+        for w in self._client_waiters:
+            if not w.done():
+                w.set_result(None)
+        self._client_waiters.clear()
 
     def connection_lost(self, exc):
         _logger.debug("EchoServer.connection_lost")
@@ -267,9 +272,29 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
 @dataclass(frozen=True)
 class EchoServerHandle:
     server: asyncio.Server
+    clients: set[Any]
+    client_waiters: List[Any]
     port: int
     host: str = "127.0.0.1"
 
+    async def get_any_server_client(self, timeout=1.0) -> EchoServerProtocol:
+        if self.clients:
+            return next(iter(self.clients))()
+
+        fut = asyncio.get_running_loop().create_future()
+        self.client_waiters.append(fut)
+        # No need to shield, because it is only awaiter and if
+        # it is canceled so be it, we don't need this future anymore anyway.
+        try:
+            async with async_timeout.timeout(timeout):
+                await fut
+        finally:
+            try:
+                self.client_waiters.remove(fut)
+            except:
+                pass
+
+        return next(iter(self.clients))()
 
 @dataclass(frozen=True)
 class ConnectionType:
@@ -282,19 +307,23 @@ class ConnectionType:
 async def echo_server(host="127.0.0.1", port=0, ssl_context=None, is_buffered=False):
     loop = asyncio.get_running_loop()
     clients = set()
+    client_waiters = []
     server = await create_server(
         loop,
-        lambda: EchoServerProtocol(clients, is_buffered),
+        lambda: EchoServerProtocol(clients, client_waiters, is_buffered),
         host=host,
         port=port,
         ssl=ssl_context,
     )
-    server.clients = clients
     try:
         resolved_port = server.sockets[0].getsockname()[1]
-        yield EchoServerHandle(server=server, port=resolved_port, host=host)
+        yield EchoServerHandle(server=server, port=resolved_port, host=host, clients=clients, client_waiters=client_waiters)
     finally:
         server.close()
+        for w in client_waiters:
+            if not w.done():
+                w.set_exception(RuntimeError("server finished"))
+        client_waiters.clear()
         await server.wait_closed()
 
 

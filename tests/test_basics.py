@@ -1,6 +1,8 @@
 import asyncio
 import os
 import ssl
+from _contextvars import ContextVar
+
 import pytest
 
 from aiofastnet.utils import aiofn_maybe_copy_buffer
@@ -152,8 +154,7 @@ async def test_exc_eof_received(conn_type):
         async with echo_client(server, protocol_factory=ClientRaiseEofReceived, ssl_context=conn_type.client_ssl_context, is_buffered=True) as client:
             with exc_queue() as excq:
                 # Initiate disconnect from the server side
-                await asyncio.sleep(0)
-                server_client = next(iter(server.server.clients))()
+                server_client = await server.get_any_server_client()
                 server_client.transport.close()
 
                 with pytest.raises(TestException, match="eof_received"):
@@ -293,8 +294,95 @@ async def test_maybe_copy():
     assert mv_ba_obj_copy == ba_obj
 
 
+async def test_contextvar(conn_type, buffered_protocol):
+    payload = b"x" * 6*1024*1024
 
-# TODO:
+    var = ContextVar('var')
+    var.set('begin')
+
+    var_values = []
+
+    class Client(AsyncClient):
+        def connection_made(self, transport):
+            var_values.append(('connection_made', var.get()))
+            var.set('connection_made')
+            return super().connection_made(transport)
+
+        def data_received(self, data):
+            var_values.append(('data_received', var.get()))
+            var.set('data_received')
+            return super().data_received(data)
+
+        def get_buffer(self, hint):
+            var_values.append(('get_buffer', var.get()))
+            var.set('get_buffer')
+            return super().get_buffer(hint)
+
+        def buffer_updated(self, bytes_read):
+            var_values.append(('buffer_updated', var.get()))
+            var.set('buffer_updated')
+            return super().buffer_updated(bytes_read)
+
+        def pause_writing(self):
+            var_values.append(('pause_writing', var.get()))
+            var.set('pause_writing')
+            return super().pause_writing()
+
+        def resume_writing(self):
+            var_values.append(('resume_writing', var.get()))
+            var.set('resume_writing')
+            return super().resume_writing()
+
+        def eof_received(self):
+            var_values.append(('eof_received', var.get()))
+            var.set('eof_received')
+            return super().eof_received()
+
+        def connection_lost(self, exc):
+            var_values.append(('connection_lost', var.get()))
+            var.set('connection_lost')
+            return super().connection_lost(exc)
+
+
+    async with echo_server(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
+        async with echo_client(server, protocol_factory=Client, ssl_context=conn_type.client_ssl_context, is_buffered=buffered_protocol) as client:
+            assert var.get() == "begin"
+            client.write(payload)
+            reply = await client.readn(len(payload))
+
+            # Initiate disconnect from the server side
+            server_client = await server.get_any_server_client()
+            server_client.transport.close()
+            await client.wait_closed()
+
+            for v in var_values:
+                if buffered_protocol:
+                    assert v in (
+                        ("connection_made", "begin"),
+                        ("pause_writing", "begin"),
+                        ("resume_writing", "begin"),
+                        ("get_buffer", "begin"),
+                        ("get_buffer", "connection_made"),
+                        ("get_buffer", "get_buffer"),
+                        ("get_buffer", "buffer_updated"),
+                        ("buffer_updated", "get_buffer"),
+                        ("eof_received", "get_buffer"),
+                        ("connection_lost", "get_buffer"),
+                        ("connection_lost", "eof_received")
+                    )
+                else:
+                    assert v in (
+                        ("connection_made", "begin"),
+                        ("pause_writing", "begin"),
+                        ("data_received", "begin"),
+                        ("data_received", "connection_made"),
+                        ("data_received", "data_received"),
+                        ("resume_writing", "begin"),
+                        ("eof_received", "data_received"),
+                        ("connection_lost", "eof_received"),
+                        ("connection_lost", "data_received")
+                    )
+
 # Exception from send due to file error should cause fatal error
 # Graceful disconnect should flush all data
 # contextvars test
