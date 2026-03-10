@@ -297,6 +297,4 @@ async def test_maybe_copy():
 # TODO:
 # Exception from send due to file error should cause fatal error
 # Graceful disconnect should flush all data
-# test different objects for writing
-# test aiofn maybe copy buffer\
-
+# contextvars test
