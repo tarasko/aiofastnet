@@ -29,7 +29,6 @@ def _set_socket_sndbuf(transport: asyncio.Transport, size: int) -> int:
     return sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
 
 
-
 def multiloop_event_loop_policy():
     """
     Returns a pytest fixture function named `event_loop_policy` (by assignment in the test module).
