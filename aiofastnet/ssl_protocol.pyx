@@ -1073,9 +1073,7 @@ cdef class SSLProtocol(Protocol):
         if not self._is_protocol_ready():
             return
 
-        if not isinstance(data, (bytes, bytearray, memoryview)):
-            raise TypeError(f"data: expecting a bytes-like instance, "
-                            f"got {type(data).__name__}")
+        aiofn_validate_buffer(data)
 
         cdef:
             char * data_ptr
@@ -1127,9 +1125,7 @@ cdef class SSLProtocol(Protocol):
             return
 
         for data in list_of_data:
-            if not isinstance(data, (bytes, bytearray, memoryview)):
-                raise TypeError(f"data: expecting a bytes-like instance, "
-                                f"got {type(data).__name__}")
+            aiofn_validate_buffer(data)
 
         cdef:
             char* data_ptr

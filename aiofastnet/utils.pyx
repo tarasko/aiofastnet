@@ -4,6 +4,12 @@ from cpython.buffer cimport *
 from libc cimport errno
 
 
+cpdef aiofn_validate_buffer(buffer):
+    if not isinstance(buffer, (bytes, bytearray, memoryview)):
+        raise TypeError(f"data: expecting a bytes-like instance, "
+                        f"got {type(buffer).__name__}")
+
+
 cdef aiofn_unpack_buffer(object bytes_like_obj, char** ptr_out, Py_ssize_t* size_out):
     if bytes_like_obj is None:
         ptr_out[0] = NULL
@@ -26,6 +32,11 @@ cdef object aiofn_maybe_copy_buffer(object buffer):
         return buffer
 
     return PyBytes_FromObject(buffer)
+
+
+cpdef object aiofn_validate_and_maybe_copy_buffer(object buffer):
+    aiofn_maybe_copy_buffer(buffer)
+    return aiofn_maybe_copy_buffer(buffer)
 
 
 cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz):

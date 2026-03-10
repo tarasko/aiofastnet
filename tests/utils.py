@@ -15,6 +15,7 @@ from aiofastnet import create_connection, create_server, Transport as aiofn_Tran
 
 _logger = getLogger("tests.utils")
 
+
 def multiloop_event_loop_policy():
     """
     Returns a pytest fixture function named `event_loop_policy` (by assignment in the test module).
@@ -77,7 +78,7 @@ class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
             ssl_protocol._allow_renegotiation()
 
     def get_buffer(self, hint):
-        return self._read_buffer
+        return memoryview(self._read_buffer)
 
     def buffer_updated(self, bytes_read):
         _logger.debug("EchoServer.buffer_updated: received=%d", bytes_read)
@@ -146,7 +147,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         self._new_data_ev.clear()
 
     def get_buffer(self, hint):
-        return self._read_buffer
+        return memoryview(self._read_buffer)
 
     def buffer_updated(self, bytes_read):
         if isinstance(self.transport, aiofn_Transport):

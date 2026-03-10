@@ -343,9 +343,8 @@ cdef class SelectorSocketTransport(Transport):
             self.close()
 
     cpdef write(self, data):
-        if not isinstance(data, (bytes, bytearray, memoryview)):
-            raise TypeError(f'data argument must be a bytes, bytearray, or memoryview '
-                            f'object, not {type(data).__name__!r}')
+        aiofn_validate_buffer(data)
+
         if self._eof:
             raise RuntimeError('Cannot call write() after write_eof()')
         if self._empty_waiter is not None:
@@ -406,7 +405,10 @@ cdef class SelectorSocketTransport(Transport):
             raise RuntimeError('Cannot call writelines() after write_eof()')
         if self._empty_waiter is not None:
             raise RuntimeError('unable to writelines; sendfile is in progress')
-        if not list_of_data:
+        if list_of_data:
+            for data in list_of_data:
+                aiofn_validate_buffer(data)
+        else:
             return
 
         if self._conn_lost:
