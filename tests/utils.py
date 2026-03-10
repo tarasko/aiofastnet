@@ -1,5 +1,6 @@
 import asyncio
-from contextlib import asynccontextmanager
+from collections import deque
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 import importlib
 import os
@@ -14,6 +15,10 @@ import pytest
 from aiofastnet import create_connection, create_server, Transport as aiofn_Transport
 
 _logger = getLogger("tests.utils")
+
+
+class TestException(Exception):
+    pass
 
 
 def multiloop_event_loop_policy():
@@ -166,8 +171,9 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
     def resume_writing(self):
         _logger.debug("AsyncClient.resume_writing")
         self._is_writing_paused = False
-        self._write_resumed_fut.set_result(None)
-        self._write_resumed_fut = None
+        if self._write_resumed_fut is not None:
+            self._write_resumed_fut.set_result(None)
+            self._write_resumed_fut = None
 
     def eof_received(self):
         self._is_eof_received = True
@@ -201,7 +207,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         _logger.debug("AsyncClient.writelines(%s)", lens)
         self._transport.writelines(parts)
 
-    async def readn(self, n: int, timeout=5.0) -> bytes:
+    async def readn(self, n: int, timeout=1.0) -> bytes:
         assert self._readn_waiter is None
 
         if n < 0:
@@ -227,8 +233,9 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
     def abort(self):
         self._transport.abort()
 
-    async def wait_closed(self):
-        await asyncio.shield(self._closed)
+    async def wait_closed(self, timeout=1.0):
+        async with async_timeout.timeout(timeout):
+            await asyncio.shield(self._closed)
 
     async def wait_write_resumed(self, timeout=1.0):
         if self._write_resumed_fut is None:
@@ -287,7 +294,7 @@ async def echo_server(host="127.0.0.1", port=0, ssl_context=None, is_buffered=Fa
 
 
 @asynccontextmanager
-async def echo_client(server_or_host, port=None, ssl_context=None, server_hostname=None, is_buffered=False):
+async def echo_client(server_or_host, port=None, ssl_context=None, server_hostname=None, is_buffered=False, protocol_factory=AsyncClient):
     if isinstance(server_or_host, EchoServerHandle):
         host = server_or_host.host
         port = server_or_host.port
@@ -299,7 +306,7 @@ async def echo_client(server_or_host, port=None, ssl_context=None, server_hostna
     loop = asyncio.get_running_loop()
     _, client = await create_connection(
         loop,
-        lambda: AsyncClient(is_buffered),
+        lambda: protocol_factory(is_buffered),
         host=host,
         port=port,
         ssl=ssl_context,
@@ -310,11 +317,12 @@ async def echo_client(server_or_host, port=None, ssl_context=None, server_hostna
     finally:
         client.close()
         try:
-            await asyncio.wait_for(client.wait_closed(), timeout=1.0)
+            await client.wait_closed(1.0)
         except TimeoutError:
             # SSL close_notify can hang in edge cases (for example no payload).
             client.abort()
-
+        except TestException:
+            pass
 
 def make_test_ssl_contexts(cert_file: Union[str, Path], key_file: Union[str, Path]):
     cert_file = str(cert_file)
@@ -327,3 +335,19 @@ def make_test_ssl_contexts(cert_file: Union[str, Path], key_file: Union[str, Pat
     client_context.check_hostname = False
     client_context.verify_mode = ssl.CERT_NONE
     return server_context, client_context
+
+
+@contextmanager
+def exc_queue():
+    loop = asyncio.get_running_loop()
+    old_handler = loop.get_exception_handler()
+    exc_queue = []
+    def new_handler(loop, context):
+        nonlocal exc_queue
+        exc_queue.append(context)
+    loop.set_exception_handler(new_handler)
+    try:
+        yield exc_queue
+    finally:
+        exc_queue.clear()
+        loop.set_exception_handler(old_handler)
