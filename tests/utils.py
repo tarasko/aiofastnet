@@ -1,4 +1,5 @@
 import asyncio
+import socket
 import weakref
 from collections import deque
 from contextlib import asynccontextmanager, contextmanager
@@ -20,6 +21,13 @@ _logger = getLogger("tests.utils")
 
 class TestException(Exception):
     pass
+
+
+def _set_socket_sndbuf(transport: asyncio.Transport, size: int) -> int:
+    sock = transport.get_extra_info('socket')
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, max(1, size // 2))
+    return sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
+
 
 
 def multiloop_event_loop_policy():
@@ -83,6 +91,7 @@ class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
         _logger.debug("EchoServer.connection_made")
         self._clients.add(weakref.ref(self))
         self.transport = transport
+        _set_socket_sndbuf(transport, 256*1024)
         ssl_protocol = self.transport.get_extra_info('ssl_protocol')
         if ssl_protocol is not None and hasattr(ssl_protocol, '_allow_renegotiation'):
             ssl_protocol._allow_renegotiation()
