@@ -1,5 +1,5 @@
 from .transport cimport (
-    Transport, Protocol, is_buffered_protocol
+    Transport, Protocol, aiofn_is_buffered_protocol
 )
 
 from .utils cimport (

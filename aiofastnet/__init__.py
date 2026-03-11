@@ -6,7 +6,7 @@ from .api import (
 from .transport import (
     Transport,
     Protocol,
-    is_buffered_protocol
+    aiofn_is_buffered_protocol
 )
 
 __version__ = "0.0.6"

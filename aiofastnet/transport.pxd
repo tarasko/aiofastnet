@@ -12,4 +12,4 @@ cdef class Protocol:
     cpdef Py_ssize_t get_local_write_buffer_size(self) except -1
 
 
-cpdef is_buffered_protocol(protocol)
+cpdef aiofn_is_buffered_protocol(protocol)

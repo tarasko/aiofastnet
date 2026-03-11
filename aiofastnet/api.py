@@ -17,7 +17,7 @@ from logging import getLogger
 
 from . import constants
 from .ssl_protocol import SSLProtocol
-from .transport import Transport, SelectorSocketTransport, is_buffered_protocol
+from .transport import Transport, SelectorSocketTransport, aiofn_is_buffered_protocol
 from asyncio.trsock import TransportSocket
 
 from .utils import aiofn_validate_and_maybe_copy_buffer
@@ -58,7 +58,7 @@ class _WrappedTransport(Transport):
         return self._transport.close()
 
     def set_protocol(self, protocol):
-        if is_buffered_protocol(protocol):
+        if aiofn_is_buffered_protocol(protocol):
             wrapped_protocol = _WrappedBufferedProtocol(protocol)
         else:
             wrapped_protocol = _WrappedProtocol(protocol)
@@ -185,7 +185,7 @@ async def create_connection(
 
         def wrapped_protocol_factory():
             user_protocol = protocol_factory()
-            if is_buffered_protocol(user_protocol):
+            if aiofn_is_buffered_protocol(user_protocol):
                 return _WrappedBufferedProtocol(user_protocol)
             else:
                 return _WrappedProtocol(user_protocol)
@@ -381,7 +381,7 @@ async def create_server(
 
         def wrapped_protocol_factory():
             user_protocol = protocol_factory()
-            if is_buffered_protocol(user_protocol):
+            if aiofn_is_buffered_protocol(user_protocol):
                 return _WrappedBufferedProtocol(user_protocol)
             else:
                 return _WrappedProtocol(user_protocol)

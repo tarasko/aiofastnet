@@ -594,7 +594,7 @@ cdef class SSLProtocol(Protocol):
 
     cpdef _set_app_protocol(self, app_protocol):
         self._app_protocol = app_protocol
-        self._app_protocol_is_buffered = is_buffered_protocol(app_protocol)
+        self._app_protocol_is_buffered = aiofn_is_buffered_protocol(app_protocol)
         self._app_protocol_aiofn = isinstance(app_protocol, Protocol)
 
     cpdef _get_app_protocol(self):

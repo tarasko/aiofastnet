@@ -61,7 +61,7 @@ cdef class Protocol:
         raise NotImplementedError()
 
 
-cpdef is_buffered_protocol(protocol):
+cpdef aiofn_is_buffered_protocol(protocol):
     try:
         ret = getattr(protocol, 'is_buffered_protocol')()
         if ret is not None:
@@ -162,7 +162,7 @@ cdef class SelectorSocketTransport(Transport):
 
     cpdef set_protocol(self, protocol):
         self._protocol = protocol
-        self._protocol_buffered = is_buffered_protocol(protocol)
+        self._protocol_buffered = aiofn_is_buffered_protocol(protocol)
         self._protocol_aiofn = isinstance(protocol, Protocol)
         self._protocol_connected = True
 
