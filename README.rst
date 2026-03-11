@@ -1,5 +1,12 @@
-aiofastnet
-==========
+Introduction
+============
+
+.. image:: https://img.shields.io/github/actions/workflow/status/tarasko/aiofastnet/run-tests.yml?branch=master
+    :target: https://github.com/tarasko/aiofastnet/actions/workflows/run-tests.yml?query=branch%3Amaster
+
+.. image:: https://badge.fury.io/py/aiofastnet.svg
+    :target: https://pypi.org/project/aiofastnet
+    :alt: Latest PyPI package version
 
 ``aiofastnet`` provides highly optimized ``asyncio``
 `loop.create_connection <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_connection>`_
