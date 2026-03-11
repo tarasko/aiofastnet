@@ -230,48 +230,46 @@ async def test_exc_connection_made(conn_type):
 
 
 async def test_exc_pause_writing(conn_type):
-    # if os.name == 'nt':
-    #     pytest.skip("setting SNDBUF has no effect on loopback interface on windows, can't emulate pause_writing/resume_writing events")
-
     class ClientRaisePauseWriting(AsyncClient):
         def pause_writing(self):
             super().pause_writing()
             raise TestException("pause_writing")
 
     payload = b"x" * 1024
+    num_sent = 0
 
     async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
         async with echo_client(server, protocol_factory=ClientRaisePauseWriting, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
             with exc_queue() as excq:
                 while not client.is_writing_paused:
                     client.transport.write(payload)
+                    num_sent += 1
 
-                reply = await client.readn(len(payload))
-                assert reply == payload
+                reply = await client.readn(len(payload) * num_sent)
+                assert reply == (payload * num_sent)
                 assert isinstance(excq[0]["exception"], TestException)
-                # client.close()
-                # await client.wait_closed()
+                client.close()
+                await client.wait_closed()
 
 
 async def test_exc_resume_writing(loop_debug, conn_type):
-    # if os.name == 'nt':
-    #     pytest.skip("setting SNDBUF has no effect on loopback interface on windows, can't emulate pause_writing/resume_writing events")
-
     class ClientRaiseResumeWriting(AsyncClient):
         def resume_writing(self):
             super().resume_writing()
             raise TestException("resume_writing")
 
     payload = b"x" * 1024
+    num_sent = 0
 
     async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
         async with echo_client(server, protocol_factory=ClientRaiseResumeWriting, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
             with exc_queue() as excq:
                 while not client.is_writing_paused:
                     client.transport.write(payload)
+                    num_sent += 1
 
-                reply = await client.readn(len(payload))
-                assert reply == payload
+                reply = await client.readn(len(payload) * num_sent)
+                assert reply == (payload * num_sent)
                 assert isinstance(excq[0]["exception"], TestException)
                 client.close()
                 await client.wait_closed()
