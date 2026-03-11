@@ -9,5 +9,5 @@ from .transport import (
     aiofn_is_buffered_protocol
 )
 
-__version__ = "0.0.6"
+__version__ = "0.0.7"
 __author__ = "Taras Kozlov"
