@@ -118,7 +118,7 @@ cdef Py_ssize_t aiofn_send(int sockfd, void* buf, Py_ssize_t len) except? -1:
 
 cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* iov, Py_ssize_t iovcnt) except? -1:
     cdef:
-        ssize_t bytes_sent
+        Py_ssize_t bytes_sent
         int last_error
 
     while True:

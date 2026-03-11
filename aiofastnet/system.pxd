@@ -125,5 +125,5 @@ cdef extern from * nogil:
         void* iov_base
         size_t iov_len
 
-    ssize_t aiofn_writev_sys(int fd, aiofn_iovec *iov, int iovcnt)
+    Py_ssize_t aiofn_writev_sys(int fd, aiofn_iovec *iov, int iovcnt)
 
