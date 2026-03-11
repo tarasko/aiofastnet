@@ -3,7 +3,6 @@ import os
 import socket
 import ssl
 import tempfile
-import warnings
 from logging import getLogger
 
 from cpython.contextvars cimport *
@@ -366,37 +365,22 @@ cdef inline _create_transport_context(server_side, server_hostname):
 
 cdef class SSLTransport(Transport):
     cdef:
-        object _loop
         SSLProtocol _ssl_protocol
-        bint _closed
-        object context
 
-    def __init__(self, loop, SSLProtocol ssl_protocol):
-        self._loop = loop
-        # SSLProtocol instance
+    def __init__(self, SSLProtocol ssl_protocol):
         self._ssl_protocol = ssl_protocol
-        self._closed = False
-
-    def __dealloc__(self):
-        if not self._closed:
-            self._closed = True
-            warnings.warn(
-                "unclosed transport <aiofastnet.SSLTransport object>",
-                ResourceWarning
-            )
 
     def get_extra_info(self, name, default=None):
-        """Get optional transport information."""
         return self._ssl_protocol._get_extra_info(name, default)
 
     def set_protocol(self, protocol):
-        self._ssl_protocol.set_app_protocol(protocol)
+        self._ssl_protocol._set_app_protocol(protocol)
 
     def get_protocol(self):
-        return self._ssl_protocol._app_protocol
+        return self._ssl_protocol._get_app_protocol()
 
     def is_reading(self):
-        return self._ssl_protocol.get_tcp_transport().is_reading()
+        return self._ssl_protocol._get_tcp_transport().is_reading()
 
     def pause_reading(self):
         """Pause the receiving end.
@@ -433,14 +417,14 @@ cdef class SSLTransport(Transport):
         reduces opportunities for doing I/O and computation
         concurrently.
         """
-        self._ssl_protocol.get_tcp_transport().set_write_buffer_limits(high, low)
+        self._ssl_protocol._get_tcp_transport().set_write_buffer_limits(high, low)
 
     def get_write_buffer_limits(self):
-        return self._ssl_protocol.get_tcp_transport().get_write_buffer_limits()
+        return self._ssl_protocol._get_tcp_transport().get_write_buffer_limits()
 
     def get_write_buffer_size(self):
         """Return the current size of the write buffers."""
-        return self._ssl_protocol.get_tcp_transport().get_write_buffer_size()
+        return self._ssl_protocol._get_tcp_transport().get_write_buffer_size()
 
     cpdef write(self, data):
         """Write some data bytes to the transport.
@@ -473,7 +457,7 @@ cdef class SSLTransport(Transport):
         return False
 
     def is_closing(self):
-        return self._closed
+        return self._ssl_protocol._is_closing()
 
     def close(self):
         """Close the transport.
@@ -483,7 +467,6 @@ cdef class SSLTransport(Transport):
         protocol's connection_lost() method will (eventually) called
         with None as its argument.
         """
-        self._closed = True
         self._ssl_protocol._start_shutdown()
 
     def abort(self):
@@ -493,7 +476,6 @@ cdef class SSLTransport(Transport):
         The protocol's connection_lost() method will (eventually) be
         called with None as its argument.
         """
-        self._closed = True
         self._ssl_protocol._abort(None)
 
 
@@ -576,7 +558,7 @@ cdef class SSLProtocol(Protocol):
         self._write_backlog = []
 
         self._loop = loop
-        self.set_app_protocol(app_protocol)
+        self._set_app_protocol(app_protocol)
         self._app_transport = None
         # transport, ex: SelectorSocketTransport
         self._transport = None
@@ -610,20 +592,20 @@ cdef class SSLProtocol(Protocol):
     cpdef is_buffered_protocol(self):
         return True
 
-    cpdef set_app_protocol(self, app_protocol):
+    cpdef _set_app_protocol(self, app_protocol):
         self._app_protocol = app_protocol
         self._app_protocol_is_buffered = is_buffered_protocol(app_protocol)
         self._app_protocol_aiofn = isinstance(app_protocol, Protocol)
 
-    cpdef get_app_protocol(self):
+    cpdef _get_app_protocol(self):
         return self._app_protocol
 
     cpdef get_app_transport(self):
         if self._app_transport is None:
-            self._app_transport = SSLTransport(self._loop, self)
+            self._app_transport = SSLTransport(self)
         return self._app_transport
 
-    cdef inline Transport get_tcp_transport(self):
+    cdef inline Transport _get_tcp_transport(self):
         return self._transport
 
     def connection_made(self, transport):
@@ -647,11 +629,6 @@ cdef class SSLProtocol(Protocol):
         BIO_reset(self._ssl_connection.outgoing)
 
         self._conn_lost += 1
-
-        # Just mark the app transport as closed so that its __dealloc__
-        # doesn't complain.
-        if self._app_transport is not None:
-            self._app_transport._closed = True
 
         if self._state != DO_HANDSHAKE:
             if self._app_state == STATE_CON_MADE or \
@@ -933,14 +910,15 @@ cdef class SSLProtocol(Protocol):
 
     # Shutdown flow
 
+    cdef inline bint _is_closing(self) noexcept:
+        return self._state in (FLUSHING, SHUTDOWN, UNWRAPPED)
+
     cdef inline _start_shutdown(self):
         if self._state in (FLUSHING, SHUTDOWN, UNWRAPPED):
             return
         # we don't need the context for _abort or the timeout, because
         # TCP transport._force_close() should be able to call
         # connection_lost() in the right context
-        if self._app_transport is not None:
-            self._app_transport._closed = True
         if self._state == DO_HANDSHAKE:
             self._abort(None)
         else:
@@ -952,8 +930,7 @@ cdef class SSLProtocol(Protocol):
 
     cdef inline _check_shutdown_timeout(self):
         if self._state in (FLUSHING, SHUTDOWN):
-            self._transport._force_close(
-                asyncio.TimeoutError('SSL shutdown timed out'))
+            self._abort(asyncio.TimeoutError('SSL shutdown timed out'))
 
     cdef inline _do_read_into_void(self):
         """Consume and discard incoming application data.
@@ -1467,10 +1444,7 @@ cdef class SSLProtocol(Protocol):
                                        'has no effect when using ssl')
 
     cdef inline _fatal_error(self, exc, message='Fatal error on transport'):
-        if self._app_transport:
-            self._app_transport._force_close(exc)
-        elif self._transport:
-            self._transport._force_close(exc)
+        self._abort(exc)
 
         if isinstance(exc, OSError):
             if self._loop.get_debug():

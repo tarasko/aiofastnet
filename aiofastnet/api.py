@@ -41,7 +41,7 @@ def _is_asyncio_loop(loop: asyncio.AbstractEventLoop) -> bool:
     return type(loop).__module__.startswith("asyncio.")
 
 
-class _WrappedTransport(Transport, asyncio.Transport):
+class _WrappedTransport(Transport):
     __slots__ = ('_transport',)
 
     def __init__(self, transport: asyncio.Transport):
