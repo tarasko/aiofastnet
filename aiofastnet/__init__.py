@@ -9,5 +9,5 @@ from .transport import (
     is_buffered_protocol
 )
 
-__version__ = "0.0.5"
+__version__ = "0.0.6"
 __author__ = "Taras Kozlov"
