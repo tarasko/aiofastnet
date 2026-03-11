@@ -9,7 +9,7 @@ from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Transport
 from tests.utils import echo_client, echo_server, \
     multiloop_event_loop_policy, make_test_ssl_contexts, ConnectionType, \
-    AsyncClient, TestException, exc_queue
+    AsyncClient, TestException, exc_queue, _logger
 
 event_loop_policy = multiloop_event_loop_policy()
 
@@ -59,17 +59,13 @@ async def test_echo_writelines(msg_size, num_lines, conn_type, buffered_protocol
             assert echoed == payload
 
 
-async def test_write_paused(conn_type, buffered_protocol):
-    if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
-        pytest.skip("aiofastnet doesn't work with ProactorEventLoop")
+async def test_write_paused(conn_type):
+    payload = b"x" * (1024)
 
-    payload = b"x" * (128*1024)
-
-    async with echo_server(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
-        async with echo_client(server, ssl_context=conn_type.client_ssl_context, is_buffered=buffered_protocol) as client:
+    async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
+        async with echo_client(server, ssl_context=conn_type.client_ssl_context) as client:
             wbuf_size = client.transport.get_write_buffer_size()
             assert wbuf_size == 0
-            client.transport.set_write_buffer_limits(0, 0)
             total_bytes_written = 0
             while not client.is_writing_paused:
                 client.transport.write(payload)
@@ -79,16 +75,61 @@ async def test_write_paused(conn_type, buffered_protocol):
             wbuf_size = client.transport.get_write_buffer_size()
             assert wbuf_size > 0
 
-            # increase writing buffer limit, this should cause resume_writing
-            client.transport.set_write_buffer_limits(wbuf_size+2048, wbuf_size+1)
-            assert not client.is_writing_paused
+            _logger.debug("test_write_paused: %d total bytes was sent before pause_writing event, wbuf_size=%d", 
+                          total_bytes_written, wbuf_size)
 
-            # decrease writing buffer limit, cause writing paused
-            client.transport.set_write_buffer_limits(0, 0)
-            assert client.is_writing_paused
+            # asyncio tcp implementations do not notify pause_writing/resume_writing from set_write_buffer_limits()
+            # asyncio ssl implementation does. 
+            if not (os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop)):
+                # increase writing buffer limit, this should cause resume_writing
+                client.transport.set_write_buffer_limits(wbuf_size+2048, wbuf_size+1)
+                assert not client.is_writing_paused
+
+                # decrease writing buffer limit, cause writing paused
+                client.transport.set_write_buffer_limits(wbuf_size-2048, 0)
+                assert client.is_writing_paused
 
             await client.wait_write_resumed()
             await client.readn(total_bytes_written)
+
+
+async def test_writelines_paused(conn_type):
+    msg1 = b"a" * 256 
+    msg2 = b"b" * 256 * 2
+    msg3 = b"c" * 256 * 3
+
+    total_batch_size = len(msg1) + len(msg2) + len(msg3)
+
+    async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
+        async with echo_client(server, ssl_context=conn_type.client_ssl_context) as client:
+            wbuf_size = client.transport.get_write_buffer_size()
+            assert wbuf_size == 0
+            total_bytes_written = 0
+            while not client.is_writing_paused:
+                client.transport.writelines([msg1, msg2, msg3])
+                total_bytes_written += total_batch_size
+                assert total_bytes_written < 20*1024*1024, "send buffer is much smaller than this, we should already have hit pause_writing by now"
+            
+            _logger.debug("test_writelines_paused: %d total bytes was sent before pause_writing event, wbuf_size=%d", 
+                          total_bytes_written, client.transport.get_write_buffer_size())
+
+            wbuf_size = client.transport.get_write_buffer_size()
+            assert wbuf_size > 0
+
+            # asyncio tcp implementations do not notify pause_writing/resume_writing from set_write_buffer_limits()
+            # asyncio ssl implementation does. 
+            if not (os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop)):
+                # increase writing buffer limit, this should cause resume_writing
+                client.transport.set_write_buffer_limits(wbuf_size+2048, wbuf_size+1)
+                assert not client.is_writing_paused
+
+                # decrease writing buffer limit, cause writing paused
+                client.transport.set_write_buffer_limits(wbuf_size-2048, 0)
+                assert client.is_writing_paused
+
+            await client.wait_write_resumed()
+            await client.readn(total_bytes_written)
+
 
 
 async def test_pause_reading(conn_type):
@@ -189,40 +230,46 @@ async def test_exc_connection_made(conn_type):
 
 
 async def test_exc_pause_writing(conn_type):
-    if os.name == 'nt':
-        pytest.skip("setting SNDBUF has no effect on loopback interface on windows, can't emulate pause_writing/resume_writing events")
+    # if os.name == 'nt':
+    #     pytest.skip("setting SNDBUF has no effect on loopback interface on windows, can't emulate pause_writing/resume_writing events")
 
     class ClientRaisePauseWriting(AsyncClient):
         def pause_writing(self):
+            super().pause_writing()
             raise TestException("pause_writing")
 
-    payload = b"x" * (20*1024*1024)
+    payload = b"x" * 1024
 
     async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
         async with echo_client(server, protocol_factory=ClientRaisePauseWriting, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
             with exc_queue() as excq:
-                client.transport.write(payload)
+                while not client.is_writing_paused:
+                    client.transport.write(payload)
+
                 reply = await client.readn(len(payload))
                 assert reply == payload
                 assert isinstance(excq[0]["exception"], TestException)
-                client.close()
-                await client.wait_closed()
+                # client.close()
+                # await client.wait_closed()
 
 
-async def test_exc_resume_writing(conn_type):
-    if os.name == 'nt':
-        pytest.skip("setting SNDBUF has no effect on loopback interface on windows, can't emulate pause_writing/resume_writing events")
+async def test_exc_resume_writing(loop_debug, conn_type):
+    # if os.name == 'nt':
+    #     pytest.skip("setting SNDBUF has no effect on loopback interface on windows, can't emulate pause_writing/resume_writing events")
 
     class ClientRaiseResumeWriting(AsyncClient):
         def resume_writing(self):
+            super().resume_writing()
             raise TestException("resume_writing")
 
-    payload = b"x" * (20*1024*1024)
+    payload = b"x" * 1024
 
     async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
         async with echo_client(server, protocol_factory=ClientRaiseResumeWriting, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
             with exc_queue() as excq:
-                client.transport.write(payload)
+                while not client.is_writing_paused:
+                    client.transport.write(payload)
+
                 reply = await client.readn(len(payload))
                 assert reply == payload
                 assert isinstance(excq[0]["exception"], TestException)

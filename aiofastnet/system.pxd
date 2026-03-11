@@ -49,7 +49,7 @@ cdef extern from * nogil:
     {
         DWORD bytes_sent = 0;
         int rc = WSASend(fd, (LPWSABUF)iov, iovcnt, &bytes_sent, 0, NULL, NULL);
-        return rc == SOCKET_ERROR ? -1 : bytes_sent;
+        return rc == SOCKET_ERROR ? -1 : (Py_ssize_t)bytes_sent;
     }
 
 #else

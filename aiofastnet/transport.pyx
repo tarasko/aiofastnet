@@ -446,7 +446,7 @@ cdef class SelectorSocketTransport(Transport):
             try:
                 bytes_sent = aiofn_send(self._sock_fd, data_ptr, data_len)
                 if self._is_debug:
-                    _logger.debug("%r write(...,len=%s)=%s", self,
+                    _logger.debug("%r aiofn_send(...,len=%d)=%d", self,
                                   bytes_sent, data_len)
             except BaseException as exc:
                 self._fatal_error(exc, 'Fatal write error on socket transport')
@@ -513,7 +513,7 @@ cdef class SelectorSocketTransport(Transport):
         bytes_sent = aiofn_writev(self._sock_fd, self._iovecs, idx)
 
         if self._is_debug:
-            _logger.debug("%r writev sent %s bytes out of %d iovecs", self, bytes_sent, idx)
+            _logger.debug("%r aiofn_writev(..., len(iovecs)=%d)=%d", self, idx, bytes_sent)
         self._adjust_leftover_buffer(list_of_data, bytes_sent)
 
     cpdef _write_ready(self):

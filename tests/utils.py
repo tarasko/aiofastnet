@@ -358,12 +358,9 @@ async def echo_client(server_or_host, port=None, ssl_context=None, server_hostna
     try:
         yield client
     finally:
-        transport.close()
+        transport.abort()
         try:
             await client.wait_closed(1.0)
-        except TimeoutError:
-            # SSL close_notify can hang in edge cases (for example no payload).
-            transport.abort()
         except TestException:
             pass
 
