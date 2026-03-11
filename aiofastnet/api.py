@@ -17,7 +17,7 @@ from logging import getLogger
 
 from . import constants
 from .ssl_protocol import SSLProtocol
-from .transport import SelectorSocketTransport, is_buffered_protocol
+from .transport import Transport, SelectorSocketTransport, is_buffered_protocol
 from asyncio.trsock import TransportSocket
 
 from .utils import aiofn_validate_and_maybe_copy_buffer
@@ -41,7 +41,7 @@ def _is_asyncio_loop(loop: asyncio.AbstractEventLoop) -> bool:
     return type(loop).__module__.startswith("asyncio.")
 
 
-class _WrappedTransport(asyncio.Transport):
+class _WrappedTransport(Transport, asyncio.Transport):
     __slots__ = ('_transport',)
 
     def __init__(self, transport: asyncio.Transport):

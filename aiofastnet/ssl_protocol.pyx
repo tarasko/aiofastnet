@@ -364,7 +364,7 @@ cdef inline _create_transport_context(server_side, server_hostname):
     return sslcontext
 
 
-cdef class SSLTransport:
+cdef class SSLTransport(Transport):
     cdef:
         object _loop
         SSLProtocol _ssl_protocol
@@ -377,6 +377,14 @@ cdef class SSLTransport:
         self._ssl_protocol = ssl_protocol
         self._closed = False
 
+    def __dealloc__(self):
+        if not self._closed:
+            self._closed = True
+            warnings.warn(
+                "unclosed transport <aiofastnet.SSLTransport object>",
+                ResourceWarning
+            )
+
     def get_extra_info(self, name, default=None):
         """Get optional transport information."""
         return self._ssl_protocol._get_extra_info(name, default)
@@ -386,27 +394,6 @@ cdef class SSLTransport:
 
     def get_protocol(self):
         return self._ssl_protocol._app_protocol
-
-    def is_closing(self):
-        return self._closed
-
-    def close(self):
-        """Close the transport.
-
-        Buffered data will be flushed asynchronously.  No more data
-        will be received.  After all buffered data is flushed, the
-        protocol's connection_lost() method will (eventually) called
-        with None as its argument.
-        """
-        self._closed = True
-        self._ssl_protocol._start_shutdown()
-
-    def __dealloc__(self):
-        if not self._closed:
-            self._closed = True
-            warnings.warn(
-                "unclosed transport <uvloop.loop.SSLTransport "
-                "object>", ResourceWarning)
 
     def is_reading(self):
         return self._ssl_protocol.get_tcp_transport().is_reading()
@@ -479,11 +466,25 @@ cdef class SSLTransport:
 
         This raises :exc:`NotImplementedError` right now.
         """
-        raise NotImplementedError
+        raise NotImplementedError()
 
     def can_write_eof(self):
         """Return True if this transport supports write_eof(), False if not."""
         return False
+
+    def is_closing(self):
+        return self._closed
+
+    def close(self):
+        """Close the transport.
+
+        Buffered data will be flushed asynchronously.  No more data
+        will be received.  After all buffered data is flushed, the
+        protocol's connection_lost() method will (eventually) called
+        with None as its argument.
+        """
+        self._closed = True
+        self._ssl_protocol._start_shutdown()
 
     def abort(self):
         """Close the transport immediately.
@@ -492,11 +493,8 @@ cdef class SSLTransport:
         The protocol's connection_lost() method will (eventually) be
         called with None as its argument.
         """
-        self._force_close(None)
-
-    def _force_close(self, exc):
         self._closed = True
-        self._ssl_protocol._abort(exc)
+        self._ssl_protocol._abort(None)
 
 
 cdef class SSLProtocol(Protocol):

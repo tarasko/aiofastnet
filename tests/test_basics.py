@@ -6,6 +6,7 @@ from _contextvars import ContextVar
 import pytest
 
 from aiofastnet.utils import aiofn_maybe_copy_buffer
+from aiofastnet.transport import Transport
 from tests.utils import echo_client, echo_server, \
     multiloop_event_loop_policy, make_test_ssl_contexts, ConnectionType, \
     AsyncClient, TestException, exc_queue
@@ -381,6 +382,15 @@ async def test_contextvar(conn_type, buffered_protocol):
             # because it highlights what each loop does with contextvars
 
             assert var_values[0] == ('connection_made', 'begin')
+
+
+async def test_transport_base(conn_type):
+    async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
+        async with echo_client(server, ssl_context=conn_type.client_ssl_context) as client:
+            assert isinstance(client.transport, Transport)
+            client.close()
+            await client.wait_closed()
+
 
 # Exception from send due to file error should cause fatal error
 # Graceful disconnect should flush all data

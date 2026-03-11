@@ -1,14 +1,17 @@
 import collections
 import socket
 import warnings
+import asyncio
 from asyncio.trsock import TransportSocket
-from asyncio import BufferedProtocol
 from logging import getLogger
+
+from cpython.memoryview cimport PyMemoryView_FromMemory
+from cpython.buffer cimport PyBUF_READ
+from cpython.bytes cimport *
 
 from . import constants
 
 from .utils cimport *
-from cpython.bytes cimport *
 
 
 cdef object _logger = getLogger('aiofastnet.transport')
@@ -32,13 +35,13 @@ cdef _set_nodelay(sock):
 
 cdef class Transport:
     cpdef write(self, data):
-        raise NotImplemented
+        raise NotImplementedError()
 
     cpdef writelines(self, list_of_data):
-        raise NotImplemented
+        raise NotImplementedError()
 
     cdef write_mem(self, char* ptr, Py_ssize_t sz):
-        raise NotImplemented
+        self.write(PyMemoryView_FromMemory(ptr, sz, PyBUF_READ))
 
 
 cdef class Protocol:
@@ -49,13 +52,13 @@ cdef class Protocol:
         return 0
 
     cpdef get_buffer(self, Py_ssize_t hint):
-        raise NotImplemented
+        raise NotImplementedError()
 
     cpdef buffer_updated(self, Py_ssize_t bytes_read):
-        raise NotImplemented
+        raise NotImplementedError()
 
-    cpdef data_received(self, data):
-        raise NotImplemented
+    cpdef data_received(self, bytes data):
+        raise NotImplementedError()
 
 
 cpdef is_buffered_protocol(protocol):
@@ -66,7 +69,7 @@ cpdef is_buffered_protocol(protocol):
     except AttributeError:
         pass
 
-    return isinstance(protocol, BufferedProtocol)
+    return isinstance(protocol, asyncio.BufferedProtocol)
 
 
 cdef class SelectorSocketTransport(Transport):
