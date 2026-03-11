@@ -187,8 +187,53 @@ async def test_exc_connection_made(conn_type):
                 await client.wait_closed()
 
 
+async def test_exc_pause_writing(conn_type):
+    if os.name == 'nt':
+        pytest.skip("setting SNDBUF has no effect on loopback interface on windows, can't emulate pause_writing/resume_writing events")
+
+    class ClientRaisePauseWriting(AsyncClient):
+        def pause_writing(self):
+            raise TestException("pause_writing")
+
+    payload = b"x" * (20*1024*1024)
+
+    async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
+        async with echo_client(server, protocol_factory=ClientRaisePauseWriting, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
+            with exc_queue() as excq:
+                client.transport.write(payload)
+                reply = await client.readn(len(payload))
+                assert reply == payload
+                assert isinstance(excq[0]["exception"], TestException)
+                client.close()
+                await client.wait_closed()
+
+
+async def test_exc_resume_writing(conn_type):
+    if os.name == 'nt':
+        pytest.skip("setting SNDBUF has no effect on loopback interface on windows, can't emulate pause_writing/resume_writing events")
+
+    class ClientRaiseResumeWriting(AsyncClient):
+        def resume_writing(self):
+            raise TestException("resume_writing")
+
+    payload = b"x" * (20*1024*1024)
+
+    async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
+        async with echo_client(server, protocol_factory=ClientRaiseResumeWriting, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
+            with exc_queue() as excq:
+                client.transport.write(payload)
+                reply = await client.readn(len(payload))
+                assert reply == payload
+                assert isinstance(excq[0]["exception"], TestException)
+                client.close()
+                await client.wait_closed()
+
+
 async def test_exc_all(conn_type):
-    # aiofastnet preserves original un-documented behavior of asyncio
+    if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
+        pytest.skip("exceptions from connection_made has unspecified behavior in asyncio")
+
+    # aiofastnet tries to preserve original un-documented behavior of asyncio
     # Exceptions from data callbacks: data_received, get_buffer, buffer_updated
     # shutdown connection.
     # Exceptions from flow control callbacks: connection_made, pause_writing, resume_writing
@@ -196,7 +241,6 @@ async def test_exc_all(conn_type):
     # All exceptions are reported through loop exception callback
 
     payload = b"x" * (20*1024*1024)
-
 
     class ClientRaiseDataReceived(AsyncClient):
         def data_received(self, data):
@@ -209,14 +253,6 @@ async def test_exc_all(conn_type):
     class ClientRaiseBufferUpdated(AsyncClient):
         def buffer_updated(self, bytes_read):
             raise TestException("buffer_updated")
-
-    class ClientRaisePauseWriting(AsyncClient):
-        def pause_writing(self):
-            raise TestException("pause_writing")
-
-    class ClientRaiseResumeWriting(AsyncClient):
-        def resume_writing(self):
-            raise TestException("resume_writing")
 
     async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
         async with echo_client(server, protocol_factory=ClientRaiseDataReceived, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
@@ -239,24 +275,6 @@ async def test_exc_all(conn_type):
                 with pytest.raises(TestException, match="buffer_updated"):
                     await client.wait_closed()
                 assert isinstance(excq[0]["exception"], TestException)
-
-        async with echo_client(server, protocol_factory=ClientRaisePauseWriting, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
-            with exc_queue() as excq:
-                client.transport.write(payload)
-                reply = await client.readn(len(payload))
-                assert reply == payload
-                assert isinstance(excq[0]["exception"], TestException)
-                client.close()
-                await client.wait_closed()
-
-        async with echo_client(server, protocol_factory=ClientRaiseResumeWriting, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
-            with exc_queue() as excq:
-                client.transport.write(payload)
-                reply = await client.readn(len(payload))
-                assert reply == payload
-                assert isinstance(excq[0]["exception"], TestException)
-                client.close()
-                await client.wait_closed()
 
 
 async def test_write_wrong_type(conn_type):

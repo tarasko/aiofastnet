@@ -90,7 +90,6 @@ class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
         _logger.debug("EchoServer.connection_made")
         self._clients.add(weakref.ref(self))
         self.transport = transport
-        _set_socket_sndbuf(transport, 256*1024)
         ssl_protocol = self.transport.get_extra_info('ssl_protocol')
         if ssl_protocol is not None and hasattr(ssl_protocol, '_allow_renegotiation'):
             ssl_protocol._allow_renegotiation()
@@ -155,6 +154,8 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
     def connection_made(self, transport):
         _logger.debug("AsyncClient.connection_made")
         self._transport = transport
+        effective_sndbuf = _set_socket_sndbuf(transport, 256*1024)
+        _logger.debug("AsyncClient SNDBUF set: %s", effective_sndbuf)
         ssl_protocol = self._transport.get_extra_info('ssl_protocol')
         if ssl_protocol is not None and hasattr(ssl_protocol, '_allow_renegotiation'):
             ssl_protocol._allow_renegotiation()
