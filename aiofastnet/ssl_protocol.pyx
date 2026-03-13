@@ -157,8 +157,8 @@ cdef class SSLTransport(Transport):
         """
         self._ssl_protocol.writelines(list_of_data)
 
-    cdef write_mem(self, char* ptr, Py_ssize_t sz):
-        self._ssl_protocol.write_mem(ptr, sz)
+    cdef write_c(self, char* ptr, Py_ssize_t sz):
+        self._ssl_protocol.write_c(ptr, sz)
 
     def write_eof(self):
         """Close the write end after flushing buffered data.
@@ -367,13 +367,8 @@ cdef class SSLProtocol(Protocol):
             self._handshake_timeout_handle.cancel()
             self._handshake_timeout_handle = None
 
-    cpdef get_buffer(self, Py_ssize_t n):
-        cdef:
-            char* buf_ptr
-            Py_ssize_t buf_len
-
-        self._ssl_object.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
-        return PyMemoryView_FromMemory(buf_ptr, buf_len, PyBUF_WRITE)
+    cdef get_buffer_c(self, Py_ssize_t n, char** buf_ptr, Py_ssize_t* buf_len):
+        self._ssl_object.incoming_bio_get_write_buf(buf_ptr, buf_len)
 
     cpdef buffer_updated(self, Py_ssize_t nbytes):
         self._ssl_object.incoming_bio_produce(nbytes)
@@ -774,7 +769,7 @@ cdef class SSLProtocol(Protocol):
         except Exception as ex:
             self._fatal_error(ex, 'Fatal error on SSL protocol')
 
-    cdef inline write_mem(self, char* data_ptr, Py_ssize_t data_len):
+    cdef inline write_c(self, char* data_ptr, Py_ssize_t data_len):
         if not self._is_protocol_ready():
             return
 
@@ -983,7 +978,7 @@ cdef class SSLProtocol(Protocol):
             # _logger.info("Do not send now: outgoing_sz=%d, is_last=%d", sz, is_last)
             return
 
-        self._transport.write_mem(ptr, sz)
+        self._transport.write_c(ptr, sz)
         if self._is_debug:
             _logger.debug("Wrote %d bytes to TCP: is_last=%d", sz, is_last)
 
@@ -1008,16 +1003,15 @@ cdef class SSLProtocol(Protocol):
             self._fatal_error(ex, 'Fatal error on SSL protocol')
 
     cdef inline _do_read__buffered(self):
-        if self._app_protocol_aiofn:
-            app_buffer = (<Protocol>self._app_protocol).get_buffer(-1)
-        else:
-            app_buffer = self._app_protocol.get_buffer(-1)
-
         cdef:
             char* buf_ptr
             Py_ssize_t buf_len
 
-        aiofn_unpack_buffer(app_buffer, &buf_ptr, &buf_len)
+        if self._app_protocol_aiofn:
+            app_buffer = (<Protocol>self._app_protocol).get_buffer_c(-1, &buf_ptr, &buf_len)
+        else:
+            app_buffer = self._app_protocol.get_buffer(-1)
+            aiofn_unpack_buffer(app_buffer, &buf_ptr, &buf_len)
 
         if buf_len == 0:
             raise RuntimeError('get_buffer() returned an empty buffer')

@@ -40,7 +40,7 @@ cdef class Transport:
     cpdef writelines(self, list_of_data):
         raise NotImplementedError()
 
-    cdef write_mem(self, char* ptr, Py_ssize_t sz):
+    cdef write_c(self, char* ptr, Py_ssize_t sz):
         self.write(PyMemoryView_FromMemory(ptr, sz, PyBUF_READ))
 
 
@@ -53,6 +53,10 @@ cdef class Protocol:
 
     cpdef get_buffer(self, Py_ssize_t hint):
         raise NotImplementedError()
+
+    cdef get_buffer_c(self, Py_ssize_t hint, char** buf_ptr, Py_ssize_t* buf_len):
+        buffer = self.get_buffer(hint)
+        aiofn_unpack_buffer(buffer, buf_ptr, buf_len)
 
     cpdef buffer_updated(self, Py_ssize_t bytes_read):
         raise NotImplementedError()
@@ -249,11 +253,11 @@ cdef class SelectorSocketTransport(Transport):
 
             try:
                 if self._protocol_aiofn:
-                    buf = (<Protocol>self._protocol).get_buffer(-1)
+                    buf = (<Protocol>self._protocol).get_buffer_c(-1, &buf_ptr, &buf_len)
                 else:
                     buf = self._protocol.get_buffer(-1)
+                    aiofn_unpack_buffer(buf, &buf_ptr, &buf_len)
 
-                aiofn_unpack_buffer(buf, &buf_ptr, &buf_len)
                 if buf_len == 0:
                     raise RuntimeError('get_buffer() returned an empty buffer')
             except (SystemExit, KeyboardInterrupt):
@@ -370,7 +374,7 @@ cdef class SelectorSocketTransport(Transport):
         self._write_backlog.append(data)
         self._maybe_pause_protocol()
 
-    cdef write_mem(self, char* ptr, Py_ssize_t sz):
+    cdef write_c(self, char* ptr, Py_ssize_t sz):
         if sz <= 0:
             return
 
