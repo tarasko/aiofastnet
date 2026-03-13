@@ -12,9 +12,18 @@ from cpython.unicode cimport *
 
 from . import constants
 from .utils cimport *
-from .openssl cimport *
 from .transport cimport *
 from .ssl_object cimport SSLObject
+
+from .openssl cimport (
+    SSL_ERROR_NONE,
+    SSL_ERROR_SSL,
+    SSL_ERROR_WANT_WRITE,
+    SSL_ERROR_WANT_READ,
+    SSL_ERROR_ZERO_RETURN,
+    SSL_ERROR_SYSCALL,
+    SSL_RECEIVED_SHUTDOWN
+)
 
 
 cdef:
