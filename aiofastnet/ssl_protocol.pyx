@@ -1,8 +1,6 @@
 import asyncio
-import os
 import socket
 import ssl
-import tempfile
 from logging import getLogger
 
 from cpython.contextvars cimport *
@@ -13,39 +11,15 @@ from cpython.memoryview cimport *
 from cpython.unicode cimport *
 
 from . import constants
-from .openssl_compat import find_openssl_library_paths
 from .utils cimport *
 from .openssl cimport *
 from .transport cimport *
+from .ssl_object cimport SSLObject
 
-
-cdef init_openssl():
-    cdef:
-        bytes ssl_lib_name
-        bytes crypto_lib_name
-        const char* ssl_lib_ptr
-        const char* crypto_lib_ptr
-        const char* missing_lib
-
-    ssl_lib_name, crypto_lib_name = find_openssl_library_paths()
-
-    if init_openssl_compat(ssl_lib_name, crypto_lib_name) != 1:
-        missing_lib = openssl_compat_last_error()
-        if missing_lib != NULL:
-            raise ImportError(
-                f"aiofastnet: failed to initialize OpenSSL compatibility layer; "
-                f"missing symbol: {PyUnicode_FromString(missing_lib)}; "
-                f"ssl_lib={ssl_lib_name.decode()}, crypto_lib={crypto_lib_name.decode()}")
-        raise ImportError("aiofastnet: failed to initialize OpenSSL compatibility layer")
-
-
-init_openssl()
 
 cdef:
     Py_ssize_t SSL_READ_BUFFER_SIZE = 128 * 1024
     Py_ssize_t SSL_WRITE_BUFFER_SIZE = 128 * 1024
-    int SSL_OP_ALLOW_CLIENT_RENEGOTIATION = (1 << 8)
-    int SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION = (1 << 18)
 
     # Number of seconds to wait for SSL handshake to complete
     # The default timeout matches that of Nginx.
@@ -82,274 +56,6 @@ cdef enum AppProtocolState:
 
 
 cdef object _logger = getLogger('aiofastnet.ssl')
-
-
-ctypedef struct PySSLContextHack:
-    PyObject ob_base
-    SSL_CTX *ctx
-
-
-cdef SSL_CTX* _get_ssl_ctx_ptr(object py_ctx) except NULL:
-    # Minimal runtime sanity check (still not foolproof)
-    if not isinstance(py_ctx, ssl.SSLContext):
-        raise TypeError("expected ssl.SSLContext")
-
-    # A memory layout hack to extract SSL_CTX* ptr from python SSLContext object.
-    #
-    # I intentionally mirror ONLY the initial prefix of CPython's PySSLContext:
-    # PyObject_HEAD + SSL_CTX *ctx
-    #
-    # This is NOT ABI-stable and may break across Python versions/build options.
-    # I know it is ugly, but who cares, in some million years the sun will destroy
-    # all life on earth, so everything is meaningless anyway.
-    #
-    # The guys from python are reluctant to expose it directly:
-    # https://bugs.python.org/issue43902
-    return (<PySSLContextHack*> <PyObject*> py_ctx).ctx
-
-
-cdef int _print_error_cb(const char* str, size_t len, void* u) noexcept nogil:
-    with gil:
-        logger = <object><PyObject*>u
-        err_str = PyUnicode_FromStringAndSize(str, len)
-        logger.error(err_str)
-
-
-cdef _log_error_queue():
-    cdef void* u = <PyObject*>_logger
-    ERR_print_errors_cb(&_print_error_cb, u)
-
-
-cdef unsigned long _err_last_error():
-    cdef unsigned long err_code = ERR_peek_last_error()
-    ERR_clear_error()
-    return err_code
-
-
-cdef Py_ssize_t _bio_pending(BIO* bio):
-    cdef int pending = BIO_pending(bio)
-    if pending < 0:
-        raise RuntimeError("unable to get pending len from BIO")
-    return pending
-
-
-cdef class SSLConnection:
-    cdef:
-        object ssl_ctx_py
-        SSL_CTX* ssl_ctx
-        bytearray incoming_buf
-        bytearray outgoing_buf
-        BIO* incoming
-        BIO* outgoing
-        SSL* ssl_object
-        str server_hostname
-
-    def __init__(self, ssl_context, bint is_server, str server_hostname):
-        ERR_clear_error()
-
-        self.ssl_ctx_py = ssl_context
-        self.ssl_ctx = _get_ssl_ctx_ptr(ssl_context)
-
-        self.incoming_buf = PyByteArray_FromStringAndSize(
-            NULL, SSL_READ_BUFFER_SIZE)
-        self.outgoing_buf = PyByteArray_FromStringAndSize(
-            NULL, SSL_WRITE_BUFFER_SIZE)
-
-        self.incoming = BIO_new_static_mem(
-            PyByteArray_AS_STRING(self.incoming_buf),
-            <size_t>PyByteArray_GET_SIZE(self.incoming_buf)
-        )
-        self.outgoing = BIO_new_static_mem(
-            PyByteArray_AS_STRING(self.outgoing_buf),
-            <size_t>PyByteArray_GET_SIZE(self.outgoing_buf)
-        )
-
-        self.ssl_object = SSL_new(self.ssl_ctx)
-        self.server_hostname = server_hostname
-
-        if self.incoming == NULL or self.outgoing == NULL or self.ssl_object == NULL:
-            if self.incoming != NULL:
-                BIO_free(self.incoming)
-                self.incoming = NULL
-            if self.outgoing != NULL:
-                BIO_free(self.outgoing)
-                self.outgoing = NULL
-            if self.ssl_object != NULL:
-                SSL_free(self.ssl_object)
-                self.ssl_object = NULL
-            raise MemoryError("Unable to initialize OpenSSL objects")
-
-        if is_server:
-            SSL_set_accept_state(self.ssl_object)
-        else:
-            SSL_set_connect_state(self.ssl_object)
-
-        SSL_set_bio(self.ssl_object, self.incoming, self.outgoing)
-        BIO_set_nbio(self.incoming, 1)
-        BIO_set_nbio(self.outgoing, 1)
-
-        cdef:
-            X509_VERIFY_PARAM* ssl_verification_params
-            X509_VERIFY_PARAM* ssl_ctx_verification_params
-            unsigned int ssl_ctx_host_flags
-
-        ssl_verification_params = SSL_get0_param(self.ssl_object)
-        ssl_ctx_verification_params = SSL_CTX_get0_param(self.ssl_ctx)
-        ssl_ctx_host_flags = X509_VERIFY_PARAM_get_hostflags(ssl_ctx_verification_params)
-        X509_VERIFY_PARAM_set_hostflags(ssl_verification_params, ssl_ctx_host_flags)
-
-        SSL_set_mode(self.ssl_object,
-                     SSL_MODE_AUTO_RETRY | SSL_MODE_ENABLE_PARTIAL_WRITE)
-
-        if self.server_hostname is not None:
-            self._configure_hostname()
-
-    def __dealloc__(self):
-        # Free SSL and its BIO
-        SSL_free(self.ssl_object)
-
-    cdef inline tuple cipher(self):
-        cdef const SSL_CIPHER* c = SSL_get_current_cipher(self.ssl_object)
-
-        cdef const char* name = SSL_CIPHER_get_name(c)
-        name_obj = PyUnicode_FromString(name) if name != NULL else None
-
-        cdef const char* protocol = SSL_CIPHER_get_version(c)
-        protocol_obj = PyUnicode_FromString(protocol) if name != NULL else None
-
-        cdef int bits = SSL_CIPHER_get_bits(c, NULL)
-
-        return (name_obj, protocol_obj, bits)
-
-    cdef inline dict getpeercert(self):
-        if SSL_is_init_finished(self.ssl_object) != 1:
-            raise ssl.SSLError("SSL_is_init_finished failed")
-
-        cdef X509* peer_cert = SSL_get_peer_certificate(self.ssl_object)
-        if peer_cert == NULL:
-            return None
-
-        cdef int verification = self.ssl_ctx_py.verify_mode
-        try:
-            return self._decode_certificate(peer_cert) if verification & SSL_VERIFY_PEER else dict()
-        finally:
-            X509_free(peer_cert)
-
-    # TODO: I don't think people would need this.
-    # For now I return None but if somebody asks can be made compatible with
-    # python implementation
-    cdef inline str compression(self):
-        return None
-
-    cdef inline make_exc_from_ssl_error(self, str descr, int err_code):
-        assert err_code != SSL_ERROR_NONE, "check logic"
-
-        if err_code == SSL_ERROR_WANT_READ:
-            return ssl.SSLWantReadError(descr)
-        elif err_code == SSL_ERROR_WANT_WRITE:
-            return ssl.SSLWantWriteError(descr)
-        elif err_code == SSL_ERROR_ZERO_RETURN:
-            return ssl.SSLZeroReturnError(descr)
-        elif err_code == SSL_ERROR_SYSCALL:
-            return ssl.SSLSyscallError(descr)
-        elif err_code == SSL_ERROR_SSL:
-            return self._exc_from_err_last_error(descr)
-        else:
-            return ssl.SSLError(f"{descr}, unknown error_code={err_code}")
-
-    cdef inline _exc_from_err_last_error(self, str descr):
-        cdef unsigned long last_error = _err_last_error()
-        cdef int lib = ERR_GET_LIB(last_error)
-        cdef const char * lib_ptr
-        cdef const char * reason_ptr
-        cdef const char * verify_ptr
-
-        _log_error_queue()
-
-        lib_ptr = ERR_lib_error_string(last_error)
-        lib_name = PyUnicode_FromString(lib_ptr) if lib_ptr != NULL else f"UNKNOWN_{lib}"
-        lib_name = lib_name.upper()
-        reason_ptr = ERR_reason_error_string(last_error)
-        reason_name = PyUnicode_FromString(
-            reason_ptr) if reason_ptr != NULL else ""
-        reason_name = reason_name.upper().replace(" ", "_")
-
-        if reason_name == "CERTIFICATE_VERIFY_FAILED":
-            assert self.server_hostname is not None
-            verify_code = SSL_get_verify_result(self.ssl_object)
-            verify_ptr = X509_verify_cert_error_string(verify_code)
-            txt = PyUnicode_FromString(verify_ptr) if verify_ptr != NULL else ""
-            str_error = f"[{lib_name}: {reason_name}] {descr}: {txt}"
-            exc = ssl.SSLCertVerificationError()
-            exc.verify_code = verify_code
-            exc.verify_message = txt
-        else:
-            str_error = f"[{lib_name}: {reason_name}] {descr}"
-            exc = ssl.SSLError()
-        exc.strerror = str_error
-        exc.library = lib_name
-        exc.reason = reason_name
-        return exc
-
-    cdef inline _configure_hostname(self):
-        if not self.server_hostname or self.server_hostname.startswith("."):
-            raise ValueError("server_hostname cannot be an empty string or start with a leading dot.")
-
-        cdef bytes server_hostname_b = self.server_hostname.encode()
-        cdef char* server_hostname_ptr = PyBytes_AS_STRING(server_hostname_b)
-
-        cdef ASN1_OCTET_STRING* ip = a2i_IPADDRESS(PyBytes_AS_STRING(server_hostname_b))
-        if ip == NULL:
-            ERR_clear_error()
-
-        cdef X509_VERIFY_PARAM* ssl_verification_params
-        try:
-            # Only send SNI extension for non-IP hostnames
-            if ip == NULL:
-                if not SSL_set_tlsext_host_name(self.ssl_object, server_hostname_ptr):
-                    _log_error_queue()
-                    ERR_clear_error()
-                    raise ssl.SSLError("SSL_set_tlsext_host_name failed")
-
-            if self.ssl_ctx_py.check_hostname:
-                ssl_verification_params = SSL_get0_param(self.ssl_object)
-                if ip == NULL:
-                    if not X509_VERIFY_PARAM_set1_host(ssl_verification_params, server_hostname_ptr, len(server_hostname_b)):
-                        raise ssl.SSLError("X509_VERIFY_PARAM_set1_host failed")
-                else:
-                    if not X509_VERIFY_PARAM_set1_ip(ssl_verification_params, ASN1_STRING_get0_data(ip), ASN1_STRING_length(ip)):
-                        raise ssl.SSLError("X509_VERIFY_PARAM_set1_host failed")
-        finally:
-            if ip != NULL:
-                ASN1_OCTET_STRING_free(ip)
-
-    cdef inline _decode_certificate(self, X509* certificate):
-        cdef int der_len = i2d_X509(certificate, NULL)
-        cdef bytes der
-        cdef unsigned char* p
-        cdef str path = ""
-
-        if der_len <= 0:
-            raise ssl.SSLError("i2d_X509 failed")
-
-        der = PyBytes_FromStringAndSize(NULL, der_len)
-        if der is None:
-            raise MemoryError()
-
-        p = <unsigned char*>PyBytes_AS_STRING(der)
-        if i2d_X509(certificate, &p) != der_len:
-            raise ssl.SSLError("i2d_X509 produced invalid DER size")
-
-        pem = ssl.DER_cert_to_PEM_cert(der)
-        tmp = tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="ascii")
-        try:
-            tmp.write(pem)
-            tmp.close()
-            path = tmp.name
-            return ssl._ssl._test_decode_cert(path)
-        finally:
-            if path:
-                os.unlink(path)
 
 
 cdef inline _create_transport_context(server_side, server_hostname):
@@ -489,8 +195,8 @@ cdef class SSLProtocol(Protocol):
     cdef:
         bint _server_side
         str _server_hostname
-        object _sslcontext
-        SSLConnection _ssl_connection
+        object _ssl_context
+        SSLObject _ssl_object
 
         dict _extra
         list _write_backlog
@@ -548,8 +254,8 @@ cdef class SSLProtocol(Protocol):
 
         self._server_side = server_side
         self._server_hostname = None if server_side else server_hostname
-        self._sslcontext = sslcontext
-        self._ssl_connection = None
+        self._ssl_context = sslcontext
+        self._ssl_object = None
         # SSL-specific extra info. More info are set when the handshake
         # completes.
         self._extra = dict(sslcontext=sslcontext)
@@ -624,9 +330,7 @@ cdef class SSLProtocol(Protocol):
         aborted or closed).
         """
         self._write_backlog.clear()
-
-        # I don't know if we really need this
-        BIO_reset(self._ssl_connection.outgoing)
+        self._ssl_object.outgoing_bio_reset()
 
         self._conn_lost += 1
 
@@ -655,24 +359,15 @@ cdef class SSLProtocol(Protocol):
             self._handshake_timeout_handle = None
 
     cpdef get_buffer(self, Py_ssize_t n):
-        cdef char* buf_ptr
-        cdef size_t buf_len
-        cdef int rc
+        cdef:
+            char* buf_ptr
+            Py_ssize_t buf_len
 
-        rc = BIO_static_mem_get_write_buf(
-            self._ssl_connection.incoming, &buf_ptr, &buf_len)
-        if rc != 1:
-            raise RuntimeError("incoming BIO: unable to get writable buffer")
-        if buf_len == 0:
-            raise RuntimeError("incoming BIO: no writable capacity")
-
-        return PyMemoryView_FromMemory(buf_ptr, <Py_ssize_t>buf_len, PyBUF_WRITE)
+        self._ssl_object.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
+        return PyMemoryView_FromMemory(buf_ptr, buf_len, PyBUF_WRITE)
 
     cpdef buffer_updated(self, Py_ssize_t nbytes):
-        if BIO_static_mem_produce(
-                self._ssl_connection.incoming,
-                <size_t>nbytes) != 1:
-            raise RuntimeError("incoming BIO: unable to publish received bytes")
+        self._ssl_object.incoming_bio_produce(nbytes)
 
         if self._is_debug:
             _logger.debug("%r: buffer_updated(%d)", self, nbytes)
@@ -699,8 +394,8 @@ cdef class SSLProtocol(Protocol):
         if self._app_protocol_aiofn:
             total += (<Protocol> self._app_protocol).get_local_write_buffer_size()
 
-        if self._ssl_connection is not None:
-            total += _bio_pending(self._ssl_connection.outgoing)
+        if self._ssl_object is not None:
+            total += self._ssl_object.outgoing_bio_pending()
 
         return total
 
@@ -745,7 +440,7 @@ cdef class SSLProtocol(Protocol):
 
     cdef inline _get_extra_info(self, name, default=None):
         if name == "ssl_object":
-            return self._ssl_connection
+            return self._ssl_object
         elif name == "ssl_protocol":
             return self
         elif name in self._extra:
@@ -808,10 +503,12 @@ cdef class SSLProtocol(Protocol):
                                   self._check_handshake_timeout)
 
         try:
-            self._ssl_connection = SSLConnection(
-                self._sslcontext,
+            self._ssl_object = SSLObject(
+                self._ssl_context,
                 self._server_side,
-                self._server_hostname
+                self._server_hostname,
+                SSL_READ_BUFFER_SIZE,
+                SSL_WRITE_BUFFER_SIZE
             )
         except Exception as ex:
             self._on_handshake_complete(ex)
@@ -833,7 +530,7 @@ cdef class SSLProtocol(Protocol):
             int ssl_error
 
         while True:
-            rc = SSL_do_handshake(self._ssl_connection.ssl_object)
+            rc = self._ssl_object.do_handshake()
             if rc == 1:
                 if self._is_debug:
                     _logger.debug("%r: SSL_do_handshake() = %d", self, rc)
@@ -844,7 +541,7 @@ cdef class SSLProtocol(Protocol):
             # Since our outgoing bio has limited capacity we may get
             # SSL_ERROR_WANT_WRITE. Handshake does not need much space, but for
             # correctness-sake we need flush and re-try
-            ssl_error = SSL_get_error(self._ssl_connection.ssl_object, rc)
+            ssl_error = self._ssl_object.get_error(rc)
             if self._is_debug:
                 _logger.debug("%r: SSL_do_handshake() = %d, ssl_error=%d", self, rc, ssl_error)
 
@@ -856,7 +553,7 @@ cdef class SSLProtocol(Protocol):
                 self._maybe_send_outgoing(True)
                 return
 
-            self._on_handshake_complete(self._ssl_connection.make_exc_from_ssl_error("ssl handshake failed", ssl_error))
+            self._on_handshake_complete(self._ssl_object.make_exc_from_ssl_error("ssl handshake failed", ssl_error))
             return
 
     cdef inline _on_handshake_complete(self, handshake_exc):
@@ -886,9 +583,9 @@ cdef class SSLProtocol(Protocol):
         # Add extra info that becomes available after handshake.
         # TODO: add compression
         self._extra.update(
-            peercert=self._ssl_connection.getpeercert(),
-            cipher=self._ssl_connection.cipher(),
-            compression=self._ssl_connection.compression()
+            peercert=self._ssl_object.getpeercert(),
+            cipher=self._ssl_object.cipher(),
+            compression=self._ssl_object.compression()
         )
         if self._app_state == STATE_INIT:
             self._app_state = STATE_CON_MADE
@@ -942,12 +639,13 @@ cdef class SSLProtocol(Protocol):
             size_t bytes_read
             int rc = 1
         while rc == 1:
-            rc = SSL_read_ex(self._ssl_connection.ssl_object,
-                             PyByteArray_AS_STRING(buffer),
-                             PyByteArray_GET_SIZE(buffer),
-                             &bytes_read)
+            rc = self._ssl_object.read_ex(
+                PyByteArray_AS_STRING(buffer),
+                PyByteArray_GET_SIZE(buffer),
+                &bytes_read
+            )
 
-        cdef int ssl_error = SSL_get_error(self._ssl_connection.ssl_object, rc)
+        cdef int ssl_error = self._ssl_object.get_error(rc)
         if ssl_error in (SSL_ERROR_WANT_READ, SSL_ERROR_WANT_WRITE):
             return
 
@@ -955,7 +653,7 @@ cdef class SSLProtocol(Protocol):
             self._call_eof_received()
             return
 
-        raise self._ssl_connection.make_exc_from_ssl_error("SSL_read_ex failed", ssl_error)
+        raise self._ssl_object.make_exc_from_ssl_error("SSL_read_ex failed", ssl_error)
 
     cdef inline _do_flush(self):
         """Flush the write backlog, discarding new data received.
@@ -986,7 +684,7 @@ cdef class SSLProtocol(Protocol):
             self._do_read_into_void()
 
             while True:
-                rc = SSL_shutdown(self._ssl_connection.ssl_object)
+                rc = self._ssl_object.shutdown()
                 if rc == 1:
                     self._on_shutdown_complete(None)
                     return
@@ -999,7 +697,7 @@ cdef class SSLProtocol(Protocol):
                     self._maybe_send_outgoing(True)
                     return
 
-                err_code = SSL_get_error(self._ssl_connection.ssl_object, rc)
+                err_code = self._ssl_object.get_error(rc)
 
                 # Re-try shutdown because outgoing bio has no space left
                 if err_code == SSL_ERROR_WANT_WRITE:
@@ -1010,7 +708,7 @@ cdef class SSLProtocol(Protocol):
                     self._maybe_send_outgoing(True)
                     return
 
-                raise self._ssl_connection.make_exc_from_ssl_error("SSL_shutdown failed", err_code)
+                raise self._ssl_object.make_exc_from_ssl_error("SSL_shutdown failed", err_code)
         except Exception as ex:
             self._on_shutdown_complete(ex)
 
@@ -1213,7 +911,7 @@ cdef class SSLProtocol(Protocol):
             #
             # outgoing buffer in such case may receive 2 SSL records with one
             # SSL_write_ex call.
-            rc = SSL_write_ex(self._ssl_connection.ssl_object, data_ptr, data_len, &bytes_written)
+            rc = self._ssl_object.write_ex(data_ptr, data_len, &bytes_written)
 
             if rc:
                 if self._is_debug:
@@ -1232,7 +930,7 @@ cdef class SSLProtocol(Protocol):
                 data_len -= bytes_written
                 self._maybe_send_outgoing(False)
             else:
-                ssl_error = SSL_get_error(self._ssl_connection.ssl_object, rc)
+                ssl_error = self._ssl_object.get_error(rc)
 
                 if self._is_debug:
                     _logger.debug("%r: SSL_write_ex(..., %d, %d) = %d, ssl_error = %d",
@@ -1256,7 +954,7 @@ cdef class SSLProtocol(Protocol):
 
                 # Consider any other error as fatal, _write_impl caller will
                 # initiate disconnect.
-                raise self._ssl_connection.make_exc_from_ssl_error(
+                raise self._ssl_object.make_exc_from_ssl_error(
                     "SSL_write_ex failed", ssl_error)
 
     cdef inline _maybe_send_outgoing(self, bint is_last):
@@ -1266,7 +964,7 @@ cdef class SSLProtocol(Protocol):
 
         cdef:
             char* ptr
-            long sz = BIO_get_mem_data(self._ssl_connection.outgoing, &ptr)
+            long sz = self._ssl_object.outgoing_bio_get_data(&ptr)
 
         if sz <= 0:
             return
@@ -1280,8 +978,7 @@ cdef class SSLProtocol(Protocol):
         if self._is_debug:
             _logger.debug("Wrote %d bytes to TCP: is_last=%d", sz, is_last)
 
-        if BIO_static_mem_consume(self._ssl_connection.outgoing, <size_t>sz) != 1:
-            raise RuntimeError("BIO_static_mem_consume(outgoing) failed")
+        self._ssl_object.outgoing_bio_consume(sz)
 
     # Incoming flow
 
@@ -1322,9 +1019,7 @@ cdef class SSLProtocol(Protocol):
             int rc = 0
 
         while buf_len > 0:
-            rc = SSL_read_ex(
-                self._ssl_connection.ssl_object,
-                buf_ptr, buf_len, &last_bytes_read)
+            rc = self._ssl_object.read_ex(buf_ptr, buf_len, &last_bytes_read)
 
             if not rc:
                 break
@@ -1336,7 +1031,7 @@ cdef class SSLProtocol(Protocol):
                               self, buf_len, last_bytes_read, rc)
 
 
-        cdef int last_error = SSL_get_error(self._ssl_connection.ssl_object, rc)
+        cdef int last_error = self._ssl_object.get_error(rc)
         if self._is_debug:
             _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d, ssl_error=%d",
                           self, buf_len, last_bytes_read, rc, last_error)
@@ -1371,15 +1066,16 @@ cdef class SSLProtocol(Protocol):
             int rc
 
         while True:
-            bytes_estimated = (SSL_pending(self._ssl_connection.ssl_object) +
-                               _bio_pending(self._ssl_connection.incoming)) + 256
+            bytes_estimated = (self._ssl_object.pending() +
+                               self._ssl_object.incoming_bio_pending() +
+                               256)
             bytes_estimated = max(1024, bytes_estimated)
 
             bytes_obj = aiofn_allocate_bytes(bytes_estimated, &bytes_buffer_ptr)
-            rc = SSL_read_ex(self._ssl_connection.ssl_object,
-                             bytes_buffer_ptr,
-                             bytes_estimated,
-                             &bytes_read)
+            rc = self._ssl_object.read_ex(
+                bytes_buffer_ptr,
+                bytes_estimated,
+                &bytes_read)
 
             if not rc:
                 curr_chunk = aiofn_finalize_bytes(bytes_obj, 0)
@@ -1398,7 +1094,7 @@ cdef class SSLProtocol(Protocol):
             else:
                 data.append(curr_chunk)
 
-        cdef int last_error = SSL_get_error(self._ssl_connection.ssl_object, rc)
+        cdef int last_error = self._ssl_object.get_error(rc)
         if self._is_debug:
             _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d, ssl_error=%d",
                           self, bytes_estimated, bytes_read, rc, last_error)
@@ -1421,13 +1117,13 @@ cdef class SSLProtocol(Protocol):
         if last_error in (SSL_ERROR_WANT_READ, SSL_ERROR_WANT_WRITE):
             return
 
-        if last_error == SSL_ERROR_ZERO_RETURN and SSL_get_shutdown(self._ssl_connection.ssl_object) == SSL_RECEIVED_SHUTDOWN:
+        if last_error == SSL_ERROR_ZERO_RETURN and self._ssl_object.get_shutdown() == SSL_RECEIVED_SHUTDOWN:
             # close_notify
             self._call_eof_received()
             self._start_shutdown()
             return
 
-        raise self._ssl_connection.make_exc_from_ssl_error("SSL_read_ex failed", last_error)
+        raise self._ssl_object.make_exc_from_ssl_error("SSL_read_ex failed", last_error)
 
     cdef inline _call_eof_received(self):
         if self._app_state == STATE_CON_MADE:
@@ -1471,11 +1167,7 @@ cdef class SSLProtocol(Protocol):
 
     # Used for testing only
     def _allow_renegotiation(self):
-        SSL_set_options(
-            self._ssl_connection.ssl_object,
-            SSL_OP_ALLOW_CLIENT_RENEGOTIATION |
-            SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION
-        )
+        self._ssl_object.allow_renegotiation()
 
     # Used for testing only
     def _renegotiate(self):
@@ -1491,14 +1183,12 @@ cdef class SSLProtocol(Protocol):
         cdef:
             int rc
             int ssl_error
-            SSL * ssl_object = self._ssl_connection.ssl_object
 
         try:
-            rc = SSL_renegotiate(ssl_object)
+            rc = self._ssl_object.renegotiate()
             if rc != 1:
                 raise RuntimeError(f"ssl renegotiation request failed")
 
-            # self._set_state(DO_HANDSHAKE)
             self._do_handshake()
         except Exception as ex:
             self._fatal_error(ex, "Fatal error on SSL renegotiation")
