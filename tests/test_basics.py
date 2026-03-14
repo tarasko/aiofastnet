@@ -446,6 +446,7 @@ async def test_start_tls():
     test_msg = b"hello world!"
     test_msg_2 = b"hello world! #2"
     tls_upgrade_cmd = b"start_tls"
+    tls_upgrade_and_push_cmd = b"start_tls_and_push"
     close_cmd = b"close"
 
     class ServerTlsUpgrade(asyncio.Protocol):
@@ -462,6 +463,9 @@ async def test_start_tls():
             if data == tls_upgrade_cmd:
                 self._transport.write(data)
                 self._loop.create_task(self._start_tls())
+            elif data == tls_upgrade_and_push_cmd:
+                self._transport.write(data)
+                self._loop.create_task(self._start_tls_and_push())
             elif data == close_cmd:
                 self._transport.close()
             else:
@@ -477,6 +481,20 @@ async def test_start_tls():
                     server_side=True)
                 _logger.debug("Server(%d): start_tls completed", self._gen)
                 self._gen += 1
+            except:
+                _logger.exception("Server: unable to start_tls")
+
+        async def _start_tls_and_push(self):
+            try:
+                self._transport = await aiofastnet.start_tls(
+                    self._loop,
+                    self._transport,
+                    self,
+                    server_ssl_context,
+                    server_side=True)
+                _logger.debug("Server(%d): start_tls completed", self._gen)
+                self._gen += 1
+                self._transport.write(test_msg)
             except:
                 _logger.exception("Server: unable to start_tls")
 
@@ -503,12 +521,11 @@ async def test_start_tls():
             reply = await client.readn(len(test_msg_2))
             assert reply == test_msg_2
 
-            client.transport.write(tls_upgrade_cmd)
-            reply = await client.readn(len(tls_upgrade_cmd))
-            assert reply == tls_upgrade_cmd
+            client.transport.write(tls_upgrade_and_push_cmd)
+            reply = await client.readn(len(tls_upgrade_and_push_cmd))
+            assert reply == tls_upgrade_and_push_cmd
             await client.start_tls(client_ssl_context)
 
-            client.transport.write(test_msg)
             reply = await client.readn(len(test_msg))
             assert reply == test_msg
 
