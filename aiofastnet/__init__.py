@@ -1,6 +1,7 @@
 from .api import (
     create_connection,
-    create_server
+    create_server,
+    start_tls
 )
 
 from .transport import (

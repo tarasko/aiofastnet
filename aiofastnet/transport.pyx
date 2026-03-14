@@ -145,17 +145,16 @@ cdef class SelectorSocketTransport(Transport):
             self._loop.call_soon(_set_result_unless_cancelled, waiter, None)
 
     def __repr__(self):
-        info = [self.__class__.__name__]
+        info = [f'fd={self._sock_fd_obj}', 'TCPTransport']
         if self._sock is None:
             info.append('closed')
         elif self._closing:
             info.append('closing')
-        info.append(f'fd={self._sock_fd_obj}')
         # test if the transport was closed
         if self._loop is not None and not self._loop.is_closed():
             bufsize = self.get_write_buffer_size()
-            info.append(f', bufsize={bufsize}>')
-        return '<{}>'.format(' '.join(info))
+            info.append(f'wbuf_size={bufsize}')
+        return '[{}]'.format(' '.join(info))
 
     def __del__(self):
         if self._sock is not None:
@@ -249,6 +248,9 @@ cdef class SelectorSocketTransport(Transport):
 
         while True:
             if self._conn_lost:
+                return
+
+            if self._paused:
                 return
 
             try:

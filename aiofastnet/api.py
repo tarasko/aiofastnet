@@ -17,135 +17,84 @@ from logging import getLogger
 
 from . import constants
 from .ssl_protocol import SSLProtocol
-from .transport import Transport, SelectorSocketTransport, aiofn_is_buffered_protocol
+from .transport import (Transport as aiofn_Transport,
+                        SelectorSocketTransport, aiofn_is_buffered_protocol)
 from asyncio.trsock import TransportSocket
 
-from .utils import aiofn_validate_and_maybe_copy_buffer
+from .wrapped_transport import (
+    _WrappedTransport, _WrappedProtocol, _WrappedBufferedProtocol,
+    _should_fallback_to_asyncio
+)
 
 _HAS_IPv6 = hasattr(socket, 'AF_INET6')
 _logger = getLogger('fastnet')
-
-
-def _should_fallback_to_asyncio(loop: asyncio.AbstractEventLoop) -> bool:
-    if os.name != "nt":
-        return False
-
-    proactor_event_loop = getattr(asyncio, "ProactorEventLoop", None)
-    if proactor_event_loop is None:
-        return False
-
-    return isinstance(loop, proactor_event_loop)
 
 
 def _is_asyncio_loop(loop: asyncio.AbstractEventLoop) -> bool:
     return type(loop).__module__.startswith("asyncio.")
 
 
-class _WrappedTransport(Transport):
-    __slots__ = ('_transport',)
+async def start_tls(loop: asyncio.AbstractEventLoop,
+                    transport, protocol, sslcontext, *,
+                    server_side=False,
+                    server_hostname=None,
+                    ssl_handshake_timeout=None,
+                    ssl_shutdown_timeout=None) -> asyncio.Transport:
+    """Upgrade transport to TLS.
 
-    def __init__(self, transport: asyncio.Transport):
-        super().__init__()
-        self._transport = transport
+    Return new transport that *protocol* should start using
+    immediately.
+    """
+    if isinstance(transport, _WrappedTransport):
+        transport = transport._transport
+        _logger.debug("Unwrap _WrappedTransport")
 
-    def get_extra_info(self, name, default=None):
-        return self._transport.get_extra_info(name, default)
+    if ssl is None:
+        raise RuntimeError('Python ssl module is not available')
 
-    def is_closing(self):
-        return self._transport.is_closing()
+    if not isinstance(sslcontext, ssl.SSLContext):
+        raise TypeError(
+            f'sslcontext is expected to be an instance of ssl.SSLContext, '
+            f'got {sslcontext!r}')
 
-    def close(self):
-        return self._transport.close()
+    waiter = loop.create_future()
+    ssl_protocol = SSLProtocol(
+        loop, protocol, sslcontext, waiter,
+        server_side, server_hostname,
+        call_connection_made=False,
+        ssl_handshake_timeout=ssl_handshake_timeout,
+        ssl_shutdown_timeout=ssl_shutdown_timeout,
+        )
 
-    def set_protocol(self, protocol):
-        if aiofn_is_buffered_protocol(protocol):
-            wrapped_protocol = _WrappedBufferedProtocol(protocol)
-        else:
-            wrapped_protocol = _WrappedProtocol(protocol)
-        self._transport.set_protocol(wrapped_protocol)
+    # Pause early so that "ssl_protocol.data_received()" doesn't
+    # have a chance to get called before "ssl_protocol.connection_made()".
+    transport.pause_reading()
 
-    def get_protocol(self):
-        wrapped_protocol: _WrappedProtocolBase = self._transport.get_protocol()
-        assert isinstance(wrapped_protocol, _WrappedProtocolBase), \
-            "must be our protocol wrapper"
-        return wrapped_protocol._protocol
+    transport.set_protocol(ssl_protocol)
+    conmade_cb = loop.call_soon(ssl_protocol.connection_made, transport)
+    resume_cb = loop.call_soon(transport.resume_reading)
 
-    def is_reading(self):
-        return self._transport.is_reading()
+    try:
+        await waiter
+    except BaseException:
+        transport.close()
+        conmade_cb.cancel()
+        resume_cb.cancel()
+        raise
 
-    def pause_reading(self):
-        return self._transport.pause_reading()
-
-    def resume_reading(self):
-        return self._transport.resume_reading()
-
-    def set_write_buffer_limits(self, high=None, low=None):
-        return self._transport.set_write_buffer_limits(high, low)
-
-    def get_write_buffer_size(self):
-        return self._transport.get_write_buffer_size()
-
-    def get_write_buffer_limits(self):
-        return self._transport.get_write_buffer_limits()
-
-    def write(self, data):
-        return self._transport.write(aiofn_validate_and_maybe_copy_buffer(data))
-
-    def writelines(self, list_of_data):
-        lst = [aiofn_validate_and_maybe_copy_buffer(data)
-               for data in list_of_data if data]
-        self._transport.writelines(lst)
-
-    def write_eof(self):
-        return self._transport.write_eof()
-
-    def can_write_eof(self):
-        return self._transport.can_write_eof()
-
-    def abort(self):
-        return self._transport.abort()
-
-
-class _WrappedProtocolBase(asyncio.BaseProtocol):
-    __slots__ = ('_protocol', '_wrapped_transport')
-
-    def __init__(self, protocol):
-        self._protocol = protocol
-        self._wrapped_transport = None
-
-    def connection_made(self, transport):
-        self._wrapped_transport = _WrappedTransport(transport)
-        return self._protocol.connection_made(self._wrapped_transport)
-
-    def connection_lost(self, exc):
-        return self._protocol.connection_lost(exc)
-
-    def pause_writing(self):
-        return self._protocol.pause_writing()
-
-    def resume_writing(self):
-        return self._protocol.resume_writing()
-
-
-class _WrappedProtocol(_WrappedProtocolBase, asyncio.Protocol):
-    def data_received(self, data):
-        return self._protocol.data_received(data)
-
-
-class _WrappedBufferedProtocol(_WrappedProtocolBase, asyncio.BufferedProtocol):
-    def get_buffer(self, sizehint):
-        return self._protocol.get_buffer(sizehint)
-
-    def buffer_updated(self, nbytes):
-        return self._protocol.buffer_updated(nbytes)
+    return ssl_protocol.get_app_transport()
 
 
 async def create_connection(
         loop: asyncio.AbstractEventLoop,
-        protocol_factory, host=None, port=None,
-        *, ssl=None, family=0,
-        proto=0, flags=0, sock=None,
-        local_addr=None, server_hostname=None,
+        protocol_factory,
+        host=None, port=None,
+        *,
+        ssl=None,
+        family=0, proto=0, flags=0,
+        sock=None,
+        local_addr=None,
+        server_hostname=None,
         ssl_handshake_timeout=None,
         ssl_shutdown_timeout=None,
         happy_eyeballs_delay=None,
@@ -985,3 +934,5 @@ async def _create_server_getaddrinfo(loop, host, port, family, flags):
 def _stop_serving(loop, sock):
     loop.remove_reader(sock.fileno())
     sock.close()
+
+

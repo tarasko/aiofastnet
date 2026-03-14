@@ -1,6 +1,15 @@
 from .openssl cimport SSL_CTX, BIO, SSL, X509
 
 
+cpdef enum SSLError:
+    SSL_ERROR_NONE = 0
+    SSL_ERROR_SSL = 1
+    SSL_ERROR_WANT_READ = 2
+    SSL_ERROR_WANT_WRITE = 3
+    SSL_ERROR_SYSCALL = 5
+    SSL_ERROR_ZERO_RETURN = 6
+
+
 cdef class SSLObject:
     # Wraps raw openssl pointers and provide some methods that may be
     # interesting for the user.
@@ -54,3 +63,5 @@ cdef class SSLObject:
     cdef inline _configure_hostname(self)
     cdef inline _decode_certificate(self, X509* certificate)
 
+
+cdef ssl_error_name(int err)

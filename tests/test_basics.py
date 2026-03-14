@@ -5,9 +5,11 @@ from _contextvars import ContextVar
 
 import pytest
 
+import aiofastnet
+from aiofastnet import start_tls
 from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Transport
-from tests.utils import echo_client, echo_server, \
+from tests.utils import TestClient, TestServer, \
     multiloop_event_loop_policy, make_test_ssl_contexts, ConnectionType, \
     AsyncClient, TestException, exc_queue, _logger
 
@@ -37,11 +39,11 @@ def buffered_protocol(request):
 
 
 @pytest.mark.parametrize("msg_size", [1, 2, 3, 4, 5, 6, 7, 8, 29, 64, 256 * 1024, 6 * 1024 * 1024])
-async def test_echo(msg_size, conn_type, buffered_protocol):
+async def test_echo(loop_debug, msg_size, conn_type, buffered_protocol):
     payload = b"x" * msg_size
 
-    async with echo_server(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
-        async with echo_client(server, ssl_context=conn_type.client_ssl_context, is_buffered=buffered_protocol) as client:
+    async with TestServer(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
+        async with TestClient(server, ssl_context=conn_type.client_ssl_context, is_buffered=buffered_protocol) as client:
             client.write(payload)
             echoed = await client.readn(msg_size)
             assert echoed == payload
@@ -52,8 +54,8 @@ async def test_echo(msg_size, conn_type, buffered_protocol):
 async def test_echo_writelines(msg_size, num_lines, conn_type, buffered_protocol):
     payload = b"x" * msg_size
 
-    async with echo_server(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
-        async with echo_client(server, ssl_context=conn_type.client_ssl_context, is_buffered=buffered_protocol) as client:
+    async with TestServer(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
+        async with TestClient(server, ssl_context=conn_type.client_ssl_context, is_buffered=buffered_protocol) as client:
             client.write_in_lines(payload, num_lines)
             echoed = await client.readn(msg_size)
             assert echoed == payload
@@ -62,8 +64,8 @@ async def test_echo_writelines(msg_size, num_lines, conn_type, buffered_protocol
 async def test_write_paused(conn_type):
     payload = b"x" * (1024)
 
-    async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
-        async with echo_client(server, ssl_context=conn_type.client_ssl_context) as client:
+    async with TestServer(ssl_context=conn_type.server_ssl_context) as server:
+        async with TestClient(server, ssl_context=conn_type.client_ssl_context) as client:
             wbuf_size = client.transport.get_write_buffer_size()
             assert wbuf_size == 0
             total_bytes_written = 0
@@ -100,8 +102,8 @@ async def test_writelines_paused(conn_type):
 
     total_batch_size = len(msg1) + len(msg2) + len(msg3)
 
-    async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
-        async with echo_client(server, ssl_context=conn_type.client_ssl_context) as client:
+    async with TestServer(ssl_context=conn_type.server_ssl_context) as server:
+        async with TestClient(server, ssl_context=conn_type.client_ssl_context) as client:
             wbuf_size = client.transport.get_write_buffer_size()
             assert wbuf_size == 0
             total_bytes_written = 0
@@ -138,8 +140,8 @@ async def test_pause_reading(conn_type):
 
     payload = b"x" * (20*1024*1024)
 
-    async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
-        async with echo_client(server, ssl_context=conn_type.client_ssl_context) as client:
+    async with TestServer(ssl_context=conn_type.server_ssl_context) as server:
+        async with TestClient(server, ssl_context=conn_type.client_ssl_context) as client:
             client.transport.write(payload)
             client.transport.pause_reading()
             with pytest.raises(asyncio.TimeoutError):
@@ -169,8 +171,8 @@ async def test_ssl_renegotiate_midstream():
     payload = b"B" * (4 * 1024)
     suffix = b"C" * (4 * 1024)
 
-    async with echo_server(ssl_context=server_context) as server:
-        async with echo_client(server, ssl_context=client_context) as client:
+    async with TestServer(ssl_context=server_context) as server:
+        async with TestClient(server, ssl_context=client_context) as client:
 
             client.write(preface)
             assert await client.readn(len(preface)) == preface
@@ -195,8 +197,8 @@ async def test_exc_eof_received(conn_type):
         def eof_received(self):
             raise TestException("eof_received")
 
-    async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
-        async with echo_client(server, protocol_factory=ClientRaiseEofReceived, ssl_context=conn_type.client_ssl_context, is_buffered=True) as client:
+    async with TestServer(ssl_context=conn_type.server_ssl_context) as server:
+        async with TestClient(server, protocol_factory=ClientRaiseEofReceived, ssl_context=conn_type.client_ssl_context, is_buffered=True) as client:
             with exc_queue() as excq:
                 # Initiate disconnect from the server side
                 server_client = await server.get_any_server_client()
@@ -218,9 +220,9 @@ async def test_exc_connection_made(conn_type):
 
     payload = b"x" * (20*1024*1024)
 
-    async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
+    async with TestServer(ssl_context=conn_type.server_ssl_context) as server:
         with exc_queue() as excq:
-            async with echo_client(server, protocol_factory=ClientRaiseConnectionMade, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
+            async with TestClient(server, protocol_factory=ClientRaiseConnectionMade, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
                 assert isinstance(excq[0]["exception"], TestException)
                 client.transport.write(payload)
                 reply = await client.readn(len(payload))
@@ -238,8 +240,8 @@ async def test_exc_pause_writing(conn_type):
     payload = b"x" * 1024
     num_sent = 0
 
-    async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
-        async with echo_client(server, protocol_factory=ClientRaisePauseWriting, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
+    async with TestServer(ssl_context=conn_type.server_ssl_context) as server:
+        async with TestClient(server, protocol_factory=ClientRaisePauseWriting, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
             with exc_queue() as excq:
                 while not client.is_writing_paused:
                     client.transport.write(payload)
@@ -252,7 +254,7 @@ async def test_exc_pause_writing(conn_type):
                 await client.wait_closed()
 
 
-async def test_exc_resume_writing(loop_debug, conn_type):
+async def test_exc_resume_writing(conn_type):
     class ClientRaiseResumeWriting(AsyncClient):
         def resume_writing(self):
             super().resume_writing()
@@ -261,8 +263,8 @@ async def test_exc_resume_writing(loop_debug, conn_type):
     payload = b"x" * 1024
     num_sent = 0
 
-    async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
-        async with echo_client(server, protocol_factory=ClientRaiseResumeWriting, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
+    async with TestServer(ssl_context=conn_type.server_ssl_context) as server:
+        async with TestClient(server, protocol_factory=ClientRaiseResumeWriting, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
             with exc_queue() as excq:
                 while not client.is_writing_paused:
                     client.transport.write(payload)
@@ -300,22 +302,22 @@ async def test_exc_all(conn_type):
         def buffer_updated(self, bytes_read):
             raise TestException("buffer_updated")
 
-    async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
-        async with echo_client(server, protocol_factory=ClientRaiseDataReceived, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
+    async with TestServer(ssl_context=conn_type.server_ssl_context) as server:
+        async with TestClient(server, protocol_factory=ClientRaiseDataReceived, ssl_context=conn_type.client_ssl_context, is_buffered=False) as client:
             with exc_queue() as excq:
                 client.transport.write(payload)
                 with pytest.raises(TestException, match="data_received"):
                     await client.wait_closed()
                 assert isinstance(excq[0]["exception"], TestException)
 
-        async with echo_client(server, protocol_factory=ClientRaiseGetBuffer, ssl_context=conn_type.client_ssl_context, is_buffered=True) as client:
+        async with TestClient(server, protocol_factory=ClientRaiseGetBuffer, ssl_context=conn_type.client_ssl_context, is_buffered=True) as client:
             with exc_queue() as excq:
                 client.transport.write(payload)
                 with pytest.raises(TestException, match="get_buffer"):
                     await client.wait_closed()
                 assert isinstance(excq[0]["exception"], TestException)
 
-        async with echo_client(server, protocol_factory=ClientRaiseBufferUpdated, ssl_context=conn_type.client_ssl_context, is_buffered=True) as client:
+        async with TestClient(server, protocol_factory=ClientRaiseBufferUpdated, ssl_context=conn_type.client_ssl_context, is_buffered=True) as client:
             with exc_queue() as excq:
                 client.transport.write(payload)
                 with pytest.raises(TestException, match="buffer_updated"):
@@ -324,8 +326,8 @@ async def test_exc_all(conn_type):
 
 
 async def test_write_wrong_type(conn_type):
-    async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
-        async with echo_client(server, ssl_context=conn_type.client_ssl_context) as client:
+    async with TestServer(ssl_context=conn_type.server_ssl_context) as server:
+        async with TestClient(server, ssl_context=conn_type.client_ssl_context) as client:
             with pytest.raises(TypeError):
                 client.transport.write(42)
 
@@ -411,8 +413,8 @@ async def test_contextvar(conn_type, buffered_protocol):
             return super().connection_lost(exc)
 
 
-    async with echo_server(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
-        async with echo_client(server, protocol_factory=Client, ssl_context=conn_type.client_ssl_context, is_buffered=buffered_protocol) as client:
+    async with TestServer(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
+        async with TestClient(server, protocol_factory=Client, ssl_context=conn_type.client_ssl_context, is_buffered=buffered_protocol) as client:
             assert var.get() == "begin"
             client.write(payload)
             reply = await client.readn(len(payload))
@@ -430,11 +432,115 @@ async def test_contextvar(conn_type, buffered_protocol):
 
 
 async def test_transport_base(conn_type):
-    async with echo_server(ssl_context=conn_type.server_ssl_context) as server:
-        async with echo_client(server, ssl_context=conn_type.client_ssl_context) as client:
+    async with TestServer(ssl_context=conn_type.server_ssl_context) as server:
+        async with TestClient(server, ssl_context=conn_type.client_ssl_context) as client:
             assert isinstance(client.transport, Transport)
             client.close()
             await client.wait_closed()
+
+
+async def test_start_tls():
+    server_ssl_context, client_ssl_context = make_test_ssl_contexts(
+        "tests/test.crt", "tests/test.key")
+
+    test_msg = b"hello world!"
+    test_msg_2 = b"hello world! #2"
+    tls_upgrade_cmd = b"start_tls"
+    tls_upgrade_and_push_cmd = b"start_tls_and_push"
+    close_cmd = b"close"
+
+    class ServerTlsUpgrade(asyncio.Protocol):
+        def __init__(self, gen=0):
+            self._gen = gen
+
+        def connection_made(self, transport):
+            self._transport = transport
+            self._loop = asyncio.get_running_loop()
+            _logger.debug("Server(%d): connection_made", self._gen)
+
+        def data_received(self, data):
+            _logger.debug("Server(%d): data_received, %s", self._gen, data)
+            if data == tls_upgrade_cmd:
+                self._transport.write(data)
+                self._loop.create_task(self._start_tls())
+            elif data == tls_upgrade_and_push_cmd:
+                self._transport.write(data)
+                self._loop.create_task(self._start_tls_and_push())
+            elif data == close_cmd:
+                self._transport.close()
+            else:
+                self._transport.write(data)
+
+        async def _start_tls(self):
+            try:
+                self._transport = await aiofastnet.start_tls(
+                    self._loop,
+                    self._transport,
+                    self,
+                    server_ssl_context,
+                    server_side=True)
+                _logger.debug("Server(%d): start_tls completed", self._gen)
+                self._gen += 1
+            except:
+                _logger.exception("Server: unable to start_tls")
+
+        async def _start_tls_and_push(self):
+            try:
+                self._transport = await aiofastnet.start_tls(
+                    self._loop,
+                    self._transport,
+                    self,
+                    server_ssl_context,
+                    server_side=True)
+                _logger.debug("Server(%d): start_tls completed", self._gen)
+                self._gen += 1
+                self._transport.write(test_msg)
+            except:
+                _logger.exception("Server: unable to start_tls")
+
+        def connection_lost(self, exc):
+            _logger.debug("Server(%d): connection_lost", self._gen)
+
+    async with TestServer(ServerTlsUpgrade) as server:
+        async with TestClient(server, is_buffered=False) as client:
+            # Upgrade TLS 3 times, so at the end we have TLS over TLS over TLS
+            # For each layer send test message and verify echo response
+            # At the end ask server to disconnect us gracefully
+            # Verify that client has had eof_received event
+
+            client.transport.write(test_msg)
+            reply = await client.readn(len(test_msg))
+            assert reply == test_msg
+
+            client.transport.write(tls_upgrade_cmd)
+            reply = await client.readn(len(tls_upgrade_cmd))
+            assert reply == tls_upgrade_cmd
+            await client.start_tls(client_ssl_context)
+
+            client.transport.write(test_msg_2)
+            reply = await client.readn(len(test_msg_2))
+            assert reply == test_msg_2
+
+            client.transport.write(tls_upgrade_and_push_cmd)
+            reply = await client.readn(len(tls_upgrade_and_push_cmd))
+            assert reply == tls_upgrade_and_push_cmd
+            await client.start_tls(client_ssl_context)
+
+            reply = await client.readn(len(test_msg))
+            assert reply == test_msg
+
+            client.transport.write(tls_upgrade_cmd)
+            reply = await client.readn(len(tls_upgrade_cmd))
+            assert reply == tls_upgrade_cmd
+            await client.start_tls(client_ssl_context)
+
+            client.transport.write(test_msg)
+            reply = await client.readn(len(test_msg))
+            assert reply == test_msg
+
+            client.transport.write(close_cmd)
+            await client.wait_closed()
+            assert client.is_eof_received
 
 
 # Exception from send due to file error should cause fatal error
