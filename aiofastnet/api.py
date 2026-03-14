@@ -934,5 +934,3 @@ async def _create_server_getaddrinfo(loop, host, port, family, flags):
 def _stop_serving(loop, sock):
     loop.remove_reader(sock.fileno())
     sock.close()
-
-

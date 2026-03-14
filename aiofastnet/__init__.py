@@ -4,6 +4,10 @@ from .api import (
     start_tls
 )
 
+from .api_sendfile import (
+    sendfile
+)
+
 from .transport import (
     Transport,
     Protocol,

@@ -1,12 +1,14 @@
 import asyncio
+import tempfile
 import os
+import socket
 import ssl
 from _contextvars import ContextVar
 
 import pytest
 
-import aiofastnet
-from aiofastnet import start_tls
+from aiofastnet.api import start_tls
+from aiofastnet.api_sendfile import sendfile
 from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Transport
 from tests.utils import TestClient, TestServer, \
@@ -14,6 +16,96 @@ from tests.utils import TestClient, TestServer, \
     AsyncClient, TestException, exc_queue, _logger
 
 event_loop_policy = multiloop_event_loop_policy()
+
+
+class _SendfileTestProtocol(asyncio.Protocol):
+    def __init__(self):
+        self.pause_calls = 0
+        self.resume_calls = 0
+        self.lost = None
+
+    def pause_writing(self):
+        self.pause_calls += 1
+
+    def resume_writing(self):
+        self.resume_calls += 1
+
+    def connection_lost(self, exc):
+        self.lost = exc
+
+
+class _SendfileTestSocket:
+    type = socket.SOCK_STREAM
+
+
+class _SendfileTestTransport(Transport):
+    def __init__(self, loop, protocol, *, closing=False):
+        self._loop = loop
+        self._protocol = protocol
+        self._closing = closing
+        self._reading = True
+        self._writes = bytearray()
+        self._sock = _SendfileTestSocket()
+
+    def get_protocol(self):
+        return self._protocol
+
+    def set_protocol(self, protocol):
+        self._protocol = protocol
+
+    def is_closing(self):
+        return self._closing
+
+    def is_reading(self):
+        return self._reading
+
+    def pause_reading(self):
+        self._reading = False
+
+    def resume_reading(self):
+        self._reading = True
+
+    def get_write_buffer_limits(self):
+        return (16384, 65536)
+
+    def get_write_buffer_size(self):
+        return 0
+
+    def get_extra_info(self, name, default=None):
+        if name == "socket":
+            return self._sock
+        return default
+
+    def write(self, data):
+        self._writes += bytes(data)
+
+
+def _make_temp_binary_file(data: bytes):
+    tmp = tempfile.NamedTemporaryFile(mode="w+b", delete=False)
+    try:
+        tmp.write(data)
+        tmp.flush()
+        tmp.seek(0)
+        return tmp
+    except:
+        tmp.close()
+        os.unlink(tmp.name)
+        raise
+
+
+def _patch_run_in_executor(loop):
+    original = loop.run_in_executor
+
+    def immediate_run_in_executor(executor, func, *args):
+        fut = loop.create_future()
+        try:
+            fut.set_result(func(*args))
+        except Exception as exc:
+            fut.set_exception(exc)
+        return fut
+
+    loop.run_in_executor = immediate_run_in_executor
+    return original
 
 
 @pytest.fixture
@@ -246,6 +338,56 @@ async def test_ssl_getpeercert_binary_form_without_verify():
             client_ssl_object = client.transport.get_extra_info("ssl_object")
             assert client_ssl_object.getpeercert(binary_form=False) == {}
             assert client_ssl_object.getpeercert(binary_form=True) == expected_der
+
+
+async def test_sendfile_basic():
+    payload = b"0123456789abcdef"
+    loop = asyncio.get_running_loop()
+    original_run_in_executor = _patch_run_in_executor(loop)
+    protocol = _SendfileTestProtocol()
+    transport = _SendfileTestTransport(loop, protocol)
+    tmp = _make_temp_binary_file(payload)
+    try:
+        sent = await sendfile(loop, transport, tmp, offset=2, count=5)
+        assert sent == 5
+        assert transport._writes == b"23456"
+        assert tmp.tell() == 7
+        assert transport.get_protocol() is protocol
+        assert transport.is_reading()
+    finally:
+        loop.run_in_executor = original_run_in_executor
+        name = tmp.name
+        tmp.close()
+        os.unlink(name)
+
+
+async def test_sendfile_native_disabled():
+    payload = b"abcdef"
+    loop = asyncio.get_running_loop()
+    protocol = _SendfileTestProtocol()
+    transport = _SendfileTestTransport(loop, protocol)
+    tmp = _make_temp_binary_file(payload)
+    try:
+        with pytest.raises(asyncio.SendfileNotAvailableError):
+            await sendfile(loop, transport, tmp, fallback=False)
+    finally:
+        name = tmp.name
+        tmp.close()
+        os.unlink(name)
+
+
+async def test_sendfile_transport_closing():
+    loop = asyncio.get_running_loop()
+    protocol = _SendfileTestProtocol()
+    transport = _SendfileTestTransport(loop, protocol, closing=True)
+    tmp = _make_temp_binary_file(b"abcdef")
+    try:
+        with pytest.raises(RuntimeError, match="Transport is closing"):
+            await sendfile(loop, transport, tmp)
+    finally:
+        name = tmp.name
+        tmp.close()
+        os.unlink(name)
 
 
 async def test_exc_eof_received(conn_type):
@@ -532,7 +674,7 @@ async def test_start_tls():
 
         async def _start_tls(self):
             try:
-                self._transport = await aiofastnet.start_tls(
+                self._transport = await start_tls(
                     self._loop,
                     self._transport,
                     self,
@@ -545,7 +687,7 @@ async def test_start_tls():
 
         async def _start_tls_and_push(self):
             try:
-                self._transport = await aiofastnet.start_tls(
+                self._transport = await start_tls(
                     self._loop,
                     self._transport,
                     self,
