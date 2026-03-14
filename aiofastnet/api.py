@@ -17,7 +17,8 @@ from logging import getLogger
 
 from . import constants
 from .ssl_protocol import SSLProtocol
-from .transport import SelectorSocketTransport, aiofn_is_buffered_protocol
+from .transport import (Transport as aiofn_Transport,
+                        SelectorSocketTransport, aiofn_is_buffered_protocol)
 from asyncio.trsock import TransportSocket
 
 from .wrapped_transport import _WrappedProtocol, _WrappedBufferedProtocol, \
@@ -36,12 +37,19 @@ async def start_tls(loop: asyncio.AbstractEventLoop,
                     server_side=False,
                     server_hostname=None,
                     ssl_handshake_timeout=None,
-                    ssl_shutdown_timeout=None):
+                    ssl_shutdown_timeout=None) -> asyncio.Transport:
     """Upgrade transport to TLS.
 
     Return a new transport that *protocol* should start using
     immediately.
     """
+    if not isinstance(transport, aiofn_Transport):
+        return await loop.start_tls(transport, protocol, sslcontext,
+                                    server_side=server_side,
+                                    server_hostname=server_hostname,
+                                    ssl_handshake_timeout=ssl_handshake_timeout,
+                                    ssl_shutdown_timeout=ssl_shutdown_timeout)
+
     if ssl is None:
         raise RuntimeError('Python ssl module is not available')
 
@@ -49,10 +57,6 @@ async def start_tls(loop: asyncio.AbstractEventLoop,
         raise TypeError(
             f'sslcontext is expected to be an instance of ssl.SSLContext, '
             f'got {sslcontext!r}')
-
-    if not getattr(transport, '_start_tls_compatible', False):
-        raise TypeError(
-            f'transport {transport!r} is not supported by start_tls()')
 
     waiter = loop.create_future()
     ssl_protocol = SSLProtocol(

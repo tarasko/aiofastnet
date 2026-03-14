@@ -24,15 +24,8 @@ cdef extern from "openssl_compat.h" nogil:
         pass
 
     enum:
-        SSL_ERROR_NONE
-        SSL_ERROR_SSL
-        SSL_ERROR_WANT_WRITE
-        SSL_ERROR_WANT_READ
-        SSL_ERROR_ZERO_RETURN
-        SSL_ERROR_SYSCALL
-
-    enum:
         SSL_VERIFY_PEER
+        SSL_SENT_SHUTDOWN
         SSL_RECEIVED_SHUTDOWN
         SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER
         SSL_MODE_ENABLE_PARTIAL_WRITE

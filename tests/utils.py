@@ -14,7 +14,8 @@ from typing import Tuple, Optional, Union, Any, List
 
 import async_timeout
 import pytest
-from aiofastnet import create_connection, create_server, Transport as aiofn_Transport
+from aiofastnet import create_connection, create_server, \
+    Transport as aiofn_Transport, start_tls
 
 _logger = getLogger("tests.utils")
 
@@ -125,9 +126,10 @@ class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
 
 class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
     def __init__(self, is_buffered: bool):
+        self.transport = None
+        self._ssl_layer = 0
         self._is_buffered = is_buffered
         self._closed = asyncio.get_running_loop().create_future()
-        self._transport = None
         self._read_buffer = bytearray(b"X") * (256*1024)
         self._data = bytearray()
         self._readn_waiter: Optional[Tuple[int, asyncio.Future]] = None
@@ -135,10 +137,6 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         self._write_resumed_fut = None
         self._new_data_ev = asyncio.Event()
         self._is_eof_received = False
-
-    @property
-    def transport(self):
-        return self._transport
 
     @property
     def is_writing_paused(self):
@@ -153,10 +151,10 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
 
     def connection_made(self, transport):
         _logger.debug("AsyncClient.connection_made")
-        self._transport = transport
+        self.transport = transport
         effective_sndbuf = _set_socket_sndbuf(transport, 256*1024)
         _logger.debug("AsyncClient SNDBUF set: %s", effective_sndbuf)
-        ssl_protocol = self._transport.get_extra_info('ssl_protocol')
+        ssl_protocol = self.transport.get_extra_info('ssl_protocol')
         if ssl_protocol is not None and hasattr(ssl_protocol, '_allow_renegotiation'):
             ssl_protocol._allow_renegotiation()
 
@@ -195,8 +193,10 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
 
     def eof_received(self):
         self._is_eof_received = True
+        _logger.debug("AsyncClient.eof_received")
 
     def connection_lost(self, exc):
+        _logger.debug("AsyncClient.connection_lost")
         if not self._closed.done():
             if exc is not None:
                 self._closed.set_exception(exc)
@@ -211,7 +211,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
 
     def write(self, data: bytes):
         _logger.debug("AsyncClient.write(len=%d)", len(data))
-        self._transport.write(data)
+        self.transport.write(data)
 
     def write_in_lines(self, data: bytes, num_lines: int):
         parts = []
@@ -222,7 +222,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         parts.append(data[already_added:])
         lens = [f"len={len(p)}" for p in parts]
         _logger.debug("AsyncClient.writelines(%s)", lens)
-        self._transport.writelines(parts)
+        self.transport.writelines(parts)
 
     async def readn(self, n: int, timeout=1.0) -> bytes:
         assert self._readn_waiter is None
@@ -245,10 +245,10 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
                 return await asyncio.shield(self._readn_waiter[1])
 
     def close(self):
-        self._transport.close()
+        self.transport.close()
 
     def abort(self):
-        self._transport.abort()
+        self.transport.abort()
 
     async def wait_closed(self, timeout=1.0):
         async with async_timeout.timeout(timeout):
@@ -264,6 +264,17 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
     async def wait_new_data(self, timeout=1.0):
         async with async_timeout.timeout(timeout):
             return await asyncio.shield(self._new_data_ev.wait())
+
+    async def start_tls(self, ssl_context):
+        self.transport = await start_tls(
+            asyncio.get_running_loop(),
+            self.transport,
+            self,
+            ssl_context,
+            server_side=False, server_hostname="127.0.0.1"
+        )
+        _logger.debug("Client start_tls #%d completed", self._ssl_layer)
+        self._ssl_layer += 1
 
     def _wakeup_waiters(self):
         if self._readn_waiter is None:
@@ -313,13 +324,15 @@ class ConnectionType:
 
 
 @asynccontextmanager
-async def echo_server(host="127.0.0.1", port=0, ssl_context=None, is_buffered=False):
+async def TestServer(protocol_factory=None, host="127.0.0.1", port=0, ssl_context=None, is_buffered=False):
     loop = asyncio.get_running_loop()
     clients = set()
     client_waiters = []
+    if protocol_factory is None:
+        protocol_factory = lambda: EchoServerProtocol(clients, client_waiters, is_buffered)
     server = await create_server(
         loop,
-        lambda: EchoServerProtocol(clients, client_waiters, is_buffered),
+        protocol_factory,
         host=host,
         port=port,
         ssl=ssl_context,
@@ -337,7 +350,7 @@ async def echo_server(host="127.0.0.1", port=0, ssl_context=None, is_buffered=Fa
 
 
 @asynccontextmanager
-async def echo_client(server_or_host, port=None, ssl_context=None, server_hostname=None, is_buffered=False, protocol_factory=AsyncClient):
+async def TestClient(server_or_host, port=None, ssl_context=None, server_hostname=None, is_buffered=False, protocol_factory=AsyncClient):
     if isinstance(server_or_host, EchoServerHandle):
         host = server_or_host.host
         port = server_or_host.port

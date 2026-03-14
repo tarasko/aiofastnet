@@ -362,3 +362,7 @@ cdef class SSLObject:
 
     cdef int renegotiate(self) noexcept:
         return SSL_renegotiate(self.ssl)
+
+
+cdef ssl_error_name(int err):
+    return SSLError(err).name
