@@ -7,8 +7,8 @@ from _contextvars import ContextVar
 
 import pytest
 
-from aiofastnet.api import start_tls
-from aiofastnet.api_sendfile import sendfile
+from aiofastnet import start_tls
+from aiofastnet import sendfile
 from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Transport
 from tests.utils import TestClient, TestServer, \
