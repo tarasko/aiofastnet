@@ -217,6 +217,37 @@ async def test_ssl_selected_alpn_protocol_none():
             assert server_ssl_object.selected_alpn_protocol() is None
 
 
+async def test_ssl_getpeercert_binary_form():
+    server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key")
+    expected_der = ssl.PEM_cert_to_DER_cert(open("tests/test.crt", "r", encoding="ascii").read())
+
+    async with TestServer(ssl_context=server_context) as server:
+        async with TestClient(server, ssl_context=client_context) as client:
+            client_ssl_object = client.transport.get_extra_info("ssl_object")
+            server_client = await server.get_any_server_client()
+            server_ssl_object = server_client.transport.get_extra_info("ssl_object")
+
+            assert client_ssl_object.getpeercert(binary_form=True) == expected_der
+            assert server_ssl_object.getpeercert(binary_form=True) is None
+
+
+async def test_ssl_getpeercert_binary_form_without_verify():
+    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_context.load_cert_chain(certfile="tests/test.crt", keyfile="tests/test.key")
+
+    client_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    client_context.check_hostname = False
+    client_context.verify_mode = ssl.CERT_NONE
+
+    expected_der = ssl.PEM_cert_to_DER_cert(open("tests/test.crt", "r", encoding="ascii").read())
+
+    async with TestServer(ssl_context=server_context) as server:
+        async with TestClient(server, ssl_context=client_context) as client:
+            client_ssl_object = client.transport.get_extra_info("ssl_object")
+            assert client_ssl_object.getpeercert(binary_form=False) == {}
+            assert client_ssl_object.getpeercert(binary_form=True) == expected_der
+
+
 async def test_exc_eof_received(conn_type):
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
         pytest.skip("aiofastnet doesn't work with ProactorEventLoop")

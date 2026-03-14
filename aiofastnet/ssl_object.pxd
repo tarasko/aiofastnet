@@ -31,7 +31,7 @@ cdef class SSLObject:
 
     # Exposed to the end user
     cpdef tuple cipher(self)
-    cpdef dict getpeercert(self, binary_form=*)
+    cpdef object getpeercert(self, binary_form=*)
     cpdef str compression(self)
     cpdef object selected_alpn_protocol(self)
 
@@ -60,6 +60,7 @@ cdef class SSLObject:
     cdef inline make_exc_from_ssl_error(self, str descr, int err_code)
 
     # Implementation details
+    cdef inline bytes _certificate_to_der(self, X509* certificate)
     cdef inline _exc_from_err_last_error(self, str descr)
     cdef inline _configure_hostname(self)
     cdef inline _decode_certificate(self, X509* certificate)

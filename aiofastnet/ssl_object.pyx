@@ -169,7 +169,7 @@ cdef class SSLObject:
 
         return (name_obj, protocol_obj, bits)
 
-    cpdef dict getpeercert(self, binary_form=False):
+    cpdef object getpeercert(self, binary_form=False):
         if SSL_is_init_finished(self.ssl) != 1:
             raise ssl.SSLError("SSL_is_init_finished failed")
 
@@ -179,6 +179,8 @@ cdef class SSLObject:
 
         cdef int verification = self.ssl_ctx_py.verify_mode
         try:
+            if binary_form:
+                return self._certificate_to_der(peer_cert)
             return self._decode_certificate(peer_cert) if verification & SSL_VERIFY_PEER else dict()
         finally:
             X509_free(peer_cert)
@@ -281,11 +283,10 @@ cdef class SSLObject:
             if ip != NULL:
                 ASN1_OCTET_STRING_free(ip)
 
-    cdef inline _decode_certificate(self, X509* certificate):
+    cdef inline bytes _certificate_to_der(self, X509* certificate):
         cdef int der_len = i2d_X509(certificate, NULL)
         cdef bytes der
         cdef unsigned char* p
-        cdef str path = ""
 
         if der_len <= 0:
             raise ssl.SSLError("i2d_X509 failed")
@@ -297,6 +298,12 @@ cdef class SSLObject:
         p = <unsigned char*>PyBytes_AS_STRING(der)
         if i2d_X509(certificate, &p) != der_len:
             raise ssl.SSLError("i2d_X509 produced invalid DER size")
+
+        return der
+
+    cdef inline _decode_certificate(self, X509* certificate):
+        cdef bytes der = self._certificate_to_der(certificate)
+        cdef str path = ""
 
         pem = ssl.DER_cert_to_PEM_cert(der)
         tmp = tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="ascii")
