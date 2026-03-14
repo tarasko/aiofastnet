@@ -33,6 +33,7 @@ cdef class SSLObject:
     cpdef tuple cipher(self)
     cpdef dict getpeercert(self, binary_form=*)
     cpdef str compression(self)
+    cpdef object selected_alpn_protocol(self)
 
     # Used by SSLProtocol
     # These methods wrap SSL* operations

@@ -59,6 +59,7 @@ cdef extern from "openssl_compat.h" nogil:
     int SSL_shutdown(SSL *ssl)
     int SSL_get_shutdown(const SSL *ssl)
     long SSL_get_verify_result(const SSL *ssl)
+    void SSL_get0_alpn_selected(const SSL *ssl, const unsigned char **data, unsigned int *len)
 
     const SSL_CIPHER *SSL_get_current_cipher(const SSL *ssl)
     const char *SSL_CIPHER_get_name(const SSL_CIPHER *cipher)

@@ -189,6 +189,34 @@ async def test_ssl_renegotiate_midstream():
             assert await client.readn(len(suffix)) == suffix
 
 
+async def test_ssl_selected_alpn_protocol():
+    server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key")
+    server_context.set_alpn_protocols(["h2", "http/1.1"])
+    client_context.set_alpn_protocols(["http/1.1", "h2"])
+
+    async with TestServer(ssl_context=server_context) as server:
+        async with TestClient(server, ssl_context=client_context) as client:
+            client_ssl_object = client.transport.get_extra_info("ssl_object")
+            server_client = await server.get_any_server_client()
+            server_ssl_object = server_client.transport.get_extra_info("ssl_object")
+
+            assert client_ssl_object.selected_alpn_protocol() == "h2"
+            assert server_ssl_object.selected_alpn_protocol() == "h2"
+
+
+async def test_ssl_selected_alpn_protocol_none():
+    server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key")
+
+    async with TestServer(ssl_context=server_context) as server:
+        async with TestClient(server, ssl_context=client_context) as client:
+            client_ssl_object = client.transport.get_extra_info("ssl_object")
+            server_client = await server.get_any_server_client()
+            server_ssl_object = server_client.transport.get_extra_info("ssl_object")
+
+            assert client_ssl_object.selected_alpn_protocol() is None
+            assert server_ssl_object.selected_alpn_protocol() is None
+
+
 async def test_exc_eof_received(conn_type):
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
         pytest.skip("aiofastnet doesn't work with ProactorEventLoop")

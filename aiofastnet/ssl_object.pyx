@@ -189,6 +189,16 @@ cdef class SSLObject:
     cpdef str compression(self):
         return None
 
+    cpdef object selected_alpn_protocol(self):
+        cdef const unsigned char* protocol = NULL
+        cdef unsigned int protocol_len = 0
+
+        SSL_get0_alpn_selected(self.ssl, &protocol, &protocol_len)
+        if protocol == NULL or protocol_len == 0:
+            return None
+
+        return PyUnicode_FromStringAndSize(<const char*>protocol, protocol_len)
+
     cdef inline make_exc_from_ssl_error(self, str descr, int err_code):
         assert err_code != SSL_ERROR_NONE, "check logic"
 
