@@ -47,6 +47,7 @@ async def start_tls(loop: asyncio.AbstractEventLoop,
     """
     if isinstance(transport, _WrappedTransport):
         transport = transport._transport
+        _logger.debug("Unwrap _WrappedTransport")
 
     if ssl is None:
         raise RuntimeError('Python ssl module is not available')

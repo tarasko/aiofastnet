@@ -231,6 +231,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         object _handshake_start_time
         object _handshake_timeout_handle
         object _shutdown_timeout_handle
+        object _buffer_updated_reschedule_handle
 
         bint _reading_paused
         bint _is_debug
@@ -291,6 +292,11 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             self._app_state = STATE_INIT
         else:
             self._app_state = STATE_CON_MADE
+
+        self._handshake_timeout_handle = None
+        self._shutdown_timeout_handle = None
+        self._buffer_updated_reschedule_handle = None
+
         self._reading_paused = False
         self._is_debug = loop.get_debug()
 
@@ -393,10 +399,15 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         return PyMemoryView_FromMemory(buf_ptr, buf_len, PyBUF_WRITE)
 
     cpdef buffer_updated(self, Py_ssize_t nbytes):
-        self._ssl_object.incoming_bio_produce(nbytes)
-
         if self._is_debug:
             _logger.debug("%r: buffer_updated(%d)", self, nbytes)
+
+        if nbytes > 0:
+            self._ssl_object.incoming_bio_produce(nbytes)
+            if self._buffer_updated_reschedule_handle is not None:
+                return
+        else:
+            self._buffer_updated_reschedule_handle = None
 
         if self._state == DO_HANDSHAKE:
             self._do_handshake()
@@ -459,6 +470,8 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
     cdef inline _wakeup_waiter(self, exc=None):
         if (self._ssl_handshake_complete_waiter is not None and
                 not self._ssl_handshake_complete_waiter.done()):
+            if self._is_debug:
+                _logger.debug("%r: _wakeup_waiter set result on handshake completion future", self)
             if exc is not None:
                 self._ssl_handshake_complete_waiter.set_exception(exc)
             else:
@@ -632,7 +645,17 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         # We should schedule the first data later than the wakeup callback so
         # that the user get a chance to e.g. check ALPN with the transport
         # before having to handle the first data.
-        self._loop.call_soon(self._do_read)
+        # 
+        # This only works if loop promises not to call _read_ready -> buffer_updated
+        # prior to _do_read. It is indeed true for SelectorEventLoop.
+        # Unfortunately this is not the case for ProactorEventLoop.
+        # At least in Python 3.14 test_start_tls fails. 
+        # ProactorEventLoop can call buffer_update second time before calling 
+        # _do_read, even though _do_read was schedule prior to buffer_updated.
+
+        # Therefore aiofastnet.buffer_updated does not process data 
+        # if it was rescheduled
+        self._buffer_updated_reschedule_handle = self._loop.call_soon(self.buffer_updated, 0)
 
     # Shutdown flow
 
@@ -880,7 +903,8 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
     cdef inline resume_reading(self):
         if self._reading_paused:
             self._reading_paused = False
-            self._loop.call_soon(self._do_read)
+            self._buffer_updated_reschedule_handle = \
+                self._loop.call_soon(self.buffer_updated, 0)
         self._transport.resume_reading()
 
     cpdef pause_writing(self):
@@ -1099,7 +1123,8 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         # For resume_reading() check if we have some pending data for reading
         # and
         if buf_len == 0:
-            self._loop.call_soon(self._do_read)
+            self._buffer_updated_reschedule_handle = \
+                self._loop.call_soon(self.buffer_updated, 0)
             return
 
         self._post_read(last_error)

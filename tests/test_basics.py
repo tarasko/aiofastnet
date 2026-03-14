@@ -39,7 +39,7 @@ def buffered_protocol(request):
 
 
 @pytest.mark.parametrize("msg_size", [1, 2, 3, 4, 5, 6, 7, 8, 29, 64, 256 * 1024, 6 * 1024 * 1024])
-async def test_echo(msg_size, conn_type, buffered_protocol):
+async def test_echo(loop_debug, msg_size, conn_type, buffered_protocol):
     payload = b"x" * msg_size
 
     async with TestServer(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
@@ -254,7 +254,7 @@ async def test_exc_pause_writing(conn_type):
                 await client.wait_closed()
 
 
-async def test_exc_resume_writing(loop_debug, conn_type):
+async def test_exc_resume_writing(conn_type):
     class ClientRaiseResumeWriting(AsyncClient):
         def resume_writing(self):
             super().resume_writing()
@@ -439,7 +439,7 @@ async def test_transport_base(conn_type):
             await client.wait_closed()
 
 
-async def test_start_tls(loop_debug):
+async def test_start_tls():
     server_ssl_context, client_ssl_context = make_test_ssl_contexts(
         "tests/test.crt", "tests/test.key")
 
