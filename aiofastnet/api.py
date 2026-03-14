@@ -14,7 +14,6 @@ import asyncio
 import sys
 import weakref
 from logging import getLogger
-from typing import cast
 
 from . import constants
 from .ssl_protocol import SSLProtocol
