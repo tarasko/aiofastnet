@@ -46,23 +46,8 @@ async def start_tls(loop: asyncio.AbstractEventLoop,
     Return new transport that *protocol* should start using
     immediately.
     """
-    if not isinstance(transport, aiofn_Transport):
-        return await loop.start_tls(transport, protocol, sslcontext,
-                                    server_side=server_side,
-                                    server_hostname=server_hostname,
-                                    ssl_handshake_timeout=ssl_handshake_timeout,
-                                    ssl_shutdown_timeout=ssl_shutdown_timeout)
-
     if isinstance(transport, _WrappedTransport):
-        wrapped_protocol: _WrappedProtocol = transport._transport.get_protocol()
-        transport._transport = await loop.start_tls(
-            transport._transport, wrapped_protocol,
-            sslcontext, server_side=server_side, server_hostname=server_hostname,
-            ssl_handshake_timeout=ssl_handshake_timeout,
-            ssl_shutdown_timeout=ssl_shutdown_timeout
-        )
-        wrapped_protocol._protocol = protocol
-        return transport
+        transport = transport._transport
 
     if ssl is None:
         raise RuntimeError('Python ssl module is not available')

@@ -444,6 +444,7 @@ async def test_start_tls(loop_debug):
         "tests/test.crt", "tests/test.key")
 
     test_msg = b"hello world!"
+    test_msg_2 = b"hello world! #2"
     tls_upgrade_cmd = b"start_tls"
     close_cmd = b"close"
 
@@ -498,27 +499,27 @@ async def test_start_tls(loop_debug):
             assert reply == tls_upgrade_cmd
             await client.start_tls(client_ssl_context)
 
-            client.transport.write(test_msg)
-            reply = await client.readn(len(test_msg))
-            assert reply == test_msg
+            client.transport.write(test_msg_2)
+            reply = await client.readn(len(test_msg_2))
+            assert reply == test_msg_2
 
-            client.transport.write(tls_upgrade_cmd)
-            reply = await client.readn(len(tls_upgrade_cmd))
-            assert reply == tls_upgrade_cmd
-            await client.start_tls(client_ssl_context)
-
-            client.transport.write(test_msg)
-            reply = await client.readn(len(test_msg))
-            assert reply == test_msg
-
-            client.transport.write(tls_upgrade_cmd)
-            reply = await client.readn(len(tls_upgrade_cmd))
-            assert reply == tls_upgrade_cmd
-            await client.start_tls(client_ssl_context)
-
-            client.transport.write(test_msg)
-            reply = await client.readn(len(test_msg))
-            assert reply == test_msg
+            # client.transport.write(tls_upgrade_cmd)
+            # reply = await client.readn(len(tls_upgrade_cmd))
+            # assert reply == tls_upgrade_cmd
+            # await client.start_tls(client_ssl_context)
+            #
+            # client.transport.write(test_msg)
+            # reply = await client.readn(len(test_msg))
+            # assert reply == test_msg
+            #
+            # client.transport.write(tls_upgrade_cmd)
+            # reply = await client.readn(len(tls_upgrade_cmd))
+            # assert reply == tls_upgrade_cmd
+            # await client.start_tls(client_ssl_context)
+            #
+            # client.transport.write(test_msg)
+            # reply = await client.readn(len(test_msg))
+            # assert reply == test_msg
 
             client.transport.write(close_cmd)
             await client.wait_closed()

@@ -194,7 +194,7 @@ cdef class SSLTransport(Transport):
         self._ssl_protocol._abort(None)
 
 
-cdef class SSLProtocol(Protocol):
+cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
     """SSL protocol.
 
     Implementation of SSL on top of a socket using incoming and outgoing
@@ -213,7 +213,8 @@ cdef class SSLProtocol(Protocol):
         object _loop
         SSLTransport _app_transport
 
-        Transport _transport
+        bint _is_aiofn_transport
+        object _transport
         object _ssl_handshake_timeout
         object _ssl_shutdown_timeout
         object _ssl_handshake_complete_waiter
@@ -278,6 +279,7 @@ cdef class SSLProtocol(Protocol):
         self._app_transport = None
         # transport, ex: SelectorSocketTransport
         self._transport = None
+        self._is_aiofn_transport = False
         self._ssl_handshake_timeout = ssl_handshake_timeout
         self._ssl_shutdown_timeout = ssl_shutdown_timeout
         self._ssl_handshake_complete_waiter = ssl_handshake_complete_waiter
@@ -328,7 +330,7 @@ cdef class SSLProtocol(Protocol):
             self._app_transport = SSLTransport(self)
         return self._app_transport
 
-    cdef inline Transport _get_tcp_transport(self):
+    cdef inline _get_tcp_transport(self):
         return self._transport
 
     def connection_made(self, transport):
@@ -336,6 +338,7 @@ cdef class SSLProtocol(Protocol):
 
         Start the SSL handshake.
         """
+        self._is_aiofn_transport = isinstance(transport, Transport)
         self._transport = transport
         underlying_ssl_layer_num = self._transport.get_extra_info('ssl_layer_num')
         if underlying_ssl_layer_num is not None:
@@ -380,6 +383,14 @@ cdef class SSLProtocol(Protocol):
 
     cdef get_buffer_c(self, Py_ssize_t n, char** buf_ptr, Py_ssize_t* buf_len):
         self._ssl_object.incoming_bio_get_write_buf(buf_ptr, buf_len)
+
+    cpdef get_buffer(self, Py_ssize_t n):
+        cdef:
+            char* buf_ptr
+            Py_ssize_t buf_len
+
+        self._ssl_object.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
+        return PyMemoryView_FromMemory(buf_ptr, buf_len, PyBUF_WRITE)
 
     cpdef buffer_updated(self, Py_ssize_t nbytes):
         self._ssl_object.incoming_bio_produce(nbytes)
@@ -1008,7 +1019,11 @@ cdef class SSLProtocol(Protocol):
         if sz < SSL_WRITE_BUFFER_SIZE and not is_last:
             return
 
-        self._transport.write_c(ptr, sz)
+        if self._is_aiofn_transport:
+            (<Transport>self._transport).write_c(ptr, sz)
+        else:
+            self._transport.write(PyBytes_FromStringAndSize(ptr, sz))
+
         if self._is_debug:
             _logger.debug("%r: wrote %d bytes to the underlying transport: is_last=%d", self, sz, is_last)
 
