@@ -193,6 +193,10 @@ cdef class SSLTransport(Transport):
         """
         self._ssl_protocol._abort(None)
 
+    def _force_close(self, exc):
+        """Used by upstream SSLProtocol in case of TLS over TLS"""
+        self._ssl_protocol._abort(exc)
+
 
 cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
     """SSL protocol.
