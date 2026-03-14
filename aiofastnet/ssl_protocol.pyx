@@ -410,8 +410,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         if self._is_debug:
             _logger.debug("%r: buffer_updated(%d)", self, nbytes)
 
-        if nbytes > 0:
-            self._ssl_object.incoming_bio_produce(nbytes)
+        self._ssl_object.incoming_bio_produce(nbytes)
 
         if self._state == DO_HANDSHAKE:
             self._do_handshake()
@@ -470,26 +469,6 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         except Exception:
             self._transport.close()
             raise
-
-    cdef inline _wakeup_waiter(self, exc=None):
-        if (self._ssl_handshake_complete_waiter is not None and
-                not self._ssl_handshake_complete_waiter.done()):
-            if exc is not None:
-                self._ssl_handshake_complete_waiter.set_exception(exc)
-            else:
-                # Problem: ProactorEventLoop has already scheduled next read.
-                # It may arrive before waiter wakes up. This will trigger
-                # user protocol data_received before start_tls returns.
-                # User data_received may try to immediately send new data, but
-                # it doesn't have SSLTransport yet. Reproduced in test_start_tls.
-                # We must pause reading and resume right before waiter wakes up
-
-                self.pause_reading()
-                self._loop.call_soon(self.resume_reading)
-
-                self._ssl_handshake_complete_waiter.set_result(None)
-            if self._is_debug:
-                _logger.debug("%r: _wakeup_waiter set result on handshake completion future", self)
 
     cdef inline _get_extra_info(self, name, default=None):
         if name == "ssl_object":
@@ -643,6 +622,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             cipher=self._ssl_object.cipher(),
             compression=self._ssl_object.compression()
         )
+        self._wakeup_waiter()
         if self._app_state == STATE_INIT:
             self._app_state = STATE_CON_MADE
             try:
@@ -651,25 +631,31 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                 raise
             except Exception as exc:
                 self._fatal_error_no_close(exc, "user connection_made raised an exception")
-        self._wakeup_waiter()
 
-        # We should wakeup user code before sending the first data below. In
-        # case of `start_tls()`, the user can only get the SSLTransport in the
-        # wakeup callback, because `connection_made()` is not called again.
-        # We should schedule the first data later than the wakeup callback so
-        # that the user get a chance to e.g. check ALPN with the transport
-        # before having to handle the first data.
-        # 
-        # This only works if loop promises not to call _read_ready -> buffer_updated
-        # prior to _do_read. It is indeed true for SelectorEventLoop.
-        # Unfortunately this is not the case for ProactorEventLoop.
-        # At least in Python 3.14 test_start_tls fails. 
-        # ProactorEventLoop can call buffer_update second time before calling 
-        # _do_read, even though _do_read was schedule prior to buffer_updated.
+        # Trigger buffer_updated as we might have already read user data
+        # together with SSL handshake.
+        self._loop.call_soon(self.buffer_updated, 0)
 
-        # Therefore aiofastnet.buffer_updated does not process data 
-        # if it was rescheduled
-        # self._loop.call_soon(self.buffer_updated, 0)
+    cdef inline _wakeup_waiter(self, exc=None):
+        if (self._ssl_handshake_complete_waiter is not None and
+                not self._ssl_handshake_complete_waiter.done()):
+            if exc is not None:
+                self._ssl_handshake_complete_waiter.set_exception(exc)
+            else:
+                # Problem: ProactorEventLoop has already scheduled next read.
+                # It may arrive before waiter wakes up. This will trigger
+                # user protocol data_received before start_tls returns.
+                # User data_received may try to immediately send new data, but
+                # it doesn't have SSLTransport yet. Reproduced in test_start_tls.
+                # We must pause reading and resume right before waiter wakes up
+
+                if self._app_state == STATE_CON_MADE:
+                    self._transport.pause_reading()
+                    self._loop.call_soon(self._transport.resume_reading)
+
+                self._ssl_handshake_complete_waiter.set_result(None)
+            if self._is_debug:
+                _logger.debug("%r: _wakeup_waiter set result on handshake completion future", self)
 
     # Shutdown flow
 
