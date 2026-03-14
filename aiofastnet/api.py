@@ -14,6 +14,7 @@ import asyncio
 import sys
 import weakref
 from logging import getLogger
+from typing import cast
 
 from . import constants
 from .ssl_protocol import SSLProtocol
@@ -21,8 +22,10 @@ from .transport import (Transport as aiofn_Transport,
                         SelectorSocketTransport, aiofn_is_buffered_protocol)
 from asyncio.trsock import TransportSocket
 
-from .wrapped_transport import _WrappedProtocol, _WrappedBufferedProtocol, \
+from .wrapped_transport import (
+    _WrappedTransport, _WrappedProtocol, _WrappedBufferedProtocol,
     _should_fallback_to_asyncio
+)
 
 _HAS_IPv6 = hasattr(socket, 'AF_INET6')
 _logger = getLogger('fastnet')
@@ -40,7 +43,7 @@ async def start_tls(loop: asyncio.AbstractEventLoop,
                     ssl_shutdown_timeout=None) -> asyncio.Transport:
     """Upgrade transport to TLS.
 
-    Return a new transport that *protocol* should start using
+    Return new transport that *protocol* should start using
     immediately.
     """
     if not isinstance(transport, aiofn_Transport):
@@ -49,6 +52,17 @@ async def start_tls(loop: asyncio.AbstractEventLoop,
                                     server_hostname=server_hostname,
                                     ssl_handshake_timeout=ssl_handshake_timeout,
                                     ssl_shutdown_timeout=ssl_shutdown_timeout)
+
+    if isinstance(transport, _WrappedTransport):
+        wrapped_protocol: _WrappedProtocol = transport._transport.get_protocol()
+        transport._transport = await loop.start_tls(
+            transport._transport, wrapped_protocol,
+            sslcontext, server_side=server_side, server_hostname=server_hostname,
+            ssl_handshake_timeout=ssl_handshake_timeout,
+            ssl_shutdown_timeout=ssl_shutdown_timeout
+        )
+        wrapped_protocol._protocol = protocol
+        return transport
 
     if ssl is None:
         raise RuntimeError('Python ssl module is not available')
