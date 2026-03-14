@@ -231,7 +231,6 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         object _handshake_start_time
         object _handshake_timeout_handle
         object _shutdown_timeout_handle
-        object _buffer_updated_reschedule_handle
 
         bint _reading_paused
         bint _is_debug
@@ -245,6 +244,16 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                  call_connection_made=True,
                  ssl_handshake_timeout=None,
                  ssl_shutdown_timeout=None):
+
+        # Normally, call_connection_made is True except when SSLProtocol is
+        # created by start_tls. In such case user protocol does not expect
+        # connection_made event, since it has already happened.
+
+        # ssl_handshake_complete_waiter is used by create_server,
+        # create_connection and start_tls in order to wait until connection
+        # is fully ready (connection_made has been called) before returning
+        # I don't quite understand why create_server needs it
+
         if ssl_handshake_timeout is None:
             ssl_handshake_timeout = SSL_HANDSHAKE_TIMEOUT
         elif ssl_handshake_timeout <= 0:
@@ -295,7 +304,6 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
         self._handshake_timeout_handle = None
         self._shutdown_timeout_handle = None
-        self._buffer_updated_reschedule_handle = None
 
         self._reading_paused = False
         self._is_debug = loop.get_debug()
@@ -404,10 +412,6 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
         if nbytes > 0:
             self._ssl_object.incoming_bio_produce(nbytes)
-            if self._buffer_updated_reschedule_handle is not None:
-                return
-        else:
-            self._buffer_updated_reschedule_handle = None
 
         if self._state == DO_HANDSHAKE:
             self._do_handshake()
@@ -470,12 +474,22 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
     cdef inline _wakeup_waiter(self, exc=None):
         if (self._ssl_handshake_complete_waiter is not None and
                 not self._ssl_handshake_complete_waiter.done()):
-            if self._is_debug:
-                _logger.debug("%r: _wakeup_waiter set result on handshake completion future", self)
             if exc is not None:
                 self._ssl_handshake_complete_waiter.set_exception(exc)
             else:
+                # Problem: ProactorEventLoop has already scheduled next read.
+                # It may arrive before waiter wakes up. This will trigger
+                # user protocol data_received before start_tls returns.
+                # User data_received may try to immediately send new data, but
+                # it doesn't have SSLTransport yet. Reproduced in test_start_tls.
+                # We must pause reading and resume right before waiter wakes up
+
+                self.pause_reading()
+                self._loop.call_soon(self.resume_reading)
+
                 self._ssl_handshake_complete_waiter.set_result(None)
+            if self._is_debug:
+                _logger.debug("%r: _wakeup_waiter set result on handshake completion future", self)
 
     cdef inline _get_extra_info(self, name, default=None):
         if name == "ssl_object":
@@ -655,7 +669,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
         # Therefore aiofastnet.buffer_updated does not process data 
         # if it was rescheduled
-        self._buffer_updated_reschedule_handle = self._loop.call_soon(self.buffer_updated, 0)
+        # self._loop.call_soon(self.buffer_updated, 0)
 
     # Shutdown flow
 
@@ -794,6 +808,8 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             self._transport.close()
 
     cdef inline _abort(self, exc):
+        if self._is_debug:
+            _logger.debug("%r: abort called (%s)", self, str(exc))
         self._set_state(UNWRAPPED)
         if self._transport is not None:
             self._transport._force_close(exc)
@@ -903,8 +919,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
     cdef inline resume_reading(self):
         if self._reading_paused:
             self._reading_paused = False
-            self._buffer_updated_reschedule_handle = \
-                self._loop.call_soon(self.buffer_updated, 0)
+            self._loop.call_soon(self.buffer_updated, 0)
         self._transport.resume_reading()
 
     cpdef pause_writing(self):
@@ -1123,8 +1138,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         # For resume_reading() check if we have some pending data for reading
         # and
         if buf_len == 0:
-            self._buffer_updated_reschedule_handle = \
-                self._loop.call_soon(self.buffer_updated, 0)
+            self._loop.call_soon(self.buffer_updated, 0)
             return
 
         self._post_read(last_error)

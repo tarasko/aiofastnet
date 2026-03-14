@@ -250,6 +250,9 @@ cdef class SelectorSocketTransport(Transport):
             if self._conn_lost:
                 return
 
+            if self._paused:
+                return
+
             try:
                 if self._protocol_aiofn:
                     buf = (<Protocol>self._protocol).get_buffer_c(-1, &buf_ptr, &buf_len)
