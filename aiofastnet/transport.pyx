@@ -1,8 +1,10 @@
 import collections
+import os
 import socket
 import warnings
 import asyncio
 from asyncio.trsock import TransportSocket
+from itertools import count
 from logging import getLogger
 
 from cpython.memoryview cimport PyMemoryView_FromMemory
@@ -74,6 +76,17 @@ cpdef aiofn_is_buffered_protocol(protocol):
         pass
 
     return isinstance(protocol, asyncio.BufferedProtocol)
+
+
+cdef class SendFileRequest:
+    cdef:
+        object file
+        object offset
+        object count
+        object waiter
+
+    def __len__(self):
+        return self.count
 
 
 cdef class SelectorSocketTransport(Transport):
@@ -453,7 +466,7 @@ cdef class SelectorSocketTransport(Transport):
                 bytes_sent = aiofn_send(self._sock_fd, data_ptr, data_len)
                 if self._is_debug:
                     _logger.debug("%r aiofn_send(...,len=%d)=%d", self,
-                                  bytes_sent, data_len)
+                                  data_len, bytes_sent)
             except BaseException as exc:
                 self._fatal_error(exc, 'Fatal write error on socket transport')
                 return
@@ -505,8 +518,12 @@ cdef class SelectorSocketTransport(Transport):
             char* data_ptr
             Py_ssize_t data_len
             Py_ssize_t bytes_sent
+            SendFileRequest pending_sendfile_req = None
 
         for data in list_of_data:
+            if isinstance(data, SendFileRequest):
+                pending_sendfile_req = data
+                break
             aiofn_unpack_buffer(data, &data_ptr, &data_len)
             if data_len == 0:
                 continue
@@ -516,11 +533,15 @@ cdef class SelectorSocketTransport(Transport):
             if idx == AIOFN_MAX_IOVEC:
                 break
 
-        bytes_sent = aiofn_writev(self._sock_fd, self._iovecs, idx)
+        if idx == 0 and pending_sendfile_req is not None:
+            if self._try_sendfile(pending_sendfile_req):
+                list_of_data.popleft()
+        else:
+            bytes_sent = aiofn_writev(self._sock_fd, self._iovecs, idx)
 
-        if self._is_debug:
-            _logger.debug("%r aiofn_writev(..., len(iovecs)=%d)=%d", self, idx, bytes_sent)
-        self._adjust_leftover_buffer(list_of_data, bytes_sent)
+            if self._is_debug:
+                _logger.debug("%r aiofn_writev(..., len(iovecs)=%d)=%d", self, idx, bytes_sent)
+            self._adjust_leftover_buffer(list_of_data, bytes_sent)
 
     cpdef _write_ready(self):
         assert self._write_backlog, 'Data should not be empty'
@@ -532,7 +553,7 @@ cdef class SelectorSocketTransport(Transport):
             self._write_many(self._write_backlog)
         except BaseException as exc:
             self._loop.remove_writer(self._sock_fd_obj)
-            self._write_backlog.clear()
+            self._clear_write_backlog(exc)
             self._fatal_error(exc, 'Fatal write error on socket transport')
         else:
             self._maybe_resume_protocol()
@@ -608,6 +629,46 @@ cdef class SelectorSocketTransport(Transport):
         self._high_water = high
         self._low_water = low
 
+    async def sendfile(self, file, offset, count):
+        cdef SendFileRequest req = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
+        req.file = file
+        req.offset = offset
+        req.count = count
+        req.waiter = self._loop.create_future()
+
+        if not self._write_backlog:
+            if self._try_sendfile(req):
+                return await req.waiter
+
+        if self._is_debug:
+            _logger.debug("%r: enqueue SendFileRequest(offset=%d,count=%d)",
+                          self, req.offset, req.count)
+
+        if self._write_backlog:
+            self._write_backlog.append(req)
+        else:
+            self._write_backlog.append(req)
+            self._loop.add_writer(self._sock_fd_obj, self._write_ready)
+            self._maybe_pause_protocol()
+
+        return await req.waiter
+
+    cdef inline _try_sendfile(self, SendFileRequest req):
+        """Return True if finished, False if must wait for write ready event"""
+        try:
+            while req.count:
+                bytes_sent = os.sendfile(self._sock_fd_obj, req.file.fileno(),
+                                         req.offset, req.count)
+                _logger.debug("%r: os.sendfile(offset=%d,count=%d)=%d",
+                              self, req.offset, req.count, bytes_sent)
+                req.offset += bytes_sent
+                req.count -= bytes_sent
+
+            req.waiter.set_result(None)
+            return True
+        except BlockingIOError:
+            return False
+
     cdef inline _fatal_error(self, exc, message='Fatal error on transport'):
         # Should be called from exception handler only.
         if isinstance(exc, OSError):
@@ -628,7 +689,7 @@ cdef class SelectorSocketTransport(Transport):
         if self._conn_lost:
             return
         if self._write_backlog:
-            self._write_backlog.clear()
+            self._clear_write_backlog(exc)
             self._loop.remove_writer(self._sock_fd_obj)
         if not self._closing:
             self._closing = True
@@ -636,3 +697,11 @@ cdef class SelectorSocketTransport(Transport):
         self._conn_lost += 1
         self._loop.call_soon(self._call_connection_lost, exc)
 
+    cdef inline _clear_write_backlog(self, exc):
+        cdef SendFileRequest req
+        for data in self._write_backlog:
+            if isinstance(data, SendFileRequest):
+                req = <SendFileRequest>data
+                if not req.waiter.done():
+                    req.waiter.set_exception(data)
+        self._write_backlog.clear()
