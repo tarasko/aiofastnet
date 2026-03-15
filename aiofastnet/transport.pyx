@@ -1,6 +1,8 @@
 import collections
+import errno
 import os
 import socket
+import sys
 import warnings
 import asyncio
 from asyncio.trsock import TransportSocket
@@ -670,6 +672,14 @@ cdef class SelectorSocketTransport(Transport):
             raise NotImplementedError()
         except BlockingIOError:
             return False
+        except ConnectionResetError:
+            raise
+        except OSError as exc:
+            # Patch MacOS error code
+            if sys.platform == "darwin" and exc.errno == 57:
+                raise ConnectionResetError()
+            else:
+                raise
 
     cdef inline _fatal_error(self, exc, message='Fatal error on transport'):
         # Should be called from exception handler only.
