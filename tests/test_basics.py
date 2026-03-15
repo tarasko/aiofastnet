@@ -1,7 +1,6 @@
 import asyncio
 import tempfile
 import os
-import socket
 import ssl
 from _contextvars import ContextVar
 from contextlib import contextmanager
@@ -289,6 +288,35 @@ async def test_sendfile():
                 await asyncio.sleep(0.1)
                 reply = await client.readn(len(tail))
                 assert reply == tail
+
+
+@pytest.mark.skipif(os.name == "nt", reason="sendfile is implemented only for linux and macos")
+async def test_sendfile_huge_error(loop_debug):
+    loop = asyncio.get_running_loop()
+    payload = b"p" * (20*1024*1024)
+
+    class FaultyServerProtocol(asyncio.Protocol):
+        def connection_made(self, transport):
+            self.transport = transport
+
+        def data_received(self, data):
+            self.transport.close()
+
+    class Client(AsyncClient):
+        def pause_writing(self):
+            pass
+
+        def resume_writing(self):
+            pass
+
+    with TmpFromData(payload) as tmp:
+        async with TestServer(FaultyServerProtocol) as server:
+            async with TestClient(server, protocol_factory=Client) as client:
+                with pytest.raises(ConnectionResetError):
+                    await sendfile(loop, client.transport, tmp, offset=0, count=len(payload))
+
+                with pytest.raises(RuntimeError, match="is closing"):
+                    await sendfile(loop, client.transport, tmp, offset=0, count=len(payload))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only test")

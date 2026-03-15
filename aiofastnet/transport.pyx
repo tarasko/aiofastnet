@@ -705,5 +705,5 @@ cdef class SelectorSocketTransport(Transport):
             if isinstance(data, SendFileRequest):
                 req = <SendFileRequest>data
                 if not req.waiter.done():
-                    req.waiter.set_exception(data)
+                    req.waiter.set_exception(exc)
         self._write_backlog.clear()
