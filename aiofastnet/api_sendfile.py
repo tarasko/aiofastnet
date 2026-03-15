@@ -11,11 +11,11 @@ async def sendfile(loop: asyncio.AbstractEventLoop,
                    count=None,
                    *,
                    fallback=True):
-    # For _WrappedTransports (ProactorEventLoop is used) use loop.sendfile
-    # For aiofastnet SelectorSocketTransport use loop.sock_sendfile
-    # Anything else raise NotImplementedError()
-    # Maybe I will improve it in the future but for now,
-    # user must be prepared for NotImplementedError().
+    """
+    Send a file to a transport using native sendfile when available.
+    Ignores fallback argument. Always raises NotImplementedError if native
+    sendfile is not available.
+    """
 
     if isinstance(transport, _WrappedTransport):
         transport = transport._transport
@@ -23,8 +23,8 @@ async def sendfile(loop: asyncio.AbstractEventLoop,
     if not isinstance(transport, aiofn_Transport):
         try:
             return await loop.sendfile(transport, file, offset, count, fallback=False)
-        except RuntimeError as exc:
-            if "fallback is disabled" in str(exc):
+        except Exception as exc:
+            if "fallback" in str(exc):
                 raise NotImplementedError()
             else:
                 raise
