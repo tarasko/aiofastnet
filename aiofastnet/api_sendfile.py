@@ -21,7 +21,13 @@ async def sendfile(loop: asyncio.AbstractEventLoop,
         transport = transport._transport
 
     if not isinstance(transport, aiofn_Transport):
-        return await loop.sendfile(transport, file, offset, count, fallback=False)
+        try:
+            return await loop.sendfile(transport, file, offset, count, fallback=False)
+        except RuntimeError as exc:
+            if "fallback is disabled" in str(exc):
+                raise NotImplementedError()
+            else:
+                raise
 
     if transport.is_closing():
         raise RuntimeError("Transport is closing")
