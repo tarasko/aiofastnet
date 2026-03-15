@@ -211,8 +211,8 @@ cdef class SSLTransport(Transport):
 cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
     """SSL protocol.
 
-    Implementation of SSL on top of a socket using incoming and outgoing
-    buffers which are ssl.MemoryBIO objects.
+    Implementation of SSL on top of raw openssl API using custom static
+    memory BIOs to reduce memory copying.
     """
 
     cdef:
@@ -264,9 +264,9 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         # connection_made event, since it has already happened.
 
         # ssl_handshake_complete_waiter is used by create_server,
-        # create_connection and start_tls in order to wait until connection
-        # is fully ready (connection_made has been called) before returning
-        # I don't quite understand why create_server needs it
+        # create_connection and start_tls to wait until connection
+        # is fully ready (connection_made has been called) before returning.
+        # I don't quite understand why create_server needs it.
 
         if ssl_handshake_timeout is None:
             ssl_handshake_timeout = SSL_HANDSHAKE_TIMEOUT
@@ -396,8 +396,6 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         # Decrease ref counters to user instances to avoid cyclic references
         # between user protocol, SSLProtocol and SSLTransport.
         # This helps to deallocate useless objects asap.
-        # If not done then some tests like test_create_connection_memory_leak
-        # will fail.
         self._app_transport = None
         self._app_protocol = None
         self._wakeup_waiter(exc)
@@ -502,7 +500,8 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         cdef bint allowed = False
 
         if self._is_debug:
-            _logger.debug("%r: change state to %s", self, SSLProtocolState(new_state).name)
+            _logger.debug("%r: change state to %s",
+                          self, SSLProtocolState(new_state).name)
 
         if new_state == UNWRAPPED:
             allowed = True
@@ -602,7 +601,9 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                 self._maybe_send_outgoing(True)
                 return
 
-            self._on_handshake_complete(self._ssl_object.make_exc_from_ssl_error("ssl handshake failed", ssl_error))
+            self._on_handshake_complete(
+                self._ssl_object.make_exc_from_ssl_error(
+                    "ssl handshake failed", ssl_error))
             return
 
     cdef inline _on_handshake_complete(self, handshake_exc):
@@ -644,7 +645,8 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             except (SystemExit, KeyboardInterrupt):
                 raise
             except Exception as exc:
-                self._fatal_error_no_close(exc, "user connection_made raised an exception")
+                self._fatal_error_no_close(
+                    exc, "user connection_made raised an exception")
 
         # Trigger buffer_updated as we might have already read user data
         # together with SSL handshake.
@@ -983,11 +985,11 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
         while data_len != 0:
             # SSL_write_ex behave differently from non-blocking write syscall
-            # If outgoing memory bio has some space, but doesn't have enough space
-            # SSL_write_ex returns 0 and SSL_ERROR_WANT_WRITE is set.
+            # If outgoing memory bio has some space, but doesn't have enough
+            # space SSL_write_ex returns 0 and SSL_ERROR_WANT_WRITE is set.
             #
-            # In such case we flush outgoing buffer and restart SSL_write_ex with
-            # exactly same data_ptr, data_len.
+            # In such case we flush outgoing buffer and restart SSL_write_ex
+            # with exactly same data_ptr, data_len.
             #
             # It is very confusing but bytes_written in such case may be > 16K
             # because SSL_write_ex, despite previously returning error,
@@ -1092,7 +1094,8 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             Py_ssize_t buf_len
 
         if self._app_protocol_aiofn:
-            app_buffer = (<Protocol>self._app_protocol).get_buffer_c(-1, &buf_ptr, &buf_len)
+            app_buffer = (<Protocol>self._app_protocol).get_buffer_c(
+                -1, &buf_ptr, &buf_len)
         else:
             app_buffer = self._app_protocol.get_buffer(-1)
             aiofn_unpack_buffer(app_buffer, &buf_ptr, &buf_len)
