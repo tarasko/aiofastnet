@@ -253,7 +253,7 @@ async def test_ssl_getpeercert_binary_form_without_verify():
 
 @contextmanager
 def TmpFromData(data):
-    with tempfile.NamedTemporaryFile("w+b", delete_on_close=True) as tmp:
+    with tempfile.TemporaryFile() as tmp:
         tmp.write(data)
         tmp.flush()
         tmp.seek(0)
