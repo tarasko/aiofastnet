@@ -263,6 +263,7 @@ def TmpFromData(data):
             pass
 
 
+@pytest.mark.skipif(os.name == "nt", reason="sendfile is implemented only for linux and macos")
 async def test_sendfile_basic(loop_debug):
     loop = asyncio.get_running_loop()
     header = b"h" * (256*1024)
@@ -288,6 +289,17 @@ async def test_sendfile_basic(loop_debug):
                 await asyncio.sleep(0.1)
                 reply = await client.readn(len(tail))
                 assert reply == tail
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only test")
+async def test_sendfile_win_not_implemented(loop_debug):
+    loop = asyncio.get_running_loop()
+    payload = b"p" * (1024)
+    with TmpFromData(payload) as tmp:
+        async with TestServer() as server:
+            async with TestClient(server) as client:
+                with pytest.raises(NotImplementedError):
+                    await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2)
 
 
 # async def test_sendfile_native_disabled():
