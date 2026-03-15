@@ -1,7 +1,7 @@
 import asyncio
+import os
 
-from .transport import Transport as aiofn_Transport, SelectorSocketTransport
-from .wrapped_transport import _WrappedTransport
+from .transport import Transport, SelectorSocketTransport
 
 
 async def sendfile(loop: asyncio.AbstractEventLoop,
@@ -16,18 +16,11 @@ async def sendfile(loop: asyncio.AbstractEventLoop,
     Ignores fallback argument. Always raises NotImplementedError if native
     sendfile is not available.
     """
+    if os.name == "nt":
+        raise NotImplementedError()
 
-    if isinstance(transport, _WrappedTransport):
-        transport = transport._transport
-
-    if not isinstance(transport, aiofn_Transport):
-        try:
-            return await loop.sendfile(transport, file, offset, count, fallback=False)
-        except Exception as exc:
-            if "fallback" in str(exc):
-                raise NotImplementedError()
-            else:
-                raise
+    if not isinstance(transport, Transport):
+        return await loop.sendfile(transport, file, offset, count, fallback=False)
 
     if transport.is_closing():
         raise RuntimeError("Transport is closing")
