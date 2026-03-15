@@ -63,6 +63,49 @@ async def test_echo_writelines(msg_size, num_lines, conn_type, buffered_protocol
             assert echoed == payload
 
 
+async def test_write_huge_error(conn_type):
+    payload = b"p" * (20*1024*1024)
+
+    class FaultyServerProtocol(asyncio.Protocol):
+        def connection_made(self, transport):
+            self.transport = transport
+
+        def data_received(self, data):
+            self.transport.close()
+
+    class Client(AsyncClient):
+        def pause_writing(self):
+            pass
+
+        def resume_writing(self):
+            pass
+
+    async with TestServer(FaultyServerProtocol, ssl_context=conn_type.server_ssl_context) as server:
+        async with TestClient(server, ssl_context=conn_type.client_ssl_context, protocol_factory=Client) as client:
+            client.transport.write(payload)
+            with pytest.raises(ConnectionResetError):
+                await client.readn(len(payload))
+
+            assert client.transport.is_closing()
+
+            # Asyncio simply skip writing if connection is closing
+            client.transport.write(payload)
+
+            assert client.transport.get_write_buffer_size() == 0
+
+        async with TestClient(server, ssl_context=conn_type.client_ssl_context, protocol_factory=Client) as client:
+            client.transport.writelines([payload, payload])
+            with pytest.raises(ConnectionResetError):
+                await client.readn(len(payload))
+
+            assert client.transport.is_closing()
+
+            # Asyncio simply skip writing if connection is closing
+            client.transport.writelines([payload, payload])
+
+            assert client.transport.get_write_buffer_size() == 0
+
+
 async def test_write_paused(conn_type):
     payload = b"x" * (1024)
 

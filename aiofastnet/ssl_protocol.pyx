@@ -132,14 +132,24 @@ cdef class SSLTransport(Transport):
         reduces opportunities for doing I/O and computation
         concurrently.
         """
-        self._ssl_protocol._get_tcp_transport().set_write_buffer_limits(high, low)
+        tcp_transport = self._ssl_protocol._get_tcp_transport()
+        if tcp_transport is not None:
+            tcp_transport.set_write_buffer_limits(high, low)
 
     def get_write_buffer_limits(self):
-        return self._ssl_protocol._get_tcp_transport().get_write_buffer_limits()
+        tcp_transport = self._ssl_protocol._get_tcp_transport()
+        if tcp_transport is not None:
+            return tcp_transport.get_write_buffer_limits()
+        else:
+            return 0, 0
 
     def get_write_buffer_size(self):
         """Return the current size of the write buffers."""
-        return self._ssl_protocol._get_tcp_transport().get_write_buffer_size()
+        tcp_transport = self._ssl_protocol._get_tcp_transport()
+        if tcp_transport is not None:
+            return tcp_transport.get_write_buffer_size()
+        else:
+            return 0
 
     cpdef write(self, data):
         """Write some data bytes to the transport.

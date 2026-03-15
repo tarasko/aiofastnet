@@ -203,10 +203,10 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
             else:
                 self._closed.set_result(None)
         if self._readn_waiter is not None:
-            self._readn_waiter[1].set_exception(RuntimeError("connection closed"))
+            self._readn_waiter[1].set_exception(ConnectionResetError())
             self._readn_waiter = None
         if self._write_resumed_fut is not None:
-            self._write_resumed_fut.set_exception(RuntimeError("connection closed"))
+            self._write_resumed_fut.set_exception(ConnectionResetError())
             self._write_resumed_fut = None
 
     def write(self, data: bytes):
