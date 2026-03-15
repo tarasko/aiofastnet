@@ -666,6 +666,8 @@ cdef class SelectorSocketTransport(Transport):
 
             req.waiter.set_result(None)
             return True
+        except AttributeError:
+            raise NotImplementedError()
         except BlockingIOError:
             return False
 
