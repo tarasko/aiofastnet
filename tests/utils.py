@@ -152,7 +152,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
     def connection_made(self, transport):
         _logger.debug("AsyncClient.connection_made")
         self.transport = transport
-        effective_sndbuf = _set_socket_sndbuf(transport, 256*1024)
+        effective_sndbuf = _set_socket_sndbuf(transport, 128*1024)
         _logger.debug("AsyncClient SNDBUF set: %s", effective_sndbuf)
         ssl_protocol = self.transport.get_extra_info('ssl_protocol')
         if ssl_protocol is not None and hasattr(ssl_protocol, '_allow_renegotiation'):
@@ -234,7 +234,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
 
         if len(self._data) >= n:
             res = self._data[:n]
-            self.data = self._data[n:]
+            self._data = self._data[n:]
             return res
 
         self._readn_waiter = (n, asyncio.get_running_loop().create_future())

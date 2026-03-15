@@ -1,12 +1,15 @@
 import asyncio
+import tempfile
 import os
+import socket
 import ssl
 from _contextvars import ContextVar
+from contextlib import contextmanager
 
 import pytest
 
-import aiofastnet
 from aiofastnet import start_tls
+from aiofastnet import sendfile
 from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Transport
 from tests.utils import TestClient, TestServer, \
@@ -247,6 +250,97 @@ async def test_ssl_getpeercert_binary_form_without_verify():
             assert client_ssl_object.getpeercert(binary_form=False) == {}
             assert client_ssl_object.getpeercert(binary_form=True) == expected_der
 
+
+@contextmanager
+def TmpFromData(data):
+    with tempfile.TemporaryFile() as tmp:
+        tmp.write(data)
+        tmp.flush()
+        tmp.seek(0)
+        try:
+            yield tmp
+        finally:
+            pass
+
+
+@pytest.mark.skipif(os.name == "nt", reason="sendfile is implemented only for linux and macos")
+async def test_sendfile():
+    loop = asyncio.get_running_loop()
+    header = b"h" * (256*1024)
+    payload = b"p" * (3*1024*1024)
+    tail = b"t" * (256*1024)
+    with TmpFromData(payload) as tmp:
+        async with TestServer() as server:
+            async with TestClient(server) as client:
+                client.transport.write(header)
+                await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2)
+                assert client.transport.is_reading()
+                _logger.debug("Begin writing tail")
+                client.transport.write(tail)
+
+                reply = await client.readn(len(header))
+                assert reply == header
+                _logger.debug("Header successfully read")
+
+                reply = await client.readn(len(payload) - 2)
+                assert reply == payload[2:]
+                _logger.debug("Payload successfully read")
+
+                await asyncio.sleep(0.1)
+                reply = await client.readn(len(tail))
+                assert reply == tail
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only test")
+async def test_sendfile_win_not_implemented():
+    loop = asyncio.get_running_loop()
+    payload = b"p" * (1024)
+    with TmpFromData(payload) as tmp:
+        async with TestServer() as server:
+            async with TestClient(server) as client:
+                with pytest.raises(NotImplementedError):
+                    await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2)
+
+
+async def test_sendfile_ssl_not_implemented():
+    server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key")
+    loop = asyncio.get_running_loop()
+    payload = b"p" * (1024)
+    with TmpFromData(payload) as tmp:
+        async with TestServer(ssl_context=server_context) as server:
+            async with TestClient(server, ssl_context=client_context) as client:
+                with pytest.raises(NotImplementedError):
+                    await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2)
+
+
+# async def test_sendfile_native_disabled():
+#     payload = b"abcdef"
+#     loop = asyncio.get_running_loop()
+#     protocol = _SendfileTestProtocol()
+#     transport = _SendfileTestTransport(loop, protocol)
+#     tmp = _make_temp_binary_file(payload)
+#     try:
+#         with pytest.raises(asyncio.SendfileNotAvailableError):
+#             await sendfile(loop, transport, tmp, fallback=False)
+#     finally:
+#         name = tmp.name
+#         tmp.close()
+#         os.unlink(name)
+#
+#
+# async def test_sendfile_transport_closing():
+#     loop = asyncio.get_running_loop()
+#     protocol = _SendfileTestProtocol()
+#     transport = _SendfileTestTransport(loop, protocol, closing=True)
+#     tmp = _make_temp_binary_file(b"abcdef")
+#     try:
+#         with pytest.raises(RuntimeError, match="Transport is closing"):
+#             await sendfile(loop, transport, tmp)
+#     finally:
+#         name = tmp.name
+#         tmp.close()
+#         os.unlink(name)
+#
 
 async def test_exc_eof_received(conn_type):
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
@@ -532,7 +626,7 @@ async def test_start_tls():
 
         async def _start_tls(self):
             try:
-                self._transport = await aiofastnet.start_tls(
+                self._transport = await start_tls(
                     self._loop,
                     self._transport,
                     self,
@@ -545,7 +639,7 @@ async def test_start_tls():
 
         async def _start_tls_and_push(self):
             try:
-                self._transport = await aiofastnet.start_tls(
+                self._transport = await start_tls(
                     self._loop,
                     self._transport,
                     self,
