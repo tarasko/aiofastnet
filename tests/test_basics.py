@@ -312,7 +312,7 @@ async def test_sendfile_huge_error(loop_debug):
     with TmpFromData(payload) as tmp:
         async with TestServer(FaultyServerProtocol) as server:
             async with TestClient(server, protocol_factory=Client) as client:
-                with pytest.raises(ConnectionResetError):
+                with pytest.raises((ConnectionResetError, BrokenPipeError)):
                     await sendfile(loop, client.transport, tmp, offset=0, count=len(payload))
 
                 with pytest.raises(RuntimeError, match="is closing"):

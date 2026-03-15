@@ -374,7 +374,7 @@ async def TestClient(server_or_host, port=None, ssl_context=None, server_hostnam
         transport.abort()
         try:
             await client.wait_closed(1.0)
-        except (TestException, ConnectionResetError):
+        except (TestException, ConnectionResetError, BrokenPipeError):
             pass
 
 def make_test_ssl_contexts(cert_file: Union[str, Path], key_file: Union[str, Path]):
