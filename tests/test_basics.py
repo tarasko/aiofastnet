@@ -313,35 +313,6 @@ async def test_sendfile_ssl_not_implemented():
                     await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2)
 
 
-# async def test_sendfile_native_disabled():
-#     payload = b"abcdef"
-#     loop = asyncio.get_running_loop()
-#     protocol = _SendfileTestProtocol()
-#     transport = _SendfileTestTransport(loop, protocol)
-#     tmp = _make_temp_binary_file(payload)
-#     try:
-#         with pytest.raises(asyncio.SendfileNotAvailableError):
-#             await sendfile(loop, transport, tmp, fallback=False)
-#     finally:
-#         name = tmp.name
-#         tmp.close()
-#         os.unlink(name)
-#
-#
-# async def test_sendfile_transport_closing():
-#     loop = asyncio.get_running_loop()
-#     protocol = _SendfileTestProtocol()
-#     transport = _SendfileTestTransport(loop, protocol, closing=True)
-#     tmp = _make_temp_binary_file(b"abcdef")
-#     try:
-#         with pytest.raises(RuntimeError, match="Transport is closing"):
-#             await sendfile(loop, transport, tmp)
-#     finally:
-#         name = tmp.name
-#         tmp.close()
-#         os.unlink(name)
-#
-
 async def test_exc_eof_received(conn_type):
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
         pytest.skip("aiofastnet doesn't work with ProactorEventLoop")
