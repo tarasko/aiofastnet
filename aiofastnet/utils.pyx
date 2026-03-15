@@ -45,7 +45,7 @@ cpdef object aiofn_maybe_copy_buffer(object buffer):
 
 
 cpdef object aiofn_validate_and_maybe_copy_buffer(object buffer):
-    aiofn_maybe_copy_buffer(buffer)
+    aiofn_validate_buffer(buffer)
     return aiofn_maybe_copy_buffer(buffer)
 
 
