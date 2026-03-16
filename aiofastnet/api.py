@@ -13,7 +13,9 @@ import ssl
 import asyncio
 import sys
 import weakref
+from collections.abc import Callable
 from logging import getLogger
+from typing import Optional, Tuple, Union
 
 from . import constants
 from .ssl_protocol import SSLProtocol
@@ -26,7 +28,7 @@ from .wrapped_transport import (
 )
 
 _HAS_IPv6 = hasattr(socket, 'AF_INET6')
-_logger = getLogger('fastnet')
+_logger = getLogger('aiofastnet')
 
 
 def _is_asyncio_loop(loop: asyncio.AbstractEventLoop) -> bool:
@@ -59,41 +61,6 @@ async def create_connection(
     in the background.  When successful, the coroutine returns a
     (transport, protocol) pair.
     """
-    if _should_fallback_to_asyncio(loop):
-        kwargs = {
-            'host': host,
-            'port': port,
-            'ssl': ssl,
-            'family': family,
-            'proto': proto,
-            'flags': flags,
-            'sock': sock,
-            'local_addr': local_addr,
-            'server_hostname': server_hostname,
-            'ssl_handshake_timeout': ssl_handshake_timeout
-        }
-        if sys.version_info >= (3, 11):
-            kwargs['ssl_shutdown_timeout'] = ssl_shutdown_timeout
-        if sys.version_info >= (3, 12) and _is_asyncio_loop(loop):
-            kwargs['all_errors'] = all_errors
-        if _is_asyncio_loop(loop):
-            kwargs['interleave'] = interleave
-            kwargs['happy_eyeballs_delay'] = happy_eyeballs_delay
-
-        def wrapped_protocol_factory():
-            user_protocol = protocol_factory()
-            if aiofn_is_buffered_protocol(user_protocol):
-                return _WrappedBufferedProtocol(user_protocol)
-            else:
-                return _WrappedProtocol(user_protocol)
-
-        transport, wrapped_protocol = await loop.create_connection(wrapped_protocol_factory, **kwargs)
-        wrapped_transport = wrapped_protocol._wrapped_transport
-        protocol = wrapped_protocol._protocol
-        wrapped_protocol._wrapped_transport = None
-
-        return wrapped_transport, protocol
-
     if server_hostname is not None and not ssl:
         raise ValueError('server_hostname is only meaningful with ssl')
 
@@ -215,7 +182,9 @@ async def create_connection(
 
     transport, protocol = await _create_connection_transport(
         loop,
-        sock, protocol_factory, ssl, server_hostname,
+        sock, protocol_factory, ssl,
+        server_hostname=server_hostname,
+        server_side=False,
         ssl_handshake_timeout=ssl_handshake_timeout,
         ssl_shutdown_timeout=ssl_shutdown_timeout)
     if loop.get_debug():
@@ -256,35 +225,6 @@ async def create_server(
 
     This method is a coroutine.
     """
-    if _should_fallback_to_asyncio(loop):
-        kwargs = {
-            'host': host,
-            'port': port,
-            'family': family,
-            'flags': flags,
-            'sock': sock,
-            'backlog': backlog,
-            'ssl': ssl,
-            'reuse_address': reuse_address,
-            'reuse_port': reuse_port,
-            'ssl_handshake_timeout': ssl_handshake_timeout,
-            'start_serving': start_serving
-        }
-        if sys.version_info >= (3, 13) and _is_asyncio_loop(loop):
-            kwargs['keep_alive'] = keep_alive
-
-        if sys.version_info >= (3, 11):
-            kwargs['ssl_shutdown_timeout'] = ssl_shutdown_timeout
-
-        def wrapped_protocol_factory():
-            user_protocol = protocol_factory()
-            if aiofn_is_buffered_protocol(user_protocol):
-                return _WrappedBufferedProtocol(user_protocol)
-            else:
-                return _WrappedProtocol(user_protocol)
-
-        return await loop.create_server(wrapped_protocol_factory, **kwargs)
-
     if isinstance(ssl, bool):
         raise TypeError('ssl argument must be an SSLContext or None')
 
@@ -589,48 +529,29 @@ def _accept_connection(
             else:
                 raise  # The event loop will catch, log and ignore it.
         else:
-            extra = {'peername': addr}
             accept = _accept_connection2(
-                loop, protocol_factory, conn, extra, sslcontext, server,
+                loop, protocol_factory, conn, sslcontext, server,
                 ssl_handshake_timeout, ssl_shutdown_timeout)
             asyncio.create_task(accept)
 
 
 async def _accept_connection2(
         loop,
-        protocol_factory, conn, extra,
+        protocol_factory,
+        sock,
         sslcontext=None, server=None,
         ssl_handshake_timeout=constants.SSL_HANDSHAKE_TIMEOUT,
         ssl_shutdown_timeout=constants.SSL_SHUTDOWN_TIMEOUT):
     protocol = None
     transport = None
     try:
-        protocol = protocol_factory()
-        waiter = loop.create_future()
-        if sslcontext:
-            transport = _make_ssl_transport(
-                loop,
-                conn, protocol, sslcontext, waiter=waiter,
-                server_side=True, extra=extra, server=server,
-                ssl_handshake_timeout=ssl_handshake_timeout,
-                ssl_shutdown_timeout=ssl_shutdown_timeout)
-        else:
-            transport = _make_socket_transport(
-                loop,
-                conn, protocol, waiter=waiter, extra=extra,
-                server=server)
-
-        try:
-            await waiter
-        except BaseException:
-            transport.close()
-            # gh-109534: When an exception is raised by the SSLProtocol object the
-            # exception set in this future can keep the protocol object alive and
-            # cause a reference cycle.
-            waiter = None
-            raise
-            # It's now up to the protocol to handle the connection.
-
+        transport, protocol = await _create_connection_transport(
+            loop, sock, protocol_factory, sslcontext,
+            server_hostname=None, server_side=True,
+            ssl_handshake_timeout=ssl_handshake_timeout,
+            ssl_shutdown_timeout=ssl_shutdown_timeout,
+            server=server
+        )
     except (SystemExit, KeyboardInterrupt):
         raise
     except BaseException as exc:
@@ -779,31 +700,82 @@ async def _connect_sock(loop, exceptions, addr_info, local_addr_infos=None):
 
 
 async def _create_connection_transport(
-        loop,
-        sock, protocol_factory, ssl,
-        server_hostname, server_side=False,
-        ssl_handshake_timeout=None,
-        ssl_shutdown_timeout=None):
+        loop: asyncio.AbstractEventLoop,
+        sock: socket.socket,
+        protocol_factory: Callable[[], asyncio.BaseProtocol],
+        ssl: Union[bool, ssl.SSLContext, None],
+        server_hostname: Optional[str]=None,
+        server_side: bool=False,
+        ssl_handshake_timeout: Optional[float]=None,
+        ssl_shutdown_timeout: Optional[float]=None,
+        server=None
+) -> Tuple[asyncio.Transport, asyncio.BaseProtocol]:
     sock.setblocking(False)
 
-    protocol = protocol_factory()
-    waiter = loop.create_future()
-    if ssl:
-        sslcontext = None if isinstance(ssl, bool) else ssl
-        transport = _make_ssl_transport(
-            loop,
-            sock, protocol, sslcontext, waiter,
-            server_side=server_side, server_hostname=server_hostname,
-            ssl_handshake_timeout=ssl_handshake_timeout,
-            ssl_shutdown_timeout=ssl_shutdown_timeout)
-    else:
-        transport = _make_socket_transport(loop, sock, protocol, waiter)
+    # The following big nested if-else should set transport, protocol, and
+    # optionally waiter variables
+    waiter = None
+    if _should_fallback_to_asyncio(loop):
+        if ssl:
+            protocol = protocol_factory()
+            waiter = loop.create_future()
+            sslcontext = None if isinstance(ssl, bool) else ssl
 
-    try:
-        await waiter
-    except:
-        transport.close()
-        raise
+            ssl_protocol_factory = lambda: SSLProtocol(
+                loop, protocol, sslcontext, waiter,
+                server_side, server_hostname,
+                ssl_handshake_timeout=ssl_handshake_timeout,
+                ssl_shutdown_timeout=ssl_shutdown_timeout
+            )
+            loop_transport, ssl_protocol = await loop.create_connection(
+                ssl_protocol_factory, None, None, sock=sock)
+            transport = ssl_protocol.get_app_transport()
+        else:
+            def wrapped_protocol_factory():
+                user_protocol = protocol_factory()
+                if aiofn_is_buffered_protocol(user_protocol):
+                    return _WrappedBufferedProtocol(user_protocol)
+                else:
+                    return _WrappedProtocol(user_protocol)
+
+            loop_transport, wrapped_protocol = await loop.create_connection(
+                wrapped_protocol_factory, None, None, sock=sock)
+            transport = wrapped_protocol._wrapped_transport
+            protocol = wrapped_protocol._protocol
+            wrapped_protocol._wrapped_transport = None
+
+        # Ugly but I don't know how else to attach conventional transport
+        # to my Server object
+        if server is not None:
+            loop_transport._server = server
+            server._attach(loop_transport)
+    else:
+        protocol = protocol_factory()
+        waiter = loop.create_future()
+        if ssl:
+            sslcontext = None if isinstance(ssl, bool) else ssl
+
+            ssl_protocol = SSLProtocol(
+                loop, protocol, sslcontext, waiter,
+                server_side, server_hostname,
+                ssl_handshake_timeout=ssl_handshake_timeout,
+                ssl_shutdown_timeout=ssl_shutdown_timeout
+            )
+            _make_socket_transport(loop, sock, ssl_protocol)
+            transport = ssl_protocol.get_app_transport()
+        else:
+            transport = _make_socket_transport(loop, sock, protocol, waiter)
+
+    if waiter is not None:
+        try:
+            await waiter
+        except:
+            transport.close()
+            # gh-109534: When an exception is raised by the SSLProtocol object the
+            # exception set in this future can keep the protocol object alive and
+            # cause a reference cycle.
+            waiter = None
+            raise
 
     return transport, protocol
 
@@ -848,8 +820,7 @@ def _make_ssl_transport(
         ssl_handshake_timeout=ssl_handshake_timeout,
         ssl_shutdown_timeout=ssl_shutdown_timeout
     )
-    SelectorSocketTransport(loop, rawsock, ssl_protocol,
-                            extra=extra, server=server)
+    _make_socket_transport(loop, rawsock, ssl_protocol, extra=extra, server=server)
     return ssl_protocol.get_app_transport()
 
 

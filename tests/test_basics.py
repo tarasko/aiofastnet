@@ -742,5 +742,17 @@ async def test_start_tls():
             assert client.is_eof_received
 
 
+async def test_peername(conn_type):
+    async with TestServer(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
+        async with TestClient(server, ssl_context=conn_type.client_ssl_context, is_buffered=buffered_protocol) as client:
+            server_client = await server.get_any_server_client()
+            client_peername = client.transport.get_extra_info('peername')
+            client_sockname = client.transport.get_extra_info('sockname')
+            server_peername = server_client.transport.get_extra_info('peername')
+            server_sockname = server_client.transport.get_extra_info('sockname')
+            assert client_peername == server_sockname
+            assert server_peername == client_sockname
+
+
 # Exception from send due to file error should cause fatal error
 # Graceful disconnect should flush all data

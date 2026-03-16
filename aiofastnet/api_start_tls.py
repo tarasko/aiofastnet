@@ -1,9 +1,8 @@
 import asyncio
 import ssl
 
-from aiofastnet.api import _logger
-from aiofastnet.ssl_protocol import SSLProtocol
-from aiofastnet.wrapped_transport import _WrappedTransport
+from .ssl_protocol import SSLProtocol
+from .wrapped_transport import _WrappedTransport
 
 
 async def start_tls(loop: asyncio.AbstractEventLoop,
@@ -19,7 +18,6 @@ async def start_tls(loop: asyncio.AbstractEventLoop,
     """
     if isinstance(transport, _WrappedTransport):
         transport = transport._transport
-        _logger.debug("Unwrap _WrappedTransport")
 
     if ssl is None:
         raise RuntimeError('Python ssl module is not available')
