@@ -197,7 +197,8 @@ async def create_connection(
 
 
 async def create_server(
-        loop, protocol_factory, host=None, port=None,
+        loop: asyncio.AbstractEventLoop,
+        protocol_factory, host=None, port=None,
         *,
         family=socket.AF_UNSPEC,
         flags=socket.AI_PASSIVE,
@@ -235,6 +236,43 @@ async def create_server(
     if ssl_shutdown_timeout is not None and ssl is None:
         raise ValueError(
             'ssl_shutdown_timeout is only meaningful with ssl')
+
+    if _should_fallback_to_asyncio(loop):
+        kwargs = {
+            'host': host,
+            'port': port,
+            'family': family,
+            'flags': flags,
+            'sock': sock,
+            'backlog': backlog,
+            'reuse_address': reuse_address,
+            'reuse_port': reuse_port,
+            'start_serving': start_serving
+        }
+        if sys.version_info >= (3, 13) and _is_asyncio_loop(loop):
+            kwargs['keep_alive'] = keep_alive
+
+        if ssl:
+            sslcontext = None if isinstance(ssl, bool) else ssl
+
+            def ssl_protocol_factory():
+                protocol = protocol_factory()
+                return SSLProtocol(
+                    loop, protocol, sslcontext, None,
+                    True,
+                    ssl_handshake_timeout=ssl_handshake_timeout,
+                    ssl_shutdown_timeout=ssl_shutdown_timeout
+                )
+            return await loop.create_server(ssl_protocol_factory, **kwargs)
+        else:
+            def wrapped_protocol_factory():
+                user_protocol = protocol_factory()
+                if aiofn_is_buffered_protocol(user_protocol):
+                    return _WrappedBufferedProtocol(user_protocol)
+                else:
+                    return _WrappedProtocol(user_protocol)
+
+            return await loop.create_server(wrapped_protocol_factory, **kwargs)
 
     if sock is not None:
         _check_ssl_socket(sock)
@@ -761,10 +799,11 @@ async def _create_connection_transport(
                 ssl_handshake_timeout=ssl_handshake_timeout,
                 ssl_shutdown_timeout=ssl_shutdown_timeout
             )
-            _make_socket_transport(loop, sock, ssl_protocol)
+            SelectorSocketTransport(loop, sock, ssl_protocol, server=server)
             transport = ssl_protocol.get_app_transport()
         else:
-            transport = _make_socket_transport(loop, sock, protocol, waiter)
+            transport = SelectorSocketTransport(loop, sock, protocol,
+                                                waiter=waiter, server=server)
 
     if waiter is not None:
         try:
@@ -805,29 +844,6 @@ def _interleave_addrinfos(addrinfos, first_address_family_count=1):
             itertools.zip_longest(*addrinfos_lists)
         ) if a is not None)
     return reordered
-
-
-def _make_ssl_transport(
-        loop, rawsock, protocol, sslcontext, waiter=None,
-        *, server_side=False, server_hostname=None,
-        extra=None, server=None,
-        ssl_handshake_timeout=60.0,
-        ssl_shutdown_timeout=30.0,
-):
-    ssl_protocol = SSLProtocol(
-        loop, protocol, sslcontext, waiter,
-        server_side, server_hostname,
-        ssl_handshake_timeout=ssl_handshake_timeout,
-        ssl_shutdown_timeout=ssl_shutdown_timeout
-    )
-    _make_socket_transport(loop, rawsock, ssl_protocol, extra=extra, server=server)
-    return ssl_protocol.get_app_transport()
-
-
-def _make_socket_transport(loop, sock, protocol, waiter=None, *,
-                           extra=None, server=None):
-    return SelectorSocketTransport(loop, sock, protocol, waiter,
-                                   extra, server)
 
 
 def _set_reuseport(sock):
