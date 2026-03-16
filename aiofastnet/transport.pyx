@@ -91,7 +91,7 @@ cdef class SendFileRequest:
         return self.count
 
 
-cdef class SelectorSocketTransport(Transport):
+cdef class SocketTransport(Transport):
     cdef:
         object __weakref__
         object _loop
@@ -160,7 +160,7 @@ cdef class SelectorSocketTransport(Transport):
             self._loop.call_soon(_set_result_unless_cancelled, waiter, None)
 
     def __repr__(self):
-        info = [f'fd={self._sock_fd_obj}', 'TCPTransport']
+        info = [f'fd={self._sock_fd_obj}', 'SocketTransport']
         if self._sock is None:
             info.append('closed')
         elif self._closing:

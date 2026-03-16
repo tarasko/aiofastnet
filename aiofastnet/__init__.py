@@ -1,7 +1,5 @@
-from .api import (
-    create_connection,
-    create_server
-)
+from .api_create_server import create_server
+from .api_create_connection import create_connection
 from .api_start_tls import start_tls
 from .api_sendfile import sendfile
 
@@ -21,5 +19,5 @@ __all__ = [
     'aiofn_is_buffered_protocol'
 ]
 
-__version__ = "0.0.8"
+__version__ = "0.1.0"
 __author__ = "Taras Kozlov"

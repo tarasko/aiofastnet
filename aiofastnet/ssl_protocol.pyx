@@ -301,7 +301,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         self._loop = loop
         self._set_app_protocol(app_protocol)
         self._app_transport = None
-        # transport, ex: SelectorSocketTransport
+        # transport, ex: SocketTransport
         self._transport = None
         self._is_aiofn_transport = False
         self._ssl_handshake_timeout = ssl_handshake_timeout

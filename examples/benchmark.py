@@ -9,6 +9,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import aiofastnet
+from aiofastnet import create_connection
 
 from examples.benchmark_protocol import ServerProtocol, ClientProtocol
 
@@ -49,7 +50,7 @@ async def run_benchmark(args, loop_kind: str, use_aiofastnet: bool, transport_ki
 
     if use_aiofastnet:
         create_server = partial(aiofastnet.create_server, loop)
-        create_connection = partial(aiofastnet.create_connection, loop)
+        create_connection = partial(create_connection, loop)
     else:
         create_server = loop.create_server
         create_connection = loop.create_connection

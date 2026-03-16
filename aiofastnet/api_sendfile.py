@@ -1,7 +1,7 @@
 import asyncio
 import os
 
-from .transport import Transport, SelectorSocketTransport
+from .transport import Transport, SocketTransport
 
 
 async def sendfile(loop: asyncio.AbstractEventLoop,
@@ -25,7 +25,7 @@ async def sendfile(loop: asyncio.AbstractEventLoop,
     if transport.is_closing():
         raise RuntimeError("Transport is closing")
 
-    if isinstance(transport, SelectorSocketTransport):
+    if isinstance(transport, SocketTransport):
         return await transport.sendfile(file, offset, count)
 
     raise NotImplementedError()
