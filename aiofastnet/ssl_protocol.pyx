@@ -20,23 +20,10 @@ from .utils cimport (
     aiofn_allocate_bytes,
     aiofn_finalize_bytes
 )
-from .transport cimport Transport, Protocol, aiofn_is_buffered_protocol
+from .transport cimport Transport, Protocol
 from .ssl_object cimport SSLObject, SSLError, ssl_error_name
-
+from .transport import aiofn_is_buffered_protocol
 from .openssl cimport SSL_RECEIVED_SHUTDOWN
-
-
-cdef:
-    Py_ssize_t SSL_READ_BUFFER_SIZE = 128 * 1024
-    Py_ssize_t SSL_WRITE_BUFFER_SIZE = 128 * 1024
-
-    # Number of seconds to wait for SSL handshake to complete
-    # The default timeout matches that of Nginx.
-    float SSL_HANDSHAKE_TIMEOUT = 60.0
-
-    # Number of seconds to wait for SSL shutdown to complete
-    # The default timeout mimics lingering_time
-    float SSL_SHUTDOWN_TIMEOUT = 30.0
 
 
 cpdef enum SSLProtocolState:
@@ -45,7 +32,6 @@ cpdef enum SSLProtocolState:
     WRAPPED = 2
     FLUSHING = 3
     SHUTDOWN = 4
-
 
 
 cdef enum AppProtocolState:
@@ -216,8 +202,6 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
     """
 
     cdef:
-        bint _server_side
-        str _server_hostname
         object _ssl_context
         SSLObject _ssl_object
 
@@ -257,7 +241,10 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                  server_side=False, server_hostname=None,
                  call_connection_made=True,
                  ssl_handshake_timeout=None,
-                 ssl_shutdown_timeout=None):
+                 ssl_shutdown_timeout=None,
+                 ssl_incoming_bio_size=None,
+                 ssl_outgoing_bio_size=None
+                 ):
 
         # Normally, call_connection_made is True except when SSLProtocol is
         # created by start_tls. In such case user protocol does not expect
@@ -269,17 +256,27 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         # I don't quite understand why create_server needs it.
 
         if ssl_handshake_timeout is None:
-            ssl_handshake_timeout = SSL_HANDSHAKE_TIMEOUT
+            ssl_handshake_timeout = constants.SSL_HANDSHAKE_TIMEOUT
         elif ssl_handshake_timeout <= 0:
             raise ValueError(
                 f"ssl_handshake_timeout should be a positive number, "
                 f"got {ssl_handshake_timeout}")
         if ssl_shutdown_timeout is None:
-            ssl_shutdown_timeout = SSL_SHUTDOWN_TIMEOUT
+            ssl_shutdown_timeout = constants.SSL_SHUTDOWN_TIMEOUT
         elif ssl_shutdown_timeout <= 0:
             raise ValueError(
                 f"ssl_shutdown_timeout should be a positive number, "
                 f"got {ssl_shutdown_timeout}")
+
+        if ssl_incoming_bio_size is None:
+            ssl_incoming_bio_size = constants.SSL_INCOMING_BIO_SIZE
+        else:
+            ssl_incoming_bio_size = max(ssl_incoming_bio_size, 16*1024 + 256)
+
+        if ssl_outgoing_bio_size is None:
+            ssl_outgoing_bio_size = constants.SSL_OUTGOING_BIO_SIZE
+        else:
+            ssl_outgoing_bio_size = max(ssl_outgoing_bio_size, 16*1024 + 256)
 
         if server_side and not sslcontext:
             raise ValueError('Server side SSL needs a valid SSLContext')
@@ -287,10 +284,14 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         if not sslcontext or sslcontext == True:
             sslcontext = _create_transport_context(server_side, server_hostname)
 
-        self._server_side = server_side
-        self._server_hostname = None if server_side else server_hostname
         self._ssl_context = sslcontext
-        self._ssl_object = None
+        self._ssl_object = SSLObject(
+                self._ssl_context,
+                server_side,
+                None if server_side else server_hostname,
+                ssl_incoming_bio_size,
+                ssl_outgoing_bio_size
+            )
         # SSL-specific extra info. More info are set when the handshake
         # completes.
         self._extra = dict(sslcontext=sslcontext)
@@ -331,7 +332,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             info = [f"fd=n/a"]
 
         info.append(self.__class__.__name__)
-        if self._server_side:
+        if self._ssl_object.server_side:
             info.append("server")
         else:
             info.append("client")
@@ -549,18 +550,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             self._loop.call_later(self._ssl_handshake_timeout,
                                   self._check_handshake_timeout)
 
-        try:
-            self._ssl_object = SSLObject(
-                self._ssl_context,
-                self._server_side,
-                self._server_hostname,
-                SSL_READ_BUFFER_SIZE,
-                SSL_WRITE_BUFFER_SIZE
-            )
-        except Exception as ex:
-            self._on_handshake_complete(ex)
-        else:
-            self._do_handshake()
+        self._do_handshake()
 
     cdef inline _check_handshake_timeout(self):
         if self._state == DO_HANDSHAKE:
@@ -706,31 +696,40 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             bytearray buffer = PyByteArray_FromStringAndSize(NULL, 16*1024)
             size_t bytes_read
             int rc = 1
-        while rc == 1:
+            int ssl_error
+
+        while True:
             rc = self._ssl_object.read_ex(
                 PyByteArray_AS_STRING(buffer),
                 PyByteArray_GET_SIZE(buffer),
                 &bytes_read
             )
 
-            if rc == 1 and self._is_debug:
-                _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d",
-                              self, PyByteArray_GET_SIZE(buffer), bytes_read, rc)
+            if rc == 1:
+                if self._is_debug:
+                    _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d",
+                                  self, PyByteArray_GET_SIZE(buffer), bytes_read, rc)
+                continue
 
-        cdef int ssl_error = self._ssl_object.get_error(rc)
-        if self._is_debug:
-            _logger.debug("%r: SSL_read_ex(buf_len=%d, ...)=%d, %s",
-                          self, PyByteArray_GET_SIZE(buffer),
-                          rc, ssl_error_name(ssl_error))
+            ssl_error = self._ssl_object.get_error(rc)
+            if self._is_debug:
+                _logger.debug("%r: SSL_read_ex(buf_len=%d, ...)=%d, %s",
+                              self, PyByteArray_GET_SIZE(buffer),
+                              rc, ssl_error_name(ssl_error))
 
-        if ssl_error in (SSLError.SSL_ERROR_WANT_READ, SSLError.SSL_ERROR_WANT_WRITE):
-            return
+            self._maybe_send_outgoing(True)
 
-        if ssl_error == SSLError.SSL_ERROR_ZERO_RETURN:
-            self._call_eof_received()
-            return
+            if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
+                continue
 
-        raise self._ssl_object.make_exc_from_ssl_error("SSL_read_ex failed", ssl_error)
+            if ssl_error == SSLError.SSL_ERROR_WANT_READ:
+                return
+
+            if ssl_error == SSLError.SSL_ERROR_ZERO_RETURN:
+                self._call_eof_received()
+                return
+
+            raise self._ssl_object.make_exc_from_ssl_error("SSL_read_ex failed", ssl_error)
 
     cdef inline _do_flush(self):
         """Flush the write backlog, discarding new data received.
@@ -1015,7 +1014,6 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                 # (if SSL_ENABLE_PARTIAL_WRITE is set)
                 data_ptr += bytes_written
                 data_len -= bytes_written
-                self._maybe_send_outgoing(False)
             else:
                 ssl_error = self._ssl_object.get_error(rc)
 
@@ -1057,7 +1055,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         if sz <= 0:
             return
 
-        if sz < SSL_WRITE_BUFFER_SIZE and not is_last:
+        if not is_last:
             return
 
         if self._is_aiofn_transport:

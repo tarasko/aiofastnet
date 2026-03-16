@@ -1,12 +1,10 @@
 import collections
-import errno
 import os
 import socket
 import sys
 import warnings
 import asyncio
 from asyncio.trsock import TransportSocket
-from itertools import count
 from logging import getLogger
 
 from cpython.memoryview cimport PyMemoryView_FromMemory
@@ -18,7 +16,7 @@ from . import constants
 from .utils cimport *
 
 
-cdef object _logger = getLogger('aiofastnet.transport')
+cdef object _logger = getLogger('aiofastnet')
 cdef object _DATA_RECEIVED_MAX_SIZE = 256 * 1024
 
 

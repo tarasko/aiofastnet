@@ -91,7 +91,7 @@ cdef Py_ssize_t _bio_pending(BIO* bio) except -1:
 
 
 cdef class SSLObject:
-    def __init__(self, ssl_context, bint is_server, str server_hostname,
+    def __init__(self, ssl_context, bint server_side, str server_hostname,
                  Py_ssize_t read_buffer_size, Py_ssize_t write_buffer_size):
         ERR_clear_error()
 
@@ -114,6 +114,7 @@ cdef class SSLObject:
 
         self.ssl = SSL_new(self.ssl_ctx)
         self.server_hostname = server_hostname
+        self.server_side = server_side
 
         if self.incoming == NULL or self.outgoing == NULL or self.ssl == NULL:
             if self.incoming != NULL:
@@ -127,7 +128,7 @@ cdef class SSLObject:
                 self.ssl = NULL
             raise MemoryError("Unable to initialize OpenSSL objects")
 
-        if is_server:
+        if server_side:
             SSL_set_accept_state(self.ssl)
         else:
             SSL_set_connect_state(self.ssl)

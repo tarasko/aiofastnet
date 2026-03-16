@@ -12,3 +12,8 @@ SSL_HANDSHAKE_TIMEOUT = 60.0
 # The default timeout mimics lingering_time
 SSL_SHUTDOWN_TIMEOUT = 30.0
 
+# Static size for the incoming SSL BIO
+SSL_INCOMING_BIO_SIZE = 128 * 1024
+
+# Static size for the outgoing SSL BIO
+SSL_OUTGOING_BIO_SIZE = 128 * 1024

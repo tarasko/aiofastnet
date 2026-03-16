@@ -28,6 +28,7 @@ cdef class SSLObject:
         BIO* outgoing
         SSL* ssl
         str server_hostname
+        bint server_side
 
     # Exposed to the end user
     cpdef tuple cipher(self)
