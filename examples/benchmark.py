@@ -173,7 +173,7 @@ def main():
     parser.add_argument(
         "--sndbuf-size",
         type=int,
-        default=256*1024,
+        default=64*1024,
         help="Socket SO_SNDBUF value to request",
     )
     parser.add_argument("--save-plot", action="store_true", help="Save plot to examples/benchmark.png")
