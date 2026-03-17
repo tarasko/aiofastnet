@@ -71,6 +71,7 @@ const char *openssl_compat_last_error(void);
 
 extern BIO *(*aiofn_BIO_new)(const BIO_METHOD *type);
 extern int (*aiofn_BIO_free)(BIO *a);
+extern int (*aiofn_BIO_socket_nbio)(int fd, int mode);
 extern long (*aiofn_BIO_ctrl)(BIO *bp, int cmd, long larg, void *parg);
 extern void (*aiofn_BIO_set_flags)(BIO *b, int flags);
 extern void (*aiofn_BIO_clear_flags)(BIO *b, int flags);
@@ -115,6 +116,7 @@ extern long (*aiofn_SSL_get_verify_result)(const SSL *ssl);
 extern X509 *(*aiofn_SSL_get_peer_certificate)(const SSL *ssl);
 extern void (*aiofn_SSL_get0_alpn_selected)(const SSL *ssl, const unsigned char **data,
                                             unsigned int *len);
+extern void (*aiofn_SSL_set_read_ahead)(SSL *s, int yes);
 
 extern const SSL_CIPHER *(*aiofn_SSL_get_current_cipher)(const SSL *ssl);
 extern const char *(*aiofn_SSL_CIPHER_get_name)(const SSL_CIPHER *cipher);
@@ -154,6 +156,7 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 
 #define BIO_new aiofn_BIO_new
 #define BIO_free aiofn_BIO_free
+#define BIO_socket_nbio aiofn_BIO_socket_nbio
 #define BIO_ctrl aiofn_BIO_ctrl
 #define BIO_set_flags aiofn_BIO_set_flags
 #define BIO_clear_flags aiofn_BIO_clear_flags
@@ -206,6 +209,7 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define SSL_CIPHER_get_bits aiofn_SSL_CIPHER_get_bits
 #define SSL_get0_param aiofn_SSL_get0_param
 #define SSL_CTX_get0_param aiofn_SSL_CTX_get0_param
+#define SSL_set_read_ahead aiofn_SSL_set_read_ahead
 
 #define X509_VERIFY_PARAM_get_hostflags aiofn_X509_VERIFY_PARAM_get_hostflags
 #define X509_VERIFY_PARAM_set_hostflags aiofn_X509_VERIFY_PARAM_set_hostflags

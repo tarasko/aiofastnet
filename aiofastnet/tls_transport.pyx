@@ -6,21 +6,23 @@ from asyncio.trsock import TransportSocket
 from logging import getLogger
 
 from cpython.bytearray cimport PyByteArray_AS_STRING, PyByteArray_GET_SIZE
-from cpython.buffer cimport PyBUF_WRITE
 from cpython.bytes cimport PyBytes_FromStringAndSize, PyBytes_AS_STRING
-from cpython.memoryview cimport PyMemoryView_FromMemory
+from cpython.object cimport PyObject
+from libc.stdint cimport uint8_t
 
 from . import constants
 from .utils cimport (
     aiofn_unpack_buffer,
     aiofn_validate_buffer,
     aiofn_maybe_copy_buffer,
-    aiofn_maybe_copy_buffer_tail
+    aiofn_maybe_copy_buffer_tail,
+    aiofn_allocate_bytes,
+    aiofn_finalize_bytes
 )
 from .transport cimport Transport, Protocol
-from .transport import aiofn_is_buffered_protocol
-from .ssl_object cimport SSLObject, SSLError, load_openssl, ssl_error_name
+from .ssl_object cimport (SSLObject, SSLError, load_openssl, ssl_error_name)
 from .openssl cimport SSL_RECEIVED_SHUTDOWN
+from .transport import aiofn_is_buffered_protocol
 
 
 cdef object _logger = getLogger('aiofastnet.tls')
@@ -82,7 +84,8 @@ cdef class TlsTransport(Transport):
         bint _closing
         bint _paused
         bint _writer_active
-        bint _write_wanted
+        bint _want_write
+        bint _want_read
         bint _is_debug
 
         SSLObject _ssl_object
@@ -156,7 +159,8 @@ cdef class TlsTransport(Transport):
         self._closing = False
         self._paused = False
         self._writer_active = False
-        self._write_wanted = False
+        self._want_write = False
+        self._want_read = False
         self._is_debug = loop.get_debug()
         self._server_side = server_side
         self._server_hostname = None if server_side else server_hostname
@@ -261,6 +265,8 @@ cdef class TlsTransport(Transport):
         self._start_shutdown()
 
     cpdef abort(self):
+        if self._is_debug:
+            _logger.debug("%r: user called abort()", self)
         self._abort(None)
 
     def write_eof(self):
@@ -304,7 +310,7 @@ cdef class TlsTransport(Transport):
         self._set_state(DO_HANDSHAKE)
         self._handshake_timeout_handle = self._loop.call_later(
             self._ssl_handshake_timeout, self._check_handshake_timeout)
-        self._do_handshake()
+        self._read_ready()
 
     cdef inline _check_handshake_timeout(self):
         if self._state == DO_HANDSHAKE:
@@ -312,53 +318,52 @@ cdef class TlsTransport(Transport):
                 f"SSL handshake is taking longer than {self._ssl_handshake_timeout} seconds: aborting the connection"))
 
     cdef inline _do_handshake(self):
-        cdef int rc
-        cdef int ssl_error
-
-        while True:
-            rc = self._ssl_object.do_handshake()
-            if rc == 1:
-                self._write_wanted = False
-                self._drop_writer()
-                self._on_handshake_complete(None)
-                return
-
-            ssl_error = self._ssl_object.get_error(rc)
-            if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
-                self._write_wanted = True
-                self._ensure_writer()
-                return
-            if ssl_error == SSLError.SSL_ERROR_WANT_READ:
-                self._write_wanted = False
-                self._drop_writer()
-                return
-
-            self._on_handshake_complete(
-                self._ssl_object.make_exc_from_ssl_error("ssl handshake failed", ssl_error))
+        cdef int rc = self._ssl_object.do_handshake()
+        if rc == 1:
+            if self._is_debug:
+                _logger.debug("%r: SSL_do_handshake() = %d", self, rc)
+            self._on_handshake_complete(None)
             return
+
+        cdef int ssl_error = self._ssl_object.get_error(rc)
+
+        if self._is_debug:
+            _logger.debug("%r: SSL_do_handshake() = %d, %s",
+                          self, rc, ssl_error_name(ssl_error))
+
+        if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
+            self._ensure_writer()
+            return
+
+        if ssl_error == SSLError.SSL_ERROR_WANT_READ:
+            self._want_read = True
+            return
+
+        exc = self._ssl_object.make_exc_from_ssl_error(
+            "ssl handshake failed", ssl_error)
+        self._on_handshake_complete(exc)
 
     cdef inline _on_handshake_complete(self, handshake_exc):
         if self._handshake_timeout_handle is not None:
             self._handshake_timeout_handle.cancel()
             self._handshake_timeout_handle = None
 
-        try:
-            if handshake_exc is None:
-                self._set_state(WRAPPED)
-            else:
-                raise handshake_exc
-        except Exception as exc:
+        if handshake_exc is not None:
             self._set_state(UNWRAPPED)
-            self._fatal_error(exc, 'SSL handshake failed')
-            self._wakeup_waiter(exc)
+            self._fatal_error(handshake_exc, 'SSL handshake failed')
+            self._wakeup_waiter(handshake_exc)
             return
+
+        self._set_state(WRAPPED)
+
+        _logger.debug("%r: BIO_get_ktls_send(wbio)=%d",
+                      self, self._ssl_object.ktls_send_enabled())
 
         self._extra.update(
             peercert=self._ssl_object.getpeercert(),
             cipher=self._ssl_object.cipher(),
             compression=self._ssl_object.compression()
         )
-        _logger.info("%r: BIO_get_ktls_send(wbio)=%d", self, self._ssl_object.ktls_send_enabled())
         self._wakeup_waiter()
         if self._app_state == STATE_INIT:
             self._app_state = STATE_CON_MADE
@@ -370,6 +375,238 @@ cdef class TlsTransport(Transport):
                 self._fatal_error_no_close(exc, "user connection_made raised an exception")
         self._loop.call_soon(self._read_ready)
 
+    cpdef _do_read(self):
+        if self._paused:
+            return
+
+        if self._app_protocol_is_buffered:
+            self._do_read__buffered()
+        else:
+            self._do_read__copied()
+
+    cdef inline _do_read__buffered(self):
+        cdef char* buf_ptr
+        cdef Py_ssize_t buf_len
+        cdef size_t last_bytes_read = 0
+        cdef Py_ssize_t total_bytes_read = 0
+        cdef int rc = 0
+
+        if self._app_protocol_aiofn:
+            app_buffer = (<Protocol>self._app_protocol).get_buffer_c(-1, &buf_ptr, &buf_len)
+        else:
+            app_buffer = self._app_protocol.get_buffer(-1)
+            aiofn_unpack_buffer(app_buffer, &buf_ptr, &buf_len)
+
+        if buf_len == 0:
+            raise RuntimeError('get_buffer() returned an empty buffer')
+
+        while buf_len > 0:
+            rc = self._ssl_object.read_ex(buf_ptr, buf_len, &last_bytes_read)
+            if not rc:
+                break
+            buf_ptr += last_bytes_read
+            buf_len -= last_bytes_read
+            total_bytes_read += last_bytes_read
+            if self._is_debug:
+                _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d",
+                              self, buf_len, last_bytes_read, rc)
+
+        if total_bytes_read > 0:
+            if self._app_protocol_aiofn:
+                (<Protocol>self._app_protocol).buffer_updated(total_bytes_read)
+            else:
+                self._app_protocol.buffer_updated(total_bytes_read)
+
+        if buf_len == 0:
+            self._loop.call_soon(self._read_ready)
+            return
+
+        cdef int last_error = self._ssl_object.get_error(rc)
+        if self._is_debug:
+            _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d, %s",
+                          self, buf_len, last_bytes_read, rc,
+                          ssl_error_name(last_error))
+
+        self._post_read(last_error)
+
+    cdef pending_estimate(self):
+        # TODO: Supposed to be overriden
+        return 128*1024
+
+    cdef inline _do_read__copied(self):
+        cdef size_t bytes_read = 0
+        cdef list data = None
+        cdef char* bytes_buffer_ptr
+        cdef bytes first_chunk = None, curr_chunk
+        cdef Py_ssize_t bytes_estimated
+        cdef int rc = 0
+        cdef PyObject* bytes_obj
+
+        while True:
+            bytes_estimated = self.pending_estimate()
+            bytes_obj = aiofn_allocate_bytes(bytes_estimated, &bytes_buffer_ptr)
+            rc = self._ssl_object.read_ex(
+                bytes_buffer_ptr,
+                bytes_estimated,
+                &bytes_read)
+
+            if not rc:
+                curr_chunk = aiofn_finalize_bytes(bytes_obj, 0)
+                break
+            else:
+                curr_chunk = aiofn_finalize_bytes(bytes_obj, bytes_read)
+
+            if self._is_debug:
+                _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d",
+                              self, bytes_estimated, bytes_read, rc)
+
+            if first_chunk is None:
+                first_chunk = curr_chunk
+            elif data is None:
+                data = [first_chunk, curr_chunk]
+            else:
+                data.append(curr_chunk)
+
+        cdef int last_error = self._ssl_object.get_error(rc)
+        if self._is_debug:
+            _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d, %s",
+                          self, bytes_estimated, bytes_read, rc,
+                          ssl_error_name(last_error))
+
+        user_data = None
+        if data is not None:
+            user_data = b''.join(data)
+        elif first_chunk is not None:
+            user_data = first_chunk
+
+        if user_data is not None:
+            if self._app_protocol_aiofn:
+                (<Protocol>self._app_protocol).data_received(user_data)
+            else:
+                self._app_protocol.data_received(user_data)
+
+        self._post_read(last_error)
+
+    cdef inline _post_read(self, int last_error):
+        if last_error in (SSLError.SSL_ERROR_WANT_READ, SSLError.SSL_ERROR_SYSCALL):
+            self._want_read = True
+            return
+
+        if last_error == SSLError.SSL_ERROR_WANT_WRITE:
+            self._ensure_writer()
+            return
+
+        if last_error == SSLError.SSL_ERROR_ZERO_RETURN:
+            self._call_eof_received()
+            self._start_shutdown()
+            return
+
+        raise self._ssl_object.make_exc_from_ssl_error("SSL_read_ex failed", last_error)
+
+    cdef inline _start_shutdown(self):
+        if self._state in (FLUSHING, SHUTDOWN, UNWRAPPED):
+            return
+
+        self._closing = True
+        if self._state == DO_HANDSHAKE:
+            self._abort(None)
+            return
+
+        self._set_state(FLUSHING)
+        self._shutdown_timeout_handle = self._loop.call_later(
+            self._ssl_shutdown_timeout, self._check_shutdown_timeout)
+        self._do_flush()
+
+    cdef inline _check_shutdown_timeout(self):
+        if self._state in (FLUSHING, SHUTDOWN):
+            self._abort(asyncio.TimeoutError('SSL shutdown timed out'))
+
+    cdef inline _do_flush(self):
+        try:
+            self._do_read_into_void()
+            if not self._want_write:
+                self._flush_write_backlog()
+        except BaseException as ex:
+            self._on_shutdown_complete(ex)
+        else:
+            if self.get_write_buffer_size() == 0:
+                self._set_state(SHUTDOWN)
+                self._do_shutdown()
+
+    cdef inline _do_read_into_void(self):
+        cdef:
+            bytearray buffer = bytearray(16 * 1024)
+            size_t bytes_read
+            int rc = 1
+
+        while rc == 1:
+            rc = self._ssl_object.read_ex(
+                PyByteArray_AS_STRING(buffer),
+                PyByteArray_GET_SIZE(buffer),
+                &bytes_read)
+            if self._is_debug and rc == 1:
+                _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d",
+                              self, PyByteArray_GET_SIZE(buffer), bytes_read, rc)
+
+
+        cdef int ssl_error = self._ssl_object.get_error(rc)
+        if self._is_debug:
+            _logger.debug("%r: SSL_read_ex(buf_len=%d, ...)=%d, %s",
+                          self, PyByteArray_GET_SIZE(buffer),
+                          rc, ssl_error_name(ssl_error))
+
+        if ssl_error == SSLError.SSL_ERROR_ZERO_RETURN:
+            self._call_eof_received()
+            return
+
+        if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
+            self._ensure_writer()
+            return
+
+        if ssl_error == SSLError.SSL_ERROR_WANT_READ:
+            self._want_read = True
+            return
+
+        raise self._ssl_object.make_exc_from_ssl_error("SSL_read_ex failed", ssl_error)
+
+    cdef inline _do_shutdown(self):
+        cdef:
+            int rc
+            int ssl_error
+
+        try:
+            self._do_read_into_void()
+            rc = self._ssl_object.shutdown()
+            if rc in (1, 0):
+                if self._is_debug:
+                    _logger.debug("%r: SSL_shutdown()=%d", self, rc)
+                if rc == 1:
+                    self._on_shutdown_complete(None)
+                return
+
+            ssl_error = self._ssl_object.get_error(rc)
+            if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
+                self._ensure_writer()
+                return
+
+            if ssl_error == SSLError.SSL_ERROR_WANT_READ:
+                self._want_read = True
+                return
+
+            raise self._ssl_object.make_exc_from_ssl_error(
+                "SSL_shutdown failed", ssl_error)
+        except BaseException as exc:
+            self._on_shutdown_complete(exc)
+
+    cdef inline _on_shutdown_complete(self, shutdown_exc):
+        if self._shutdown_timeout_handle is not None:
+            self._shutdown_timeout_handle.cancel()
+            self._shutdown_timeout_handle = None
+        if shutdown_exc:
+            self._fatal_error(shutdown_exc, 'Error occurred during shutdown')
+        else:
+            self._force_close(None)
+
     cdef inline _wakeup_waiter(self, exc=None):
         if self._ssl_handshake_complete_waiter is None:
             return
@@ -379,140 +616,49 @@ cdef class TlsTransport(Transport):
             else:
                 self._ssl_handshake_complete_waiter.set_result(None)
 
-    cdef inline _start_shutdown(self):
-        if self._state in (FLUSHING, SHUTDOWN, UNWRAPPED):
-            return
-        self._closing = True
-        if self._state == DO_HANDSHAKE:
-            self._abort(None)
-        else:
-            self._set_state(FLUSHING)
-            self._shutdown_timeout_handle = self._loop.call_later(
-                self._ssl_shutdown_timeout, self._check_shutdown_timeout)
-            self._do_flush()
-
-    cdef inline _check_shutdown_timeout(self):
-        if self._state in (FLUSHING, SHUTDOWN):
-            self._abort(asyncio.TimeoutError('SSL shutdown timed out'))
-
-    cdef inline _do_read_into_void(self):
-        cdef:
-            bytearray buffer = bytearray(16 * 1024)
-            size_t bytes_read
-            int rc
-            int ssl_error
-
-        while True:
-            rc = self._ssl_object.read_ex(
-                PyByteArray_AS_STRING(buffer),
-                PyByteArray_GET_SIZE(buffer),
-                &bytes_read)
-            if rc == 1:
-                self._write_wanted = False
-                self._drop_writer()
-                continue
-
-            ssl_error = self._ssl_object.get_error(rc)
-            if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
-                self._write_wanted = True
-                self._ensure_writer()
-                return
-            if ssl_error == SSLError.SSL_ERROR_WANT_READ:
-                self._write_wanted = False
-                self._drop_writer()
-                return
-            if ssl_error == SSLError.SSL_ERROR_ZERO_RETURN:
-                self._call_eof_received()
-                return
-            raise self._ssl_object.make_exc_from_ssl_error("SSL_read_ex failed", ssl_error)
-
-    cdef inline _do_flush(self):
-        try:
-            self._do_read_into_void()
-            self._flush_write_backlog()
-        except Exception as ex:
-            self._on_shutdown_complete(ex)
-        else:
-            if self.get_write_buffer_size() == 0:
-                self._set_state(SHUTDOWN)
-                self._do_shutdown()
-
-    cdef inline _do_shutdown(self):
-        cdef int rc
-        cdef int err_code
-
-        try:
-            self._do_read_into_void()
-            while True:
-                rc = self._ssl_object.shutdown()
-                if rc == 1:
-                    self._write_wanted = False
-                    self._drop_writer()
-                    self._on_shutdown_complete(None)
-                    return
-                if rc == 0:
-                    self._write_wanted = False
-                    self._drop_writer()
-                    return
-
-                err_code = self._ssl_object.get_error(rc)
-                if err_code == SSLError.SSL_ERROR_WANT_WRITE:
-                    self._write_wanted = True
-                    self._ensure_writer()
-                    return
-                if err_code == SSLError.SSL_ERROR_WANT_READ:
-                    self._write_wanted = False
-                    self._drop_writer()
-                    return
-
-                raise self._ssl_object.make_exc_from_ssl_error("SSL_shutdown failed", err_code)
-        except Exception as ex:
-            self._on_shutdown_complete(ex)
-
-    cdef inline _on_shutdown_complete(self, shutdown_exc):
-        if self._shutdown_timeout_handle is not None:
-            self._shutdown_timeout_handle.cancel()
-            self._shutdown_timeout_handle = None
-
-        if shutdown_exc:
-            self._fatal_error(shutdown_exc, 'Error occurred during shutdown')
-        else:
-            self._force_close(None)
-
     cdef inline _abort(self, exc):
         if self._state != UNWRAPPED:
             self._set_state(UNWRAPPED)
         self._force_close(exc)
 
     def _read_ready(self):
+        self._want_read = False
+
         if self._conn_lost or self._sock is None:
             return
-        if self._state == DO_HANDSHAKE:
-            self._do_handshake()
-        elif self._state == WRAPPED:
-            self._do_read()
-        elif self._state == FLUSHING:
-            self._do_flush()
-        elif self._state == SHUTDOWN:
-            self._do_shutdown()
+
+        try:
+            if self._state == DO_HANDSHAKE:
+                self._do_handshake()
+            elif self._state == WRAPPED:
+                self._do_read()
+            elif self._state == FLUSHING:
+                self._do_flush()
+            elif self._state == SHUTDOWN:
+                self._do_shutdown()
+        except BaseException as exc:
+            self._fatal_error(exc, "Error occurred during read")
 
     def _write_ready(self):
         if self._conn_lost or self._sock is None:
             return
-        if self._state == DO_HANDSHAKE:
-            self._do_handshake()
-        elif self._state == WRAPPED:
-            if self._write_backlog:
-                self._flush_write_backlog()
-            else:
-                self._do_read()
-        elif self._state == FLUSHING:
-            self._do_flush()
-        elif self._state == SHUTDOWN:
-            self._do_shutdown()
 
-        if not self._write_wanted and not self._write_backlog:
-            self._drop_writer()
+        self._want_write = False
+
+        try:
+            if self._state == DO_HANDSHAKE:
+                self._do_handshake()
+            elif self._state == WRAPPED:
+                if self._write_backlog:
+                    self._flush_write_backlog()
+                else:
+                    self._do_read()
+            elif self._state == FLUSHING:
+                self._do_flush()
+            elif self._state == SHUTDOWN:
+                self._do_shutdown()
+        except BaseException as exc:
+            self._fatal_error(exc, "Error occurred during write")
 
     cpdef write(self, data):
         if not self._is_protocol_ready():
@@ -641,10 +787,10 @@ cdef class TlsTransport(Transport):
             rc = self._ssl_object.write_ex(data_ptr, data_len, &bytes_written)
             if rc:
                 if self._is_debug:
-                    _logger.debug("%r: SSL_write_ex(..., %d, %d) = %d", self,
+                    _logger.debug("%r: SSL_write_ex(..., data_len=%d, bytes_written=%d) = %d", self,
                                   data_len, bytes_written, rc)
 
-                self._write_wanted = False
+                self._want_write = False
                 if data_len == <Py_ssize_t>bytes_written:
                     self._drop_writer()
                     return None
@@ -654,151 +800,24 @@ cdef class TlsTransport(Transport):
 
             ssl_error = self._ssl_object.get_error(rc)
             if self._is_debug:
-                _logger.debug("%r: SSL_write_ex(..., %d, %d)=%d, %s",
-                              self, data_len, bytes_written, rc,
+                _logger.debug("%r: SSL_write_ex(..., data_len=%d) = %d, %s",
+                              self, data_len, rc,
                               ssl_error_name(ssl_error))
 
             if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
-                self._write_wanted = True
+                self._want_write = True
                 self._ensure_writer()
                 return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
             if ssl_error == SSLError.SSL_ERROR_WANT_READ:
-                self._write_wanted = False
+                self._want_write = False
                 self._drop_writer()
                 return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
 
             raise self._ssl_object.make_exc_from_ssl_error("SSL_write_ex failed", ssl_error)
 
-        self._write_wanted = False
+        self._want_write = False
         self._drop_writer()
         return None
-
-    cpdef _do_read(self):
-        if self._state not in (WRAPPED, FLUSHING):
-            return
-        try:
-            if not self._paused:
-                if self._app_protocol_is_buffered:
-                    self._do_read__buffered()
-                else:
-                    self._do_read__copied()
-                if self._write_backlog:
-                    self._flush_write_backlog()
-        except Exception as ex:
-            self._fatal_error(ex, 'Fatal error on TLS transport')
-
-    cdef inline _do_read__buffered(self):
-        cdef char* buf_ptr
-        cdef Py_ssize_t buf_len
-        cdef size_t last_bytes_read = 0
-        cdef Py_ssize_t total_bytes_read = 0
-        cdef int rc = 0
-
-        if self._app_protocol_aiofn:
-            app_buffer = (<Protocol>self._app_protocol).get_buffer_c(-1, &buf_ptr, &buf_len)
-        else:
-            app_buffer = self._app_protocol.get_buffer(-1)
-            aiofn_unpack_buffer(app_buffer, &buf_ptr, &buf_len)
-
-        if buf_len == 0:
-            raise RuntimeError('get_buffer() returned an empty buffer')
-
-        while buf_len > 0:
-            rc = self._ssl_object.read_ex(buf_ptr, buf_len, &last_bytes_read)
-            if not rc:
-                break
-            self._write_wanted = False
-            buf_ptr += last_bytes_read
-            buf_len -= last_bytes_read
-            total_bytes_read += last_bytes_read
-            if self._is_debug:
-                _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d",
-                              self, buf_len, last_bytes_read, rc)
-
-        cdef int last_error = self._ssl_object.get_error(rc)
-        if self._is_debug:
-            _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d, %s",
-                          self, buf_len, last_bytes_read, rc,
-                          ssl_error_name(last_error))
-
-        if total_bytes_read > 0:
-            if self._app_protocol_aiofn:
-                (<Protocol>self._app_protocol).buffer_updated(total_bytes_read)
-            else:
-                self._app_protocol.buffer_updated(total_bytes_read)
-
-        if buf_len == 0:
-            self._loop.call_soon(self._read_ready)
-            return
-
-        self._post_read(last_error)
-
-    cdef inline _do_read__copied(self):
-        cdef size_t bytes_read = 0
-        cdef list data = None
-        cdef char* bytes_buffer_ptr
-        cdef bytes first_chunk = None, curr_chunk
-        cdef Py_ssize_t bytes_estimated
-        cdef int rc = 0
-        cdef object bytes_obj
-
-        while True:
-            bytes_estimated = max(1024, self._ssl_object.pending() + 256)
-            bytes_obj = PyBytes_FromStringAndSize(NULL, bytes_estimated)
-            bytes_buffer_ptr = PyBytes_AS_STRING(bytes_obj)
-            rc = self._ssl_object.read_ex(bytes_buffer_ptr, bytes_estimated, &bytes_read)
-            if not rc:
-                curr_chunk = bytes_obj[:0]
-                break
-
-            if self._is_debug:
-                _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d",
-                              self, bytes_estimated, bytes_read, rc)
-
-            self._write_wanted = False
-            curr_chunk = bytes_obj[:bytes_read]
-            if first_chunk is None:
-                first_chunk = curr_chunk
-            elif data is None:
-                data = [first_chunk, curr_chunk]
-            else:
-                data.append(curr_chunk)
-
-        cdef int last_error = self._ssl_object.get_error(rc)
-        if self._is_debug:
-            _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d, %s",
-                          self, bytes_estimated, bytes_read, rc,
-                          ssl_error_name(last_error))
-
-        user_data = None
-        if data is not None:
-            user_data = b''.join(data)
-        elif first_chunk is not None:
-            user_data = first_chunk
-
-        if user_data is not None:
-            if self._app_protocol_aiofn:
-                (<Protocol>self._app_protocol).data_received(user_data)
-            else:
-                self._app_protocol.data_received(user_data)
-
-        self._post_read(last_error)
-
-    cdef inline _post_read(self, int last_error):
-        if last_error == SSLError.SSL_ERROR_WANT_READ:
-            self._write_wanted = False
-            self._drop_writer()
-            return
-        if last_error == SSLError.SSL_ERROR_WANT_WRITE:
-            self._write_wanted = True
-            self._ensure_writer()
-            return
-        if last_error == SSLError.SSL_ERROR_ZERO_RETURN:
-            if self._ssl_object.get_shutdown() & SSL_RECEIVED_SHUTDOWN:
-                self._call_eof_received()
-                self._start_shutdown()
-                return
-        raise self._ssl_object.make_exc_from_ssl_error("SSL_read_ex failed", last_error)
 
     cdef inline _call_eof_received(self):
         if self._app_state == STATE_CON_MADE:

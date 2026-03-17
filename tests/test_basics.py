@@ -50,6 +50,8 @@ async def test_echo(loop_debug, msg_size, conn_type, buffered_protocol):
             client.write(payload)
             echoed = await client.readn(msg_size)
             assert echoed == payload
+            client.close()
+            await client.wait_closed()
 
 
 @pytest.mark.parametrize("msg_size", [1, 32, 64, 256 * 1024, 6 * 1024 * 1024, 20 * 1024 * 1024])

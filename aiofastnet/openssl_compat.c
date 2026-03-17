@@ -12,6 +12,7 @@
 
 BIO *(*aiofn_BIO_new)(const BIO_METHOD *type) = NULL;
 int (*aiofn_BIO_free)(BIO *a) = NULL;
+int (*aiofn_BIO_socket_nbio)(int fd, int mode) = NULL;
 long (*aiofn_BIO_ctrl)(BIO *bp, int cmd, long larg, void *parg) = NULL;
 void (*aiofn_BIO_set_flags)(BIO *b, int flags) = NULL;
 void (*aiofn_BIO_clear_flags)(BIO *b, int flags) = NULL;
@@ -54,6 +55,7 @@ long (*aiofn_SSL_get_verify_result)(const SSL *ssl) = NULL;
 X509 *(*aiofn_SSL_get_peer_certificate)(const SSL *ssl) = NULL;
 void (*aiofn_SSL_get0_alpn_selected)(const SSL *ssl, const unsigned char **data,
                                      unsigned int *len) = NULL;
+void (*aiofn_SSL_set_read_ahead)(SSL *ssl, int yes) = NULL;
 
 const SSL_CIPHER *(*aiofn_SSL_get_current_cipher)(const SSL *ssl) = NULL;
 const char *(*aiofn_SSL_CIPHER_get_name)(const SSL_CIPHER *cipher) = NULL;
@@ -206,6 +208,7 @@ int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path) {
 
     LOAD_REQUIRED(aiofn_BIO_new, "BIO_new");
     LOAD_REQUIRED(aiofn_BIO_free, "BIO_free");
+    LOAD_REQUIRED(aiofn_BIO_socket_nbio, "BIO_socket_nbio");
     LOAD_REQUIRED(aiofn_BIO_ctrl, "BIO_ctrl");
     LOAD_REQUIRED(aiofn_BIO_set_flags, "BIO_set_flags");
     LOAD_REQUIRED(aiofn_BIO_clear_flags, "BIO_clear_flags");
@@ -244,6 +247,7 @@ int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path) {
     aiofn_SSL_sendfile = resolve_symbol("SSL_sendfile");
     LOAD_REQUIRED(aiofn_SSL_shutdown, "SSL_shutdown");
     LOAD_REQUIRED(aiofn_SSL_get_shutdown, "SSL_get_shutdown");
+    LOAD_REQUIRED(aiofn_SSL_set_read_ahead, "SSL_set_read_ahead");
     LOAD_REQUIRED(aiofn_SSL_get_verify_result, "SSL_get_verify_result");
     LOAD_REQUIRED(aiofn_SSL_get0_alpn_selected, "SSL_get0_alpn_selected");
     LOAD_REQUIRED(aiofn_SSL_get_current_cipher, "SSL_get_current_cipher");

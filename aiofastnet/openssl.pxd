@@ -37,6 +37,7 @@ cdef extern from "openssl_compat.h" nogil:
 
     BIO *BIO_new(const BIO_METHOD *type)
     int BIO_free(BIO *a)
+    int BIO_socket_nbio(int fd, int mode)
     int BIO_pending(BIO *b)
     long BIO_set_nbio(BIO *b, long n)
     long BIO_get_mem_data(BIO *b, char** pp)
@@ -65,6 +66,7 @@ cdef extern from "openssl_compat.h" nogil:
     int SSL_get_shutdown(const SSL *ssl)
     long SSL_get_verify_result(const SSL *ssl)
     void SSL_get0_alpn_selected(const SSL *ssl, const unsigned char **data, unsigned int *len)
+    void SSL_set_read_ahead(SSL *s, int yes)
 
     const SSL_CIPHER *SSL_get_current_cipher(const SSL *ssl)
     const char *SSL_CIPHER_get_name(const SSL_CIPHER *cipher)

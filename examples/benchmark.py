@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import logging
 import socket
 import ssl
 import sys
 from functools import partial
+from logging import basicConfig
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -46,6 +48,7 @@ async def run_benchmark(args, loop_kind: str, use_aiofastnet: bool, transport_ki
     loop = asyncio.get_running_loop()
     host = "127.0.0.1"
     port = 0
+    # loop.set_debug(True)
 
     if use_aiofastnet:
         create_server = partial(aiofastnet.create_server, loop)
@@ -170,7 +173,7 @@ def main():
     parser.add_argument(
         "--sndbuf-size",
         type=int,
-        default=65536,
+        default=256*1024,
         help="Socket SO_SNDBUF value to request",
     )
     parser.add_argument("--save-plot", action="store_true", help="Save plot to examples/benchmark.png")
@@ -233,4 +236,5 @@ def main():
 
 
 if __name__ == "__main__":
+#    basicConfig(level=logging.DEBUG)
     main()
