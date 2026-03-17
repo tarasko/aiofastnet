@@ -64,28 +64,31 @@ async def test_echo_writelines(msg_size, num_lines, conn_type, buffered_protocol
             assert echoed == payload
 
 
-async def test_write_huge_error(conn_type):
+async def test_write_huge_close(loop_debug, conn_type):
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop) and sys.version_info < (3, 11):
         pytest.skip("ProactorEventLoop in 3.9 and 3.10 had issues with connection closing")
 
     payload = b"p" * (20*1024*1024)
 
-    class FaultyServerProtocol(asyncio.Protocol):
+    class ImpatientServerProtocol(asyncio.Protocol):
         def connection_made(self, transport):
+            self.is_eof_received = False
             self.transport = transport
 
         def data_received(self, data):
+            if self.transport.can_write_eof():
+                self.transport.write_eof()
             self.transport.close()
 
-    class Client(AsyncClient):
-        def pause_writing(self):
-            pass
+        def eof_received(self):
+            self.is_eof_received = True
+            _logger.debug("ImpatientServerProtocol.eof_received() called")
 
-        def resume_writing(self):
-            pass
+        def connection_lost(self, exc):
+            _logger.debug("ImpatientServerProtocol.connection_lost(%s) called", str(exc))
 
-    async with TestServer(FaultyServerProtocol, ssl_context=conn_type.server_ssl_context) as server:
-        async with TestClient(server, ssl_context=conn_type.client_ssl_context, protocol_factory=Client) as client:
+    async with TestServer(ImpatientServerProtocol, ssl_context=conn_type.server_ssl_context) as server:
+        async with TestClient(server, ssl_context=conn_type.client_ssl_context) as client:
             client.transport.write(payload)
             with pytest.raises(ConnectionResetError):
                 await client.readn(len(payload))
@@ -96,8 +99,9 @@ async def test_write_huge_error(conn_type):
             client.transport.write(payload)
 
             assert client.transport.get_write_buffer_size() == 0
+            assert client.is_eof_received
 
-        async with TestClient(server, ssl_context=conn_type.client_ssl_context, protocol_factory=Client) as client:
+        async with TestClient(server, ssl_context=conn_type.client_ssl_context) as client:
             client.transport.writelines([payload, payload])
             with pytest.raises(ConnectionResetError):
                 await client.readn(len(payload))
@@ -108,6 +112,56 @@ async def test_write_huge_error(conn_type):
             client.transport.writelines([payload, payload])
 
             assert client.transport.get_write_buffer_size() == 0
+            assert client.is_eof_received
+
+
+async def test_write_huge_abort(loop_debug, conn_type):
+    if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop) and sys.version_info < (3, 11):
+        pytest.skip("ProactorEventLoop in 3.9 and 3.10 had issues with connection closing")
+
+    payload = b"p" * (20*1024*1024)
+
+    class FaulyServerProtocol(asyncio.Protocol):
+        def connection_made(self, transport):
+            self.is_eof_received = False
+            self.transport = transport
+
+        def data_received(self, data):
+            raise TestException("data_recieved failed")
+
+        def eof_received(self):
+            self.is_eof_received = True
+            _logger.debug("FaulyServerProtocol.eof_received() called")
+
+        def connection_lost(self, exc):
+            _logger.debug("FaulyServerProtocol.connection_lost(%s) called", str(exc))
+
+    async with TestServer(FaulyServerProtocol, ssl_context=conn_type.server_ssl_context) as server:
+        async with TestClient(server, ssl_context=conn_type.client_ssl_context) as client:
+            client.transport.write(payload)
+            with pytest.raises(ConnectionResetError):
+                await client.readn(len(payload))
+
+            assert client.transport.is_closing()
+
+            # Asyncio simply skip writing if connection is closing
+            client.transport.write(payload)
+
+            assert client.transport.get_write_buffer_size() == 0
+            assert not client.is_eof_received
+
+        async with TestClient(server, ssl_context=conn_type.client_ssl_context) as client:
+            client.transport.writelines([payload, payload])
+            with pytest.raises(ConnectionResetError):
+                await client.readn(len(payload))
+
+            assert client.transport.is_closing()
+
+            # Asyncio simply skip writing if connection is closing
+            client.transport.writelines([payload, payload])
+
+            assert client.transport.get_write_buffer_size() == 0
+            assert not client.is_eof_received
 
 
 async def test_write_paused(conn_type):

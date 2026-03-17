@@ -178,6 +178,8 @@ cdef class SSLTransport(Transport):
         protocol's connection_lost() method will (eventually) called
         with None as its argument.
         """
+        if self._ssl_protocol._is_debug:
+            _logger.debug("%r: user called close(), flush data before closing transport", self._ssl_protocol)
         self._ssl_protocol._start_shutdown()
 
     def abort(self):
@@ -187,6 +189,8 @@ cdef class SSLTransport(Transport):
         The protocol's connection_lost() method will (eventually) be
         called with None as its argument.
         """
+        if self._ssl_protocol._is_debug:
+            _logger.debug("%r: user called abort(), close transport immediately", self._ssl_protocol)
         self._ssl_protocol._abort(None)
 
     def _force_close(self, exc):
@@ -848,7 +852,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                 if self._is_debug:
                     _logger.debug("%r: appended %d bytes to write_backlog", self, len(tail))
                 return
-        except Exception as ex:
+        except BaseException as ex:
             self._fatal_error(ex, 'Fatal error on SSL protocol')
 
     cdef inline write_c(self, char* data_ptr, Py_ssize_t data_len):
@@ -867,7 +871,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             if tail is not None:
                 self._write_backlog.append(tail)
                 return
-        except Exception as ex:
+        except BaseException as ex:
             self._fatal_error(ex, 'Fatal error on SSL protocol')
 
     cdef inline writelines(self, list_of_data):
@@ -910,7 +914,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                 if tail is not None:
                     self._write_backlog.append(tail)
                     add_to_backlog = True
-        except Exception as ex:
+        except BaseException as ex:
             self._fatal_error(ex, 'Fatal error on SSL protocol')
 
     cdef inline pause_reading(self):

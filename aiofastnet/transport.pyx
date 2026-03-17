@@ -454,6 +454,8 @@ cdef class SocketTransport(Transport):
         self._eof = True
         if not self._write_backlog:
             self._sock.shutdown(socket.SHUT_WR)
+            if self._is_debug:
+                _logger.debug("%r: shutdown(SHUT_WR) done", self)
 
     cdef inline _write_one(self, object data, char* data_ptr, Py_ssize_t data_len):
         """
@@ -505,11 +507,11 @@ cdef class SocketTransport(Transport):
                 if data_len <= bytes_sent:
                     bytes_sent -= data_len
                     if self._is_debug:
-                        _logger.debug("%r wrote item of size %d from backlog", self, data_len)
+                        _logger.debug("%r: wrote item of size %d from backlog", self, data_len)
                 else:
                     self._write_backlog.appendleft(data[bytes_sent:])
                     if self._is_debug:
-                        _logger.debug("%r partially wrote %d out of %d from backlog item", self, bytes_sent, data_len)
+                        _logger.debug("%r: partially wrote %d out of %d from backlog item", self, bytes_sent, data_len)
                     break
 
     cdef inline _write_many(self, list_of_data):
@@ -518,11 +520,11 @@ cdef class SocketTransport(Transport):
             char* data_ptr
             Py_ssize_t data_len
             Py_ssize_t bytes_sent
-            SendFileRequest pending_sendfile_req = None
+            SendFileRequest sendfile_req = None
 
         for data in list_of_data:
             if isinstance(data, SendFileRequest):
-                pending_sendfile_req = data
+                sendfile_req = data
                 break
             aiofn_unpack_buffer(data, &data_ptr, &data_len)
             if data_len == 0:
@@ -533,14 +535,14 @@ cdef class SocketTransport(Transport):
             if idx == AIOFN_MAX_IOVEC:
                 break
 
-        if idx == 0 and pending_sendfile_req is not None:
-            if self._try_sendfile(pending_sendfile_req):
+        if idx == 0 and sendfile_req is not None:
+            if self._try_sendfile(sendfile_req):
                 list_of_data.popleft()
         else:
             bytes_sent = aiofn_writev(self._sock_fd, self._iovecs, idx)
 
             if self._is_debug:
-                _logger.debug("%r aiofn_writev(..., len(iovecs)=%d)=%d", self, idx, bytes_sent)
+                _logger.debug("%r: aiofn_writev(..., len(iovecs)=%d)=%d", self, idx, bytes_sent)
             self._adjust_leftover_buffer(list_of_data, bytes_sent)
 
     cpdef _write_ready(self):
@@ -564,6 +566,8 @@ cdef class SocketTransport(Transport):
                     self._call_connection_lost(None)
                 elif self._eof:
                     self._sock.shutdown(socket.SHUT_WR)
+                    if self._is_debug:
+                        _logger.debug("%r: shutdown(SHUT_WR) done", self)
 
     cpdef _call_connection_lost(self, exc):
         try:
