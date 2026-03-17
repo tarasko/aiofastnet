@@ -576,7 +576,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                 if self._is_debug:
                     _logger.debug("%r: SSL_do_handshake()=%d", self, rc)
                 self._on_handshake_complete(None)
-                self._maybe_send_outgoing(True)
+                self._flush_outgoing_bio()
                 return
 
             # Since our outgoing bio has limited capacity we may get
@@ -588,11 +588,11 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                               self, rc, ssl_error_name(ssl_error))
 
             if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
-                self._maybe_send_outgoing(True)
+                self._flush_outgoing_bio()
                 continue
 
             if ssl_error == SSLError.SSL_ERROR_WANT_READ:
-                self._maybe_send_outgoing(True)
+                self._flush_outgoing_bio()
                 return
 
             self._on_handshake_complete(
@@ -721,7 +721,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                               self, PyByteArray_GET_SIZE(buffer),
                               rc, ssl_error_name(ssl_error))
 
-            self._maybe_send_outgoing(True)
+            self._flush_outgoing_bio()
 
             if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
                 continue
@@ -768,8 +768,9 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                 if self._is_debug and rc in (1, 0):
                     _logger.debug("%r: SSL_shutdown()=%d", self, rc)
 
+                self._flush_outgoing_bio()
+
                 if rc == 1:
-                    self._maybe_send_outgoing(True)
                     self._on_shutdown_complete(None)
                     return
 
@@ -778,7 +779,6 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                 # error. SSL_get_error(3) should not get called, it may
                 # misleadingly indicate an error even though no error occurred.
                 if rc == 0:
-                    self._maybe_send_outgoing(True)
                     return
 
                 err_code = self._ssl_object.get_error(rc)
@@ -789,11 +789,9 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
                 # Re-try shutdown because outgoing bio has no space left
                 if err_code == SSLError.SSL_ERROR_WANT_WRITE:
-                    self._maybe_send_outgoing(True)
                     continue
 
                 if err_code == SSLError.SSL_ERROR_WANT_READ:
-                    self._maybe_send_outgoing(True)
                     return
 
                 raise self._ssl_object.make_exc_from_ssl_error("SSL_shutdown failed", err_code)
@@ -1010,7 +1008,8 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
                 # Success path, we wrote all or some data
                 if data_len == <Py_ssize_t>bytes_written:
-                    self._maybe_send_outgoing(is_last)
+                    if is_last:
+                        self._flush_outgoing_bio()
                     return None
 
                 # Not all data was written, this is most likely because outgoing
@@ -1027,7 +1026,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                                   ssl_error_name(ssl_error))
 
                 # On any error we always need to flush outgoing BIO
-                self._maybe_send_outgoing(True)
+                self._flush_outgoing_bio()
 
                 # Since outgoing BIO is a static memory it may simply run out
                 # of capacity
@@ -1047,8 +1046,8 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                 raise self._ssl_object.make_exc_from_ssl_error(
                     "SSL_write_ex failed", ssl_error)
 
-    cdef inline _maybe_send_outgoing(self, bint is_last):
-        # We call _maybe_send_outgoing if there MAY be some data to send,
+    cdef inline _flush_outgoing_bio(self):
+        # We call _flush_outgoing_bio if there MAY be some data to send,
         # Upstream logic doesn't check itself if there are actually some data
         # to send
 
@@ -1059,16 +1058,13 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         if sz <= 0:
             return
 
-        if not is_last:
-            return
-
         if self._is_aiofn_transport:
             (<Transport>self._transport).write_c(ptr, sz)
         else:
             self._transport.write(PyBytes_FromStringAndSize(ptr, sz))
 
         if self._is_debug:
-            _logger.debug("%r: wrote %d bytes to the underlying transport: is_last=%d", self, sz, is_last)
+            _logger.debug("%r: flushed %d bytes from outgoing BIO", self, sz)
 
         self._ssl_object.outgoing_bio_consume(sz)
 
@@ -1084,7 +1080,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                 else:
                     self._do_read__copied()
 
-                self._maybe_send_outgoing(True)
+                self._flush_outgoing_bio()
                 if self._write_backlog:
                     self._flush_write_backlog()
         except Exception as ex:

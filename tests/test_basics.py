@@ -692,7 +692,7 @@ async def test_transport_base(conn_type):
             await client.wait_closed()
 
 
-async def test_start_tls():
+async def test_start_tls(loop_debug):
     server_ssl_context, client_ssl_context = make_test_ssl_contexts(
         "tests/test.crt", "tests/test.key")
 
