@@ -555,19 +555,7 @@ cdef class TlsTransport(Transport):
                           self, PyByteArray_GET_SIZE(buffer),
                           rc, ssl_error_name(ssl_error))
 
-        if ssl_error == SSLError.SSL_ERROR_ZERO_RETURN:
-            self._call_eof_received()
-            return
-
-        if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
-            self._ensure_writer()
-            return
-
-        if ssl_error == SSLError.SSL_ERROR_WANT_READ:
-            self._want_read = True
-            return
-
-        raise self._ssl_object.make_exc_from_ssl_error("SSL_read_ex failed", ssl_error)
+        self._post_read(ssl_error)
 
     cdef inline _do_shutdown(self):
         cdef:
