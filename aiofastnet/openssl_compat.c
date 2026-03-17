@@ -307,6 +307,10 @@ int aiofn_BIO_reset(BIO *b) {
     return (int)aiofn_BIO_ctrl(b, BIO_CTRL_RESET, 0, NULL);
 }
 
+int aiofn_BIO_get_ktls_send(BIO *b) {
+    return aiofn_BIO_ctrl(b, BIO_CTRL_GET_KTLS_SEND, 0, NULL) > 0;
+}
+
 int aiofn_ERR_GET_LIB(unsigned long e) {
     return (int)((e >> 23) & 0xFFUL);
 }

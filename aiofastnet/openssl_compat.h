@@ -51,6 +51,7 @@ typedef int (*err_print_errors_cb_fn)(const char *str, size_t len, void *u);
 #define BIO_CTRL_FLUSH 11
 #define BIO_CTRL_DUP 12
 #define BIO_CTRL_WPENDING 13
+#define BIO_CTRL_GET_KTLS_SEND 73
 
 #define BIO_C_SET_NBIO 102
 #define BIO_C_FILE_SEEK 128
@@ -143,6 +144,7 @@ int aiofn_BIO_pending(BIO *b);
 long aiofn_BIO_get_mem_data(BIO *b, char **pp);
 long aiofn_BIO_set_nbio(BIO *b, long n);
 int aiofn_BIO_reset(BIO *b);
+int aiofn_BIO_get_ktls_send(BIO *b);
 int aiofn_ERR_GET_LIB(unsigned long e);
 
 #define BIO_new aiofn_BIO_new
@@ -168,6 +170,7 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define BIO_get_mem_data aiofn_BIO_get_mem_data
 #define BIO_set_nbio aiofn_BIO_set_nbio
 #define BIO_reset aiofn_BIO_reset
+#define BIO_get_ktls_send aiofn_BIO_get_ktls_send
 
 #define SSL_new aiofn_SSL_new
 #define SSL_free aiofn_SSL_free
