@@ -42,6 +42,7 @@ typedef int (*err_print_errors_cb_fn)(const char *str, size_t len, void *u);
 #define SSL_MODE_ENABLE_PARTIAL_WRITE 0x00000001U
 #define SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER 0x00000002U
 #define SSL_MODE_AUTO_RETRY 0x00000004U
+#define SSL_OP_ENABLE_KTLS ((uint64_t)1 << 3)
 
 #define BIO_TYPE_SOURCE_SINK 0x0400
 #define BIO_CTRL_RESET 1
@@ -93,6 +94,7 @@ extern SSL *(*aiofn_SSL_new)(SSL_CTX *ctx);
 extern void (*aiofn_SSL_free)(SSL *ssl);
 extern void (*aiofn_SSL_set_bio)(SSL *ssl, BIO *rbio, BIO *wbio);
 extern int (*aiofn_SSL_set_fd)(SSL *ssl, int fd);
+extern BIO *(*aiofn_SSL_get_wbio)(const SSL *ssl);
 extern void (*aiofn_SSL_set_accept_state)(SSL *ssl);
 extern void (*aiofn_SSL_set_connect_state)(SSL *ssl);
 extern uint64_t (*aiofn_SSL_set_options)(SSL *ssl, uint64_t options);
@@ -180,6 +182,7 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define SSL_free aiofn_SSL_free
 #define SSL_set_bio aiofn_SSL_set_bio
 #define SSL_set_fd aiofn_SSL_set_fd
+#define SSL_get_wbio aiofn_SSL_get_wbio
 #define SSL_set_accept_state aiofn_SSL_set_accept_state
 #define SSL_set_connect_state aiofn_SSL_set_connect_state
 #define SSL_set_mode aiofn_SSL_set_mode

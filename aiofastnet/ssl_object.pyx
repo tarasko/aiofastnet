@@ -1,3 +1,5 @@
+import threading
+
 from .openssl cimport *
 from .openssl_compat import find_openssl_library_paths
 
@@ -16,9 +18,14 @@ import tempfile
 import logging
 
 cdef object _logger = logging.getLogger('aiofastnet.ssl')
+cdef bint _openssl_loaded = False
+cdef object _openssl_load_lock = threading.Lock()
 
 
-cdef _init_openssl():
+cdef load_openssl():
+    global _openssl_loaded
+    global _openssl_load_lock
+
     cdef:
         bytes ssl_lib_name
         bytes crypto_lib_name
@@ -26,19 +33,25 @@ cdef _init_openssl():
         const char* crypto_lib_ptr
         const char* missing_lib
 
-    ssl_lib_name, crypto_lib_name = find_openssl_library_paths()
+    with _openssl_load_lock:
+        if _openssl_loaded:
+            return
 
-    if init_openssl_compat(ssl_lib_name, crypto_lib_name) != 1:
-        missing_lib = openssl_compat_last_error()
-        if missing_lib != NULL:
-            raise ImportError(
-                f"aiofastnet: failed to initialize OpenSSL compatibility layer; "
-                f"missing symbol: {PyUnicode_FromString(missing_lib)}; "
-                f"ssl_lib={ssl_lib_name.decode()}, crypto_lib={crypto_lib_name.decode()}")
-        raise ImportError("aiofastnet: failed to initialize OpenSSL compatibility layer")
+        ssl_lib_name, crypto_lib_name = find_openssl_library_paths()
+        _logger.info("Found libssl: %s", ssl_lib_name.decode())
+        _logger.info("Found libcrypto: %s", crypto_lib_name.decode())
 
+        if init_openssl_compat(ssl_lib_name, crypto_lib_name) != 1:
+            missing_lib = openssl_compat_last_error()
+            if missing_lib != NULL:
+                raise ImportError(
+                    f"aiofastnet: failed to initialize OpenSSL compatibility layer; "
+                    f"missing symbol: {PyUnicode_FromString(missing_lib)}; "
+                    f"ssl_lib={ssl_lib_name.decode()}, crypto_lib={crypto_lib_name.decode()}")
+            raise ImportError("aiofastnet: failed to initialize OpenSSL compatibility layer")
 
-_init_openssl()
+        _logger.info("OpenSSL: SSL_sendfile loaded=%d", SSL_sendfile_available())
+        _openssl_loaded = True
 
 
 ctypedef struct PySSLContextHack:
@@ -105,6 +118,9 @@ cdef class SSLObject:
         self.outgoing = NULL
 
         self.ssl = SSL_new(self.ssl_ctx)
+        if self.ssl == NULL:
+            raise MemoryError("Unable to allocate SSL object")
+
         self.server_hostname = server_hostname
         self.server_side = server_side
 
@@ -134,26 +150,21 @@ cdef class SSLObject:
                     SSL_free(self.ssl)
                     self.ssl = NULL
                 raise MemoryError("Unable to initialize OpenSSL objects")
-        elif self.ssl == NULL:
-            raise MemoryError("Unable to initialize OpenSSL objects")
 
-        if server_side:
-            SSL_set_accept_state(self.ssl)
-        else:
-            SSL_set_connect_state(self.ssl)
-
-        if sock is None:
             SSL_set_bio(self.ssl, self.incoming, self.outgoing)
             BIO_set_nbio(self.incoming, 1)
             BIO_set_nbio(self.outgoing, 1)
-            _logger.info("SSLObject: SSL_sendfile loaded=%d", SSL_sendfile_available())
-            _logger.info("SSLObject: BIO_get_ktls_send(outgoing)=%d", BIO_get_ktls_send(self.outgoing))
         else:
             if SSL_set_fd(self.ssl, sock.fileno()) != 1:
                 SSL_free(self.ssl)
                 self.ssl = NULL
                 raise ssl.SSLError("SSL_set_fd failed")
-            _logger.info("SSLObject: SSL_sendfile loaded=%d", SSL_sendfile_available())
+            SSL_set_options(self.ssl, SSL_OP_ENABLE_KTLS)
+
+        if server_side:
+            SSL_set_accept_state(self.ssl)
+        else:
+            SSL_set_connect_state(self.ssl)
 
         cdef:
             X509_VERIFY_PARAM* ssl_verification_params
@@ -219,6 +230,9 @@ cdef class SSLObject:
             return None
 
         return PyUnicode_FromStringAndSize(<const char*>protocol, protocol_len)
+
+    cpdef int ktls_send_enabled(self):
+        return BIO_get_ktls_send(SSL_get_wbio(self.ssl))
 
     cdef inline make_exc_from_ssl_error(self, str descr, int err_code):
         assert err_code != SSL_ERROR_NONE, "check logic"

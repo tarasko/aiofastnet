@@ -19,7 +19,7 @@ from .utils cimport (
 )
 from .transport cimport Transport, Protocol
 from .transport import aiofn_is_buffered_protocol
-from .ssl_object cimport SSLObject, SSLError, ssl_error_name
+from .ssl_object cimport SSLObject, SSLError, load_openssl, ssl_error_name
 from .openssl cimport SSL_RECEIVED_SHUTDOWN
 
 
@@ -97,7 +97,6 @@ cdef class TlsTransport(Transport):
         object _ssl_shutdown_timeout
         object _handshake_timeout_handle
         object _shutdown_timeout_handle
-        object _handshake_start_time
         object _ssl_layer_num
 
         bint _server_side
@@ -110,6 +109,8 @@ cdef class TlsTransport(Transport):
                  ssl_handshake_timeout=None,
                  ssl_shutdown_timeout=None,
                  server=None):
+        load_openssl()
+
         if ssl_handshake_timeout is None:
             ssl_handshake_timeout = constants.SSL_HANDSHAKE_TIMEOUT
         elif ssl_handshake_timeout <= 0:
@@ -150,7 +151,6 @@ cdef class TlsTransport(Transport):
         self._ssl_shutdown_timeout = ssl_shutdown_timeout
         self._handshake_timeout_handle = None
         self._shutdown_timeout_handle = None
-        self._handshake_start_time = None
         self._ssl_layer_num = 0
         self._conn_lost = 0
         self._closing = False
@@ -301,8 +301,6 @@ cdef class TlsTransport(Transport):
             raise RuntimeError(f'cannot switch state from {self._state} to {new_state}')
 
     cdef inline _start_handshake(self):
-        if self._is_debug:
-            self._handshake_start_time = self._loop.time()
         self._set_state(DO_HANDSHAKE)
         self._handshake_timeout_handle = self._loop.call_later(
             self._ssl_handshake_timeout, self._check_handshake_timeout)
@@ -360,6 +358,7 @@ cdef class TlsTransport(Transport):
             cipher=self._ssl_object.cipher(),
             compression=self._ssl_object.compression()
         )
+        _logger.info("%r: BIO_get_ktls_send(wbio)=%d", self, self._ssl_object.ktls_send_enabled())
         self._wakeup_waiter()
         if self._app_state == STATE_INIT:
             self._app_state = STATE_CON_MADE
@@ -641,6 +640,10 @@ cdef class TlsTransport(Transport):
         while data_len != 0:
             rc = self._ssl_object.write_ex(data_ptr, data_len, &bytes_written)
             if rc:
+                if self._is_debug:
+                    _logger.debug("%r: SSL_write_ex(..., %d, %d) = %d", self,
+                                  data_len, bytes_written, rc)
+
                 self._write_wanted = False
                 if data_len == <Py_ssize_t>bytes_written:
                     self._drop_writer()
@@ -650,6 +653,11 @@ cdef class TlsTransport(Transport):
                 continue
 
             ssl_error = self._ssl_object.get_error(rc)
+            if self._is_debug:
+                _logger.debug("%r: SSL_write_ex(..., %d, %d)=%d, %s",
+                              self, data_len, bytes_written, rc,
+                              ssl_error_name(ssl_error))
+
             if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
                 self._write_wanted = True
                 self._ensure_writer()
@@ -703,8 +711,16 @@ cdef class TlsTransport(Transport):
             buf_ptr += last_bytes_read
             buf_len -= last_bytes_read
             total_bytes_read += last_bytes_read
+            if self._is_debug:
+                _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d",
+                              self, buf_len, last_bytes_read, rc)
 
         cdef int last_error = self._ssl_object.get_error(rc)
+        if self._is_debug:
+            _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d, %s",
+                          self, buf_len, last_bytes_read, rc,
+                          ssl_error_name(last_error))
+
         if total_bytes_read > 0:
             if self._app_protocol_aiofn:
                 (<Protocol>self._app_protocol).buffer_updated(total_bytes_read)
@@ -735,6 +751,10 @@ cdef class TlsTransport(Transport):
                 curr_chunk = bytes_obj[:0]
                 break
 
+            if self._is_debug:
+                _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d",
+                              self, bytes_estimated, bytes_read, rc)
+
             self._write_wanted = False
             curr_chunk = bytes_obj[:bytes_read]
             if first_chunk is None:
@@ -745,6 +765,11 @@ cdef class TlsTransport(Transport):
                 data.append(curr_chunk)
 
         cdef int last_error = self._ssl_object.get_error(rc)
+        if self._is_debug:
+            _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d, %s",
+                          self, bytes_estimated, bytes_read, rc,
+                          ssl_error_name(last_error))
+
         user_data = None
         if data is not None:
             user_data = b''.join(data)

@@ -10,6 +10,9 @@ cpdef enum SSLError:
     SSL_ERROR_ZERO_RETURN = 6
 
 
+cdef load_openssl()
+
+
 cdef class SSLObject:
     # Wraps raw openssl pointers and provide some methods that may be
     # interesting for the user.
@@ -35,6 +38,7 @@ cdef class SSLObject:
     cpdef object getpeercert(self, binary_form=*)
     cpdef str compression(self)
     cpdef object selected_alpn_protocol(self)
+    cpdef int ktls_send_enabled(self)
 
     # Used by SSLProtocol
     # These methods wrap SSL* operations

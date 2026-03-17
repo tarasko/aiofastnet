@@ -30,6 +30,7 @@ cdef extern from "openssl_compat.h" nogil:
         SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER
         SSL_MODE_ENABLE_PARTIAL_WRITE
         SSL_MODE_AUTO_RETRY
+        SSL_OP_ENABLE_KTLS
 
     int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path)
     const char* openssl_compat_last_error()
@@ -47,6 +48,7 @@ cdef extern from "openssl_compat.h" nogil:
     void SSL_free(SSL *ssl)
     void SSL_set_bio(SSL *ssl, BIO *rbio, BIO *wbio)
     int SSL_set_fd(SSL *ssl, int fd)
+    BIO *SSL_get_wbio(const SSL *ssl)
     void SSL_set_accept_state(SSL *ssl)
     void SSL_set_connect_state(SSL *ssl)
     unsigned long long SSL_set_options(SSL *ssl, unsigned long long op)
