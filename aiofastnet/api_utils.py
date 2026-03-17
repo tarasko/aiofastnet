@@ -6,6 +6,7 @@ from typing import Callable, Union, Optional, Tuple
 
 from .ssl_protocol import SSLProtocol
 from .transport import SocketTransport, aiofn_is_buffered_protocol
+from .tls_transport import TlsTransport
 from .wrapped_transport import _should_fallback_to_asyncio, \
     _WrappedBufferedProtocol, _WrappedProtocol
 
@@ -73,15 +74,15 @@ async def _create_connection_transport(
         waiter = loop.create_future()
         if ssl:
             sslcontext = None if isinstance(ssl, bool) else ssl
-
-            ssl_protocol = SSLProtocol(
-                loop, protocol, sslcontext, waiter,
-                server_side, server_hostname,
+            transport = TlsTransport(
+                loop, sock, protocol, sslcontext,
+                waiter=waiter,
+                server_side=server_side,
+                server_hostname=server_hostname,
                 ssl_handshake_timeout=ssl_handshake_timeout,
-                ssl_shutdown_timeout=ssl_shutdown_timeout
+                ssl_shutdown_timeout=ssl_shutdown_timeout,
+                server=server
             )
-            SocketTransport(loop, sock, ssl_protocol, server=server)
-            transport = ssl_protocol.get_app_transport()
         else:
             transport = SocketTransport(loop, sock, protocol,
                                         waiter=waiter, server=server)

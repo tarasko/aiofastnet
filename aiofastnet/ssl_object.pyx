@@ -92,40 +92,49 @@ cdef Py_ssize_t _bio_pending(BIO* bio) except -1:
 
 cdef class SSLObject:
     def __init__(self, ssl_context, bint server_side, str server_hostname,
-                 Py_ssize_t read_buffer_size, Py_ssize_t write_buffer_size):
+                 Py_ssize_t read_buffer_size, Py_ssize_t write_buffer_size,
+                 sock=None):
         ERR_clear_error()
 
         self.ssl_ctx_py = ssl_context
         self.ssl_ctx = _get_ssl_ctx_ptr(ssl_context)
 
-        self.incoming_buf = PyByteArray_FromStringAndSize(
-            NULL, read_buffer_size)
-        self.outgoing_buf = PyByteArray_FromStringAndSize(
-            NULL, write_buffer_size)
-
-        self.incoming = BIO_new_static_mem(
-            PyByteArray_AS_STRING(self.incoming_buf),
-            <size_t>PyByteArray_GET_SIZE(self.incoming_buf)
-        )
-        self.outgoing = BIO_new_static_mem(
-            PyByteArray_AS_STRING(self.outgoing_buf),
-            <size_t>PyByteArray_GET_SIZE(self.outgoing_buf)
-        )
+        self.incoming_buf = None
+        self.outgoing_buf = None
+        self.incoming = NULL
+        self.outgoing = NULL
 
         self.ssl = SSL_new(self.ssl_ctx)
         self.server_hostname = server_hostname
         self.server_side = server_side
 
-        if self.incoming == NULL or self.outgoing == NULL or self.ssl == NULL:
-            if self.incoming != NULL:
-                BIO_free(self.incoming)
-                self.incoming = NULL
-            if self.outgoing != NULL:
-                BIO_free(self.outgoing)
-                self.outgoing = NULL
-            if self.ssl != NULL:
-                SSL_free(self.ssl)
-                self.ssl = NULL
+        if sock is None:
+            self.incoming_buf = PyByteArray_FromStringAndSize(
+                NULL, read_buffer_size)
+            self.outgoing_buf = PyByteArray_FromStringAndSize(
+                NULL, write_buffer_size)
+
+            self.incoming = BIO_new_static_mem(
+                PyByteArray_AS_STRING(self.incoming_buf),
+                <size_t>PyByteArray_GET_SIZE(self.incoming_buf)
+            )
+            self.outgoing = BIO_new_static_mem(
+                PyByteArray_AS_STRING(self.outgoing_buf),
+                <size_t>PyByteArray_GET_SIZE(self.outgoing_buf)
+            )
+
+            if self.incoming == NULL or self.outgoing == NULL or self.ssl == NULL:
+                if self.incoming != NULL:
+                    BIO_free(self.incoming)
+                    self.incoming = NULL
+                if self.outgoing != NULL:
+                    BIO_free(self.outgoing)
+                    self.outgoing = NULL
+                if self.ssl != NULL:
+                    SSL_free(self.ssl)
+                    self.ssl = NULL
+                raise MemoryError("Unable to initialize OpenSSL objects")
+        elif self.ssl == NULL:
             raise MemoryError("Unable to initialize OpenSSL objects")
 
         if server_side:
@@ -133,9 +142,18 @@ cdef class SSLObject:
         else:
             SSL_set_connect_state(self.ssl)
 
-        SSL_set_bio(self.ssl, self.incoming, self.outgoing)
-        BIO_set_nbio(self.incoming, 1)
-        BIO_set_nbio(self.outgoing, 1)
+        if sock is None:
+            SSL_set_bio(self.ssl, self.incoming, self.outgoing)
+            BIO_set_nbio(self.incoming, 1)
+            BIO_set_nbio(self.outgoing, 1)
+            _logger.info("SSLObject: SSL_sendfile loaded=%d", SSL_sendfile_available())
+            _logger.info("SSLObject: BIO_get_ktls_send(outgoing)=%d", BIO_get_ktls_send(self.outgoing))
+        else:
+            if SSL_set_fd(self.ssl, sock.fileno()) != 1:
+                SSL_free(self.ssl)
+                self.ssl = NULL
+                raise ssl.SSLError("SSL_set_fd failed")
+            _logger.info("SSLObject: SSL_sendfile loaded=%d", SSL_sendfile_available())
 
         cdef:
             X509_VERIFY_PARAM* ssl_verification_params

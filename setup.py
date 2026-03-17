@@ -19,6 +19,7 @@ pkg_extensions = [
     Extension("aiofastnet.transport", ["aiofastnet/transport.pyx"], libraries=libs),
     Extension("aiofastnet.ssl_object", ["aiofastnet/ssl_object.pyx", "aiofastnet/static_mem_bio.c", "aiofastnet/openssl_compat.c"], libraries=libs),
     Extension("aiofastnet.ssl_protocol", ["aiofastnet/ssl_protocol.pyx"], libraries=libs),
+    Extension("aiofastnet.tls_transport", ["aiofastnet/tls_transport.pyx"], libraries=libs),
     Extension("examples.benchmark_protocol", ["examples/benchmark_protocol.pyx"], libraries=libs),
 ]
 

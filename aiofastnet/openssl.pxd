@@ -41,10 +41,12 @@ cdef extern from "openssl_compat.h" nogil:
     long BIO_get_mem_data(BIO *b, char** pp)
     int BIO_reset(BIO *b)
     int BIO_get_ktls_send(BIO *b)
+    int SSL_sendfile_available()
 
     SSL *SSL_new(SSL_CTX *ctx)
     void SSL_free(SSL *ssl)
     void SSL_set_bio(SSL *ssl, BIO *rbio, BIO *wbio)
+    int SSL_set_fd(SSL *ssl, int fd)
     void SSL_set_accept_state(SSL *ssl)
     void SSL_set_connect_state(SSL *ssl)
     unsigned long long SSL_set_options(SSL *ssl, unsigned long long op)
