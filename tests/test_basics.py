@@ -118,8 +118,8 @@ async def test_write_huge_close(loop_debug, conn_type):
 
 
 async def test_write_huge_abort(loop_debug, conn_type):
-    if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop) and sys.version_info < (3, 11):
-        pytest.skip("ProactorEventLoop in 3.9 and 3.10 had issues with connection closing")
+    if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
+        pytest.skip("ProactorEventLoop has different semantics around exceptions from data_received")
 
     payload = b"p" * (20*1024*1024)
 
