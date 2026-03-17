@@ -356,8 +356,15 @@ cdef class TlsTransport(Transport):
 
         self._set_state(WRAPPED)
 
+        _logger.debug("%r: enable_ktls()=%x", self, self._ssl_object.enable_ktls())
+
+        _logger.debug("%r: cipher %s", self, self._ssl_object.cipher())
+
         _logger.debug("%r: BIO_get_ktls_send(wbio)=%d",
                       self, self._ssl_object.ktls_send_enabled())
+
+        _logger.debug("%r: BIO_get_ktls_recv(rbio)=%d",
+                      self, self._ssl_object.ktls_recv_enabled())
 
         self._extra.update(
             peercert=self._ssl_object.getpeercert(),

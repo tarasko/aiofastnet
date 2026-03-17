@@ -232,8 +232,14 @@ cdef class SSLObject:
 
         return PyUnicode_FromStringAndSize(<const char*>protocol, protocol_len)
 
+    cpdef uint64_t enable_ktls(self):
+        return SSL_set_options(self.ssl, SSL_OP_ENABLE_KTLS)
+
     cpdef int ktls_send_enabled(self):
         return BIO_get_ktls_send(SSL_get_wbio(self.ssl))
+
+    cpdef int ktls_recv_enabled(self):
+        return BIO_get_ktls_recv(SSL_get_rbio(self.ssl))
 
     cdef inline make_exc_from_ssl_error(self, str descr, int err_code):
         assert err_code != SSL_ERROR_NONE, "check logic"

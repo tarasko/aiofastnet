@@ -151,12 +151,20 @@ def find_openssl_library_paths():
         # There could be multiple loaded ssl libraries.
         # Prefer those that were loaded from the python directory, since it is
         # what ssl module was build against.
+        # if "libssl" in dl:
+        #     if libssl_path is None or "ython" in dl:
+        #         libssl_path = os.path.normpath(dl)
+        # elif "libcrypto" in dl:
+        #     if libcrypto_path is None or "ython" in dl:
+        #         libcrypto_path = os.path.normpath(dl)
+
         if "libssl" in dl:
-            if libssl_path is None or "ython" in dl:
+            if libssl_path is None:
                 libssl_path = os.path.normpath(dl)
         elif "libcrypto" in dl:
-            if libcrypto_path is None or "ython" in dl:
+            if libcrypto_path is None:
                 libcrypto_path = os.path.normpath(dl)
+
 
     if libssl_path is None or libcrypto_path is None:
         raise ImportError(

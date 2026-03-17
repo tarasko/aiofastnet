@@ -39,10 +39,12 @@ typedef int (*err_print_errors_cb_fn)(const char *str, size_t len, void *u);
 #define SSL_SENT_SHUTDOWN 1
 #define SSL_RECEIVED_SHUTDOWN 2
 
+#define SSL_OP_BIT(n)  ((uint64_t)1 << (uint64_t)n)
+
 #define SSL_MODE_ENABLE_PARTIAL_WRITE 0x00000001U
 #define SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER 0x00000002U
 #define SSL_MODE_AUTO_RETRY 0x00000004U
-#define SSL_OP_ENABLE_KTLS ((uint64_t)1 << 3)
+#define SSL_OP_ENABLE_KTLS SSL_OP_BIT(3)
 
 #define BIO_TYPE_SOURCE_SINK 0x0400
 #define BIO_CTRL_RESET 1
@@ -53,6 +55,7 @@ typedef int (*err_print_errors_cb_fn)(const char *str, size_t len, void *u);
 #define BIO_CTRL_DUP 12
 #define BIO_CTRL_WPENDING 13
 #define BIO_CTRL_GET_KTLS_SEND 73
+#define BIO_CTRL_GET_KTLS_RECV 76
 
 #define BIO_C_SET_NBIO 102
 #define BIO_C_FILE_SEEK 128
@@ -95,6 +98,7 @@ extern SSL *(*aiofn_SSL_new)(SSL_CTX *ctx);
 extern void (*aiofn_SSL_free)(SSL *ssl);
 extern void (*aiofn_SSL_set_bio)(SSL *ssl, BIO *rbio, BIO *wbio);
 extern int (*aiofn_SSL_set_fd)(SSL *ssl, int fd);
+extern BIO *(*aiofn_SSL_get_rbio)(const SSL *ssl);
 extern BIO *(*aiofn_SSL_get_wbio)(const SSL *ssl);
 extern void (*aiofn_SSL_set_accept_state)(SSL *ssl);
 extern void (*aiofn_SSL_set_connect_state)(SSL *ssl);
@@ -151,6 +155,7 @@ long aiofn_BIO_get_mem_data(BIO *b, char **pp);
 long aiofn_BIO_set_nbio(BIO *b, long n);
 int aiofn_BIO_reset(BIO *b);
 int aiofn_BIO_get_ktls_send(BIO *b);
+int aiofn_BIO_get_ktls_recv(BIO *b);
 int aiofn_SSL_sendfile_available(void);
 int aiofn_ERR_GET_LIB(unsigned long e);
 
@@ -179,12 +184,14 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define BIO_set_nbio aiofn_BIO_set_nbio
 #define BIO_reset aiofn_BIO_reset
 #define BIO_get_ktls_send aiofn_BIO_get_ktls_send
+#define BIO_get_ktls_recv aiofn_BIO_get_ktls_recv
 #define SSL_sendfile_available aiofn_SSL_sendfile_available
 
 #define SSL_new aiofn_SSL_new
 #define SSL_free aiofn_SSL_free
 #define SSL_set_bio aiofn_SSL_set_bio
 #define SSL_set_fd aiofn_SSL_set_fd
+#define SSL_get_rbio aiofn_SSL_get_rbio
 #define SSL_get_wbio aiofn_SSL_get_wbio
 #define SSL_set_accept_state aiofn_SSL_set_accept_state
 #define SSL_set_connect_state aiofn_SSL_set_connect_state

@@ -1,3 +1,5 @@
+from libc.stdint cimport uint64_t, uint8_t
+
 cdef extern from "openssl_compat.h" nogil:
     ctypedef struct SSL_CTX:
         pass
@@ -43,16 +45,18 @@ cdef extern from "openssl_compat.h" nogil:
     long BIO_get_mem_data(BIO *b, char** pp)
     int BIO_reset(BIO *b)
     int BIO_get_ktls_send(BIO *b)
+    int BIO_get_ktls_recv(BIO *b)
     int SSL_sendfile_available()
 
     SSL *SSL_new(SSL_CTX *ctx)
     void SSL_free(SSL *ssl)
     void SSL_set_bio(SSL *ssl, BIO *rbio, BIO *wbio)
     int SSL_set_fd(SSL *ssl, int fd)
+    BIO *SSL_get_rbio(const SSL *ssl)
     BIO *SSL_get_wbio(const SSL *ssl)
     void SSL_set_accept_state(SSL *ssl)
     void SSL_set_connect_state(SSL *ssl)
-    unsigned long long SSL_set_options(SSL *ssl, unsigned long long op)
+    uint64_t SSL_set_options(SSL *ssl, uint64_t op)
     long SSL_set_mode(SSL *ssl, long mode)
     int SSL_set_tlsext_host_name(const SSL *s, const char *name)
     int SSL_get_error(const SSL *ssl, int ret)

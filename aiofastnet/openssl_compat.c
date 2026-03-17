@@ -36,6 +36,7 @@ SSL *(*aiofn_SSL_new)(SSL_CTX *ctx) = NULL;
 void (*aiofn_SSL_free)(SSL *ssl) = NULL;
 void (*aiofn_SSL_set_bio)(SSL *ssl, BIO *rbio, BIO *wbio) = NULL;
 int (*aiofn_SSL_set_fd)(SSL *ssl, int fd) = NULL;
+BIO *(*aiofn_SSL_get_rbio)(const SSL *ssl) = NULL;
 BIO *(*aiofn_SSL_get_wbio)(const SSL *ssl) = NULL;
 void (*aiofn_SSL_set_accept_state)(SSL *ssl) = NULL;
 void (*aiofn_SSL_set_connect_state)(SSL *ssl) = NULL;
@@ -232,6 +233,7 @@ int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path) {
     LOAD_REQUIRED(aiofn_SSL_free, "SSL_free");
     LOAD_REQUIRED(aiofn_SSL_set_bio, "SSL_set_bio");
     LOAD_REQUIRED(aiofn_SSL_set_fd, "SSL_set_fd");
+    LOAD_REQUIRED(aiofn_SSL_get_rbio, "SSL_get_rbio");
     LOAD_REQUIRED(aiofn_SSL_get_wbio, "SSL_get_wbio");
     LOAD_REQUIRED(aiofn_SSL_set_accept_state, "SSL_set_accept_state");
     LOAD_REQUIRED(aiofn_SSL_set_connect_state, "SSL_set_connect_state");
@@ -319,6 +321,10 @@ int aiofn_BIO_reset(BIO *b) {
 
 int aiofn_BIO_get_ktls_send(BIO *b) {
     return aiofn_BIO_ctrl(b, BIO_CTRL_GET_KTLS_SEND, 0, NULL) > 0;
+}
+
+int aiofn_BIO_get_ktls_recv(BIO *b) {
+    return aiofn_BIO_ctrl(b, BIO_CTRL_GET_KTLS_RECV, 0, NULL) > 0;
 }
 
 int aiofn_SSL_sendfile_available(void) {

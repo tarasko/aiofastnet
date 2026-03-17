@@ -1,4 +1,5 @@
 from .openssl cimport SSL_CTX, BIO, SSL, X509
+from libc.stdint cimport uint64_t
 
 
 cpdef enum SSLError:
@@ -38,7 +39,9 @@ cdef class SSLObject:
     cpdef object getpeercert(self, binary_form=*)
     cpdef str compression(self)
     cpdef object selected_alpn_protocol(self)
+    cpdef uint64_t enable_ktls(self)
     cpdef int ktls_send_enabled(self)
+    cpdef int ktls_recv_enabled(self)
 
     # Used by SSLProtocol
     # These methods wrap SSL* operations

@@ -383,10 +383,20 @@ def make_test_ssl_contexts(cert_file: Union[str, Path], key_file: Union[str, Pat
 
     server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     server_context.load_cert_chain(certfile=cert_file, keyfile=key_file)
+    server_context.options |= ssl.OP_ENABLE_KTLS
+    server_context.set_ciphers("ECDHE-RSA-AES128-GCM-SHA256")
 
     client_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     client_context.check_hostname = False
     client_context.verify_mode = ssl.CERT_NONE
+    client_context.options |= ssl.OP_ENABLE_KTLS
+    client_context.set_ciphers("ECDHE-RSA-AES128-GCM-SHA256")
+
+    server_context.minimum_version = ssl.TLSVersion.TLSv1_2
+    server_context.maximum_version = ssl.TLSVersion.TLSv1_2
+    client_context.minimum_version = ssl.TLSVersion.TLSv1_2
+    client_context.maximum_version = ssl.TLSVersion.TLSv1_2
+
     return server_context, client_context
 
 

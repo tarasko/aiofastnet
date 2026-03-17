@@ -37,10 +37,19 @@ def _build_ssl_contexts() -> tuple[ssl.SSLContext, ssl.SSLContext]:
 
     server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     server_ctx.load_cert_chain(certfile=str(cert_file), keyfile=str(key_file))
+    server_ctx.options |= ssl.OP_ENABLE_KTLS
+    server_ctx.set_ciphers("ECDHE-RSA-AES128-GCM-SHA256")
+    server_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    server_ctx.maximum_version = ssl.TLSVersion.TLSv1_2
 
     client_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     client_ctx.check_hostname = False
     client_ctx.verify_mode = ssl.CERT_NONE
+    client_ctx.options |= ssl.OP_ENABLE_KTLS
+    client_ctx.set_ciphers("ECDHE-RSA-AES128-GCM-SHA256")
+    client_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    client_ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+
     return server_ctx, client_ctx
 
 
