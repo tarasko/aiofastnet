@@ -154,14 +154,12 @@ cdef class SSLObject:
             SSL_set_bio(self.ssl, self.incoming, self.outgoing)
             BIO_set_nbio(self.incoming, 1)
             BIO_set_nbio(self.outgoing, 1)
-            SSL_set_mode(self.ssl,
-                         SSL_MODE_AUTO_RETRY | SSL_MODE_ENABLE_PARTIAL_WRITE)
+            SSL_set_mode(self.ssl, SSL_MODE_AUTO_RETRY | SSL_MODE_ENABLE_PARTIAL_WRITE)
         else:
             if SSL_set_fd(self.ssl, sock.fileno()) != 1:
                 SSL_free(self.ssl)
                 self.ssl = NULL
                 raise ssl.SSLError("SSL_set_fd failed")
-            SSL_set_options(self.ssl, SSL_OP_ENABLE_KTLS)
             SSL_set_mode(self.ssl, SSL_MODE_AUTO_RETRY | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER)
             SSL_set_read_ahead(self.ssl, 1)
 
