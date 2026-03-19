@@ -9,7 +9,7 @@ aiofastnet
     :target: https://pypi.org/project/aiofastnet
     :alt: Latest PyPI package version
 
-``aiofastnet`` is a drop-in optimized replacement for:
+``aiofastnet`` provides drop-in optimized replacements for:
 
 - `loop.create_connection() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_connection>`_
 - `loop.create_server() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_server>`_
