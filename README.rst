@@ -9,12 +9,12 @@ aiofastnet
     :target: https://pypi.org/project/aiofastnet
     :alt: Latest PyPI package version
 
-``aiofastnet`` is a drop-in replacement for
-`loop.create_connection() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_connection>`_
-and
-`loop.create_server() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_server>`_
-that reduces transport and SSL overhead in performance-sensitive ``asyncio``
-networking code.
+``aiofastnet`` provides CPU and memory optimized implementations of:
+
+- `loop.create_connection() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_connection>`_
+- `loop.create_server() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_server>`_
+- `loop.start_tls() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.start_tls>`_
+- `loop.sendfile() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sendfile>`_
 
 If your library or application already uses the ``asyncio`` transport/protocol
 model, ``aiofastnet`` lets you keep the same architecture while replacing one of
@@ -23,7 +23,8 @@ the most expensive layers underneath it.
 Why Developers Care
 ===================
 
-- **Drop-in API**. Keep using the standard ``asyncio`` transport/protocol model.
+- **Drop-in API**. Keep using the standard ``asyncio`` transport/protocol model
+  and familiar loop-level networking operations.
 - **Faster hot path**. Transport and SSL internals are reimplemented in Cython/C
   to reduce overhead on long-lived connections.
 - **Particularly strong for SSL-heavy workloads**. ``aiofastnet`` uses OpenSSL
@@ -102,6 +103,21 @@ protocol factory:
 
 For servers, replace ``loop.create_server(...)`` with
 ``aiofastnet.create_server(loop, ...)`` in the same way.
+
+``aiofastnet`` also exposes ``start_tls`` and ``sendfile``:
+
+.. code-block:: python
+
+   transport = await aiofastnet.start_tls(
+       loop,
+       transport,
+       protocol,
+       ssl_context,
+       server_side=False,
+       server_hostname="example.com",
+   )
+
+   await aiofastnet.sendfile(transport, fileobj)
 
 When aiofastnet Is a Good Fit
 =============================
