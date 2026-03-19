@@ -9,7 +9,7 @@ aiofastnet
     :target: https://pypi.org/project/aiofastnet
     :alt: Latest PyPI package version
 
-``aiofastnet`` provides CPU and memory optimized implementations of:
+``aiofastnet`` is a drop-in optimized replacement for:
 
 - `loop.create_connection() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_connection>`_
 - `loop.create_server() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_server>`_
@@ -20,13 +20,13 @@ If your library or application already uses the ``asyncio`` transport/protocol
 model, ``aiofastnet`` lets you keep the same architecture while replacing one of
 the most expensive layers underneath it.
 
-Why Developers Care
+Why Use aiofastnet
 ===================
 
-- **Drop-in API**. Keep using the standard ``asyncio`` transport/protocol model
-  and familiar loop-level networking operations.
 - **Faster hot path**. Transport and SSL internals are reimplemented in Cython/C
   to reduce overhead on long-lived connections.
+- **Drop-in API**. Keep using the standard ``asyncio`` transport/protocol model
+  and familiar loop-level networking operations.
 - **Particularly strong for SSL-heavy workloads**. ``aiofastnet`` uses OpenSSL
   more directly and avoids extra copies in the data path.
 - **Safer write buffer behavior**. After ``write()`` or ``writelines()``
