@@ -27,6 +27,8 @@ Why Use aiofastnet
   to reduce overhead on long-lived connections.
 - **Drop-in API**. Keep using the standard ``asyncio`` transport/protocol model
   and familiar loop-level networking operations.
+- **Works with the event loop you already use**. ``aiofastnet`` works with
+  stock ``asyncio`` loops, ``uvloop``, and ``winloop``.
 - **Particularly strong for SSL-heavy workloads**. ``aiofastnet`` uses OpenSSL
   more directly and avoids extra copies in the data path.
 - **Safer write buffer behavior**. After ``write()`` or ``writelines()``
@@ -189,7 +191,8 @@ When Not To Use aiofastnet
 Platform Compatibility
 ======================
 
-``aiofastnet`` is built and tested on Linux, macOS, and Windows.
+``aiofastnet`` is built and tested on Linux, macOS, and Windows. It works with
+the standard ``asyncio`` event loop, ``uvloop``, and ``winloop``.
 
 On Windows it works with ``SelectorEventLoop`` and ``winloop``.
 With ``ProactorEventLoop`` it falls back to ``asyncio``'s native connection and
