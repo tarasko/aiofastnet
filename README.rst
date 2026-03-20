@@ -31,9 +31,13 @@ Why Use aiofastnet
   stock ``asyncio`` loops, ``uvloop``, and ``winloop``.
 - **Particularly strong for SSL-heavy workloads**. ``aiofastnet`` uses OpenSSL
   more directly and avoids extra copies in the data path.
-- **Safer write buffer behavior**. After ``write()`` or ``writelines()``
-  returns, application code can safely reuse buffers without guessing what was
-  retained internally.
+**Write buffer safety**. If the socket cannot accept everything immediately,
+  only ``bytes`` and ``memoryview`` objects backed by ``bytes`` are retained
+  without copying. Other objects, including ``bytearray`` and non-``bytes``
+  exporters, are copied before being queued.
+  This is different from asyncio behavior when Transport can send junk after
+  ``write()`` / ``writelines()`` returns and user has modified the underlying
+  buffer content.
 - **Better SSL backpressure semantics**. Buffer sizes and write limits reflect
   what is actually queued across the stack.
 - **Works for library authors**. WebSocket, HTTP, RPC, proxy, database, broker,
@@ -47,21 +51,15 @@ The benchmark below compares echo round-trips over loopback for TCP and SSL.
 The exact gains depend on workload, message sizes, CPU, OpenSSL version, and how
 much of your total runtime is spent in transport/SSL plumbing.
 
-What to take away:
-
-- ``aiofastnet`` is built for workloads where connection setup is not the
-  bottleneck and the data path matters.
-- The biggest wins usually appear when a meaningful amount of CPU time is spent
-  in ``asyncio`` transport or SSL machinery.
-- If your service or library pushes a lot of data through long-lived TCP or SSL
-  connections, this is the class of problem ``aiofastnet`` targets.
-
 Benchmark source:
 `examples/benchmark.py <https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark.py>`_
 
 .. image:: https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark.png
     :target: https://github.com/tarasko/websocket-benchmark/blob/master
     :align: center
+
+In these benchmarks, ``aiofastnet`` is up to 2.5x faster than standard
+``asyncio``.
 
 Quickstart
 ==========
@@ -136,46 +134,6 @@ transport/protocol APIs and one or more of these are true:
 - You want SSL flow control to reflect the whole buffered stack, not only part
   of it.
 
-Why It Is Different
-===================
-
-Compared to stdlib ``asyncio``
-------------------------------
-
-- ``aiofastnet`` replaces parts of CPython's transport and SSL stack with
-  Cython/C implementations tuned for hot I/O paths.
-- It tries to push data to the socket immediately on ``write()`` and only keeps
-  queued references when that is safe.
-- For SSL transports, ``get_write_buffer_size()`` and
-  ``set_write_buffer_limits()`` reflect the total queued output across the whole
-  stack.
-
-Compared to ``uvloop``
-----------------------
-
-``uvloop`` is an alternative event loop. ``aiofastnet`` focuses on the
-transport/SSL layer while staying within the standard ``asyncio``
-transport/protocol model and API shape.
-
-If your workload is SSL-heavy or limited by transport-layer overhead,
-``aiofastnet`` is designed to remove overhead specifically in that layer instead
-of asking you to adopt a different programming model.
-
-Behavior That Matters in Practice
-=================================
-
-``aiofastnet`` has a few properties that are especially relevant for low-level
-networking code:
-
-- **Write buffer safety**. If the socket cannot accept everything immediately,
-  only ``bytes`` and ``memoryview`` objects backed by ``bytes`` are retained
-  without copying. Other objects, including ``bytearray`` and non-``bytes``
-  exporters, are copied before being queued.
-- **More honest SSL backpressure**. Buffer accounting covers the whole SSL
-  output path.
-- **Same integration model**. Existing protocol factories, transports, and
-  event-loop driven integration points continue to fit.
-
 When Not To Use aiofastnet
 ==========================
 
@@ -184,9 +142,6 @@ When Not To Use aiofastnet
 - If your workload is dominated by very short-lived connections, you should
   expect little or no gain. ``aiofastnet`` focuses on optimizing the data path
   after connection establishment.
-- If Windows ``ProactorEventLoop`` support is a hard requirement, ``aiofastnet``
-  falls back to ``asyncio``'s native implementation on that loop, so you do not
-  get the custom transport implementation there.
 
 Platform Compatibility
 ======================
