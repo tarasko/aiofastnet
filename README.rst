@@ -20,30 +20,6 @@ If your library or application already uses the ``asyncio`` transport/protocol
 model, ``aiofastnet`` lets you keep the same architecture while replacing one of
 the most expensive layers underneath it.
 
-Why Use aiofastnet
-===================
-
-- **Faster hot path**. Transport and SSL internals are reimplemented in Cython/C
-  to reduce overhead on long-lived connections.
-- **Drop-in API**. Keep using the standard ``asyncio`` transport/protocol model
-  and familiar loop-level networking operations.
-- **Works with the event loop you already use**. ``aiofastnet`` works with
-  stock ``asyncio`` loops, ``uvloop``, and ``winloop``.
-- **Particularly strong for SSL-heavy workloads**. ``aiofastnet`` uses OpenSSL
-  more directly and avoids extra copies in the data path.
-**Write buffer safety**. If the socket cannot accept everything immediately,
-  only ``bytes`` and ``memoryview`` objects backed by ``bytes`` are retained
-  without copying. Other objects, including ``bytearray`` and non-``bytes``
-  exporters, are copied before being queued.
-  This is different from asyncio behavior when Transport can send junk after
-  ``write()`` / ``writelines()`` returns and user has modified the underlying
-  buffer content.
-- **Better SSL backpressure semantics**. Buffer sizes and write limits reflect
-  what is actually queued across the stack.
-- **Works for library authors**. WebSocket, HTTP, RPC, proxy, database, broker,
-  and custom protocol libraries can expose the same API while giving users a
-  faster transport layer.
-
 Benchmark
 =========
 
@@ -60,6 +36,30 @@ Benchmark source:
 
 In these benchmarks, ``aiofastnet`` is up to 2.5x faster than standard
 ``asyncio``.
+
+Why Use aiofastnet
+===================
+
+- **Faster hot path**. Transport and SSL internals are reimplemented in Cython/C
+  to reduce overhead on long-lived connections.
+- **Drop-in API**. Keep using the standard ``asyncio`` transport/protocol model
+  and familiar loop-level networking operations.
+- **Works with the event loop you already use**. ``aiofastnet`` works with
+  stock ``asyncio`` loops, ``uvloop``, and ``winloop``.
+- **Particularly strong for SSL-heavy workloads**. ``aiofastnet`` uses OpenSSL
+  more directly and avoids extra copies in the data path.
+- **Write buffer safety**. If the socket cannot accept everything immediately,
+  only ``bytes`` and ``memoryview`` objects backed by ``bytes`` are retained
+  without copying. Other objects, including ``bytearray`` and non-``bytes``
+  exporters, are copied before being queued.
+  This is different from asyncio behavior when Transport can send junk after
+  ``write()`` / ``writelines()`` returns and user has modified the underlying
+  buffer content.
+- **Better SSL backpressure semantics**. Buffer sizes and write limits reflect
+  what is actually queued across the stack.
+- **Works for library authors**. WebSocket, HTTP, RPC, proxy, database, broker,
+  and custom protocol libraries can expose the same API while giving users a
+  faster transport layer.
 
 Quickstart
 ==========
