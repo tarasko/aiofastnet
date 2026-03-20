@@ -9,7 +9,7 @@ aiofastnet
     :target: https://pypi.org/project/aiofastnet
     :alt: Latest PyPI package version
 
-``aiofastnet`` provides drop-in optimized replacements for:
+``aiofastnet`` provides drop-in optimized replacements for asyncio's:
 
 - `loop.create_connection() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_connection>`_
 - `loop.create_server() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_server>`_
@@ -48,13 +48,13 @@ Why Use aiofastnet
   stock ``asyncio`` loops, ``uvloop``, and ``winloop``.
 - **Particularly strong for SSL-heavy workloads**. ``aiofastnet`` uses OpenSSL
   more directly and avoids extra copies in the data path.
-- **Write buffer safety**. If the socket cannot accept everything immediately,
-  only ``bytes`` and ``memoryview`` objects backed by ``bytes`` are retained
-  without copying. Other objects, including ``bytearray`` and non-``bytes``
-  exporters, are copied before being queued.
-  This is different from asyncio behavior when Transport can send junk after
-  ``write()`` / ``writelines()`` returns and user has modified the underlying
-  buffer content.
+- **Safer ``write()`` / ``writelines()`` behavior**. If the socket cannot accept
+  everything immediately, only ``bytes`` and ``memoryview`` objects backed by
+  ``bytes`` are retained without copying. Other objects, including
+  ``bytearray`` and non-``bytes`` exporters, are copied before being queued.
+  Unlike standard ``asyncio`` transports, this avoids sending corrupted data if
+  application code modifies the underlying buffer after ``write()`` /
+  ``writelines()`` returns.
 - **Better SSL backpressure semantics**. Buffer sizes and write limits reflect
   what is actually queued across the stack.
 - **Works for library authors**. WebSocket, HTTP, RPC, proxy, database, broker,
