@@ -34,7 +34,7 @@ Benchmark source:
     :target: https://github.com/tarasko/websocket-benchmark/blob/master
     :align: center
 
-In these benchmarks, ``aiofastnet`` is up to 2.5x faster than standard
+In these benchmarks, ``aiofastnet`` is up to 2.2x faster than standard
 ``asyncio``.
 
 Why Use aiofastnet
