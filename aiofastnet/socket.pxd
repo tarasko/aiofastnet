@@ -34,7 +34,7 @@ typedef int SOCKET_T;
 #define PyLong_AsSocket_t(fd) (SOCKET_T)PyLong_AsLongLong(fd)
 #endif
 
-/* Didn't need to recast the entire object only the parts that I thought were useful... */
+/* Didn't need to recast the entire object only the parts that are useful */
 typedef struct {
     PyObject_HEAD
     SOCKET_T sock_fd;
