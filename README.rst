@@ -10,7 +10,7 @@ aiofastnet
     :alt: Latest PyPI package version
 
 .. image:: https://img.shields.io/pypi/dm/aiofastnet.svg
-    :target: https://pypistats.org/packages/picows
+    :target: https://pypistats.org/packages/aiofastnet
     :alt: Downloads count
 
 
