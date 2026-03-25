@@ -1,13 +1,18 @@
 aiofastnet
 ==========
 
-.. image:: https://img.shields.io/github/actions/workflow/status/tarasko/aiofastnet/run-tests.yml?branch=master
+.. image:: https://img.shields.io/github/actions/workflow/status/tarasko/aiofastnet/run-tests.yml?branch=master&label=tests
     :target: https://github.com/tarasko/aiofastnet/actions/workflows/run-tests.yml?query=branch%3Amaster
     :alt: Test status
 
 .. image:: https://badge.fury.io/py/aiofastnet.svg
     :target: https://pypi.org/project/aiofastnet
     :alt: Latest PyPI package version
+
+.. image:: https://img.shields.io/pypi/dm/aiofastnet.svg
+    :target: https://pypistats.org/packages/picows
+    :alt: Downloads count
+
 
 ``aiofastnet`` provides drop-in optimized replacements for asyncio's:
 
