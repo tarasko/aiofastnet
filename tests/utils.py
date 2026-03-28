@@ -1,7 +1,6 @@
 import asyncio
 import socket
 import weakref
-from collections import deque
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 import importlib

@@ -1,85 +1,25 @@
 #!/usr/bin/env python3
+
+# Make 8 secure client-server pairs running on the same event loop
+# python -m examples.benchmark_threaded --pairs 8 --use-tls --no-thread
+# Result: mode=single-loop tls=True pairs=8 duration=2.000s message_size=256 total_requests=57413 total_rps=28706.50
+
+# Make 8 secure client-server pairs, each pair running in its own loop in its own thread.
+# GIL is disabled, all cores are fully utilized
+# python -X gil=0 -m examples.benchmark_threaded --pairs 8 --use-tls
+# Result: mode=threaded tls=True pairs=8 duration=2.000s message_size=256 total_requests=166993 total_rps=83496.50
+
+# Make 8 secure client-server pairs, each pair running in its own loop in its own thread.
+# GIL is enabled and it kills all performance.
+# python -X gil=1 -m examples.benchmark_threaded --pairs 64 --use-tls
+# Result: mode=threaded tls=True pairs=8 duration=2.000s message_size=256 total_requests=29511 total_rps=14755.50
+
 import argparse
 import asyncio
 import ssl
-import sys
 import threading
-from contextlib import asynccontextmanager
-from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-import aiofastnet
-from examples.benchmark_protocol import ClientProtocol, ServerProtocol
-
-
-def build_ssl_contexts() -> tuple[ssl.SSLContext, ssl.SSLContext]:
-    cert_file = PROJECT_ROOT / "tests" / "test.crt"
-    key_file = PROJECT_ROOT / "tests" / "test.key"
-
-    server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    server_ctx.load_cert_chain(certfile=str(cert_file), keyfile=str(key_file))
-
-    client_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-    client_ctx.check_hostname = False
-    client_ctx.verify_mode = ssl.CERT_NONE
-
-    return server_ctx, client_ctx
-
-
-@asynccontextmanager
-async def EchoServer(server_ssl: ssl.SSLContext | None):
-    loop = asyncio.get_running_loop()
-    server = await aiofastnet.create_server(
-        loop,
-        ServerProtocol,
-        host="127.0.0.1",
-        ssl=server_ssl
-    )
-    try:
-        yield server.sockets[0].getsockname()[1]
-    finally:
-        server.close()
-        await server.wait_closed()
-
-
-@asynccontextmanager
-async def EchoClient(port: int, duration: float, payload: bytes, client_ssl: ssl.SSLContext | None) -> ClientProtocol:
-    loop = asyncio.get_running_loop()
-    protocol = ClientProtocol(payload, duration, 0)
-    transport, client = await aiofastnet.create_connection(
-        loop,
-        lambda: protocol,
-        host="127.0.0.1",
-        port=port,
-        ssl=client_ssl,
-        server_hostname="127.0.0.1" if client_ssl is not None else None,
-    )
-    try:
-        yield client
-    finally:
-        transport.close()
-
-
-async def run_pair(
-    duration: float,
-    payload: bytes,
-    server_ssl: ssl.SSLContext | None,
-    client_ssl: ssl.SSLContext | None,
-    barrier: threading.Barrier | asyncio.Barrier | None,
-) -> int:
-    async with EchoServer(server_ssl) as server_port:
-        async with EchoClient(server_port, duration, payload, client_ssl) as client:
-            if barrier is not None:
-                if isinstance(barrier, asyncio.Barrier):
-                    await barrier.wait()
-                else:
-                    barrier.wait()
-            client.write_first_data()
-            await client.closed
-            return client.requests
+from .utils import build_ssl_contexts, run_pair
 
 
 async def run_single_loop(
@@ -110,7 +50,8 @@ def run_threaded(
 
     def thread_main(index: int) -> None:
         try:
-            results[index] = asyncio.run(run_pair(duration, payload, server_ssl, client_ssl, barrier))
+            results[index] = asyncio.run(
+                run_pair(duration, payload, server_ssl, client_ssl, barrier))
         except BaseException as exc:
             errors[index] = exc
 
@@ -139,7 +80,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--duration",
         type=float,
-        default=10.0,
+        default=2.0,
         help="Benchmark duration in seconds for each client",
     )
     parser.add_argument(
@@ -179,7 +120,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     payload = b"x" * args.msg_size
-    server_ssl, client_ssl = (build_ssl_contexts() if args.use_tls else (None, None))
+    server_ssl, client_ssl = (
+        build_ssl_contexts() if args.use_tls else (None, None))
 
     if args.no_threads:
         total_requests = asyncio.run(
