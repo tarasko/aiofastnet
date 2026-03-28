@@ -31,7 +31,7 @@ async def run_single_loop(
 ) -> int:
     barrier = asyncio.Barrier(pairs)
     results = await asyncio.gather(
-        *(run_pair(duration, payload, server_ssl, client_ssl, barrier)
+        *(run_pair(True, duration, payload, server_ssl, client_ssl, barrier)
           for _ in range(pairs))
     )
     return sum(results)
@@ -51,7 +51,7 @@ def run_threaded(
     def thread_main(index: int) -> None:
         try:
             results[index] = asyncio.run(
-                run_pair(duration, payload, server_ssl, client_ssl, barrier))
+                run_pair(True, duration, payload, server_ssl, client_ssl, barrier))
         except BaseException as exc:
             errors[index] = exc
 

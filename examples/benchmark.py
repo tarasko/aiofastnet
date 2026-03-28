@@ -22,7 +22,8 @@ async def run_benchmark(args, loop_kind: str, use_aiofastnet: bool, transport_ki
     server_ssl_ctx, client_ssl_ctx = build_ssl_contexts() \
         if transport_kind == "ssl" else (None, None)
 
-    rps = await run_pair(use_aiofastnet, payload, server_ssl_ctx, client_ssl_ctx, None, args.sndbuf_size)
+    requests = await run_pair(use_aiofastnet, args.duration, payload, server_ssl_ctx, client_ssl_ctx, None, args.sndbuf_size)
+    rps = requests/args.duration
     print(f"{transport_kind}-{loop_kind}-{'aiofastnet' if use_aiofastnet else 'native'}-{msg_size}: {rps:.2f}")
 
     return rps
@@ -164,5 +165,4 @@ def main():
 
 
 if __name__ == "__main__":
-    basicConfig(level=DEBUG)
     main()

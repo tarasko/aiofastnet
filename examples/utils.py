@@ -72,12 +72,11 @@ async def EchoClient(use_aiofastnet,
                      client_ssl: ssl.SSLContext | None,
                      sndbuf_size: int | None = None) -> ClientProtocol:
     loop = asyncio.get_running_loop()
-    protocol = ClientProtocol(payload, duration, 0)
     create_connection = partial(aiofastnet.create_connection, loop) \
         if use_aiofastnet else loop.create_connection
 
     transport, client = await create_connection(
-        lambda: protocol,
+        lambda: ClientProtocol(payload, duration, 0),
         host="127.0.0.1",
         port=port,
         ssl=client_ssl,
@@ -94,6 +93,7 @@ async def EchoClient(use_aiofastnet,
 
 
 async def run_pair(
+    use_aiofastnet: bool,
     duration: float,
     payload: bytes,
     server_ssl: ssl.SSLContext | None,
@@ -101,8 +101,8 @@ async def run_pair(
     barrier: threading.Barrier | asyncio.Barrier | None,
     sndbuf_size: int | None = None
 ) -> int:
-    async with EchoServer(True, server_ssl, sndbuf_size) as server_port:
-        async with EchoClient(True, server_port, duration, payload, client_ssl, sndbuf_size) as client:
+    async with EchoServer(use_aiofastnet, server_ssl, sndbuf_size) as server_port:
+        async with EchoClient(use_aiofastnet, server_port, duration, payload, client_ssl, sndbuf_size) as client:
             if barrier is not None:
                 if isinstance(barrier, asyncio.Barrier):
                     await barrier.wait()
