@@ -44,7 +44,7 @@ cdef class ClientProtocol(Protocol, asyncio.BufferedProtocol):
         readonly int requests
         readonly object closed
 
-    def __init__(self, payload: bytes, duration: float):
+    def __init__(self, payload: bytes, duration: float, warmup_rounds=10):
         self._payload = payload
         self._duration = duration
         self._loop = asyncio.get_running_loop()
@@ -53,7 +53,7 @@ cdef class ClientProtocol(Protocol, asyncio.BufferedProtocol):
         self._read_buf = bytearray(262144)
         self._received_for_reply = 0
         self._deadline = 0.0
-        self._warmup_left = 10
+        self._warmup_left = warmup_rounds
         self._measuring = False
 
         self.requests = 0
@@ -61,7 +61,10 @@ cdef class ClientProtocol(Protocol, asyncio.BufferedProtocol):
 
     def connection_made(self, transport):
         self._transport = transport
-        self._transport.write(self._payload)
+        self._write()
+
+    cpdef write_first_data(self):
+        self._write()
 
     cpdef get_buffer(self, Py_ssize_t sizehint):
         return self._read_buf
@@ -72,7 +75,16 @@ cdef class ClientProtocol(Protocol, asyncio.BufferedProtocol):
             return
 
         self._received_for_reply -= len(self._payload)
+        self._write()
 
+    def connection_lost(self, exc):
+        if not self.closed.done():
+            if exc is None:
+                self.closed.set_result(None)
+            else:
+                self.closed.set_exception(exc)
+
+    cdef _write(self):
         if self._measuring:
             if <float>self._loop.time() >= self._deadline:
                 self._transport.close()
@@ -89,10 +101,3 @@ cdef class ClientProtocol(Protocol, asyncio.BufferedProtocol):
             (<Transport>self._transport).write(self._payload)
         else:
             self._transport.write(self._payload)
-
-    def connection_lost(self, exc):
-        if not self.closed.done():
-            if exc is None:
-                self.closed.set_result(None)
-            else:
-                self.closed.set_exception(exc)

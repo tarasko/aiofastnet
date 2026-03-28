@@ -3,7 +3,7 @@ import argparse
 import asyncio
 import ssl
 import sys
-from threading import Thread
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -48,7 +48,7 @@ async def EchoServer(server_ssl: ssl.SSLContext | None):
 @asynccontextmanager
 async def EchoClient(port: int, duration: float, payload: bytes, client_ssl: ssl.SSLContext | None) -> ClientProtocol:
     loop = asyncio.get_running_loop()
-    protocol = ClientProtocol(payload, duration)
+    protocol = ClientProtocol(payload, duration, 0)
     transport, client = await aiofastnet.create_connection(
         loop,
         lambda: protocol,
@@ -68,9 +68,16 @@ async def run_pair(
     payload: bytes,
     server_ssl: ssl.SSLContext | None,
     client_ssl: ssl.SSLContext | None,
+    barrier: threading.Barrier | asyncio.Barrier | None,
 ) -> int:
     async with EchoServer(server_ssl) as server_port:
         async with EchoClient(server_port, duration, payload, client_ssl) as client:
+            if barrier is not None:
+                if isinstance(barrier, asyncio.Barrier):
+                    await barrier.wait()
+                else:
+                    barrier.wait()
+            client.write_first_data()
             await client.closed
             return client.requests
 
@@ -82,8 +89,9 @@ async def run_single_loop(
     server_ssl: ssl.SSLContext | None,
     client_ssl: ssl.SSLContext | None,
 ) -> int:
+    barrier = asyncio.Barrier(pairs)
     results = await asyncio.gather(
-        *(run_pair(duration, payload, server_ssl, client_ssl)
+        *(run_pair(duration, payload, server_ssl, client_ssl, barrier)
           for _ in range(pairs))
     )
     return sum(results)
@@ -98,15 +106,16 @@ def run_threaded(
 ) -> int:
     results = [0] * pairs
     errors: list[BaseException | None] = [None] * pairs
+    barrier = threading.Barrier(pairs)
 
     def thread_main(index: int) -> None:
         try:
-            results[index] = asyncio.run(run_pair(duration, payload, server_ssl, client_ssl))
+            results[index] = asyncio.run(run_pair(duration, payload, server_ssl, client_ssl, barrier))
         except BaseException as exc:
             errors[index] = exc
 
     threads = [
-        Thread(target=thread_main, args=(index,), name=f"echo-pair-{index}")
+        threading.Thread(target=thread_main, args=(index,), name=f"echo-pair-{index}")
         for index in range(pairs)
     ]
 
