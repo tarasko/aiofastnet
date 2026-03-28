@@ -44,7 +44,7 @@ cdef class ClientProtocol(Protocol, asyncio.BufferedProtocol):
         readonly int requests
         readonly object closed
 
-    def __init__(self, payload: bytes, duration: float, warmup_rounds=10):
+    def __init__(self, payload: bytes, duration: float, warmup_rounds: int=10):
         self._payload = payload
         self._duration = duration
         self._loop = asyncio.get_running_loop()
@@ -61,7 +61,6 @@ cdef class ClientProtocol(Protocol, asyncio.BufferedProtocol):
 
     def connection_made(self, transport):
         self._transport = transport
-        self._write()
 
     cpdef write_first_data(self):
         self._write()
