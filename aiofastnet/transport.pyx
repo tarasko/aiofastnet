@@ -94,6 +94,7 @@ cdef class SocketTransport(Transport):
     cdef:
         object __weakref__
         object _loop
+        unsigned long _thread_id
         object _protocol
         bint _protocol_buffered
         bint _protocol_aiofn
@@ -103,7 +104,6 @@ cdef class SocketTransport(Transport):
         Py_ssize_t _low_water
         dict _extra
 
-        unsigned long _thread_id
         object _sock
         object _server
         object _write_backlog
@@ -121,6 +121,7 @@ cdef class SocketTransport(Transport):
     def __init__(self, loop, sock, protocol, waiter=None, extra=None, server=None):
         assert loop is not None
         self._loop = loop
+        self._thread_id = PyThread_get_thread_ident()
         self.set_protocol(protocol)
         self._set_write_buffer_limits()
         self._extra = {} if extra is None else extra
@@ -134,7 +135,6 @@ cdef class SocketTransport(Transport):
                 self._extra['peername'] = sock.getpeername()
             except socket.error:
                 self._extra['peername'] = None
-        self._thread_id = PyThread_get_thread_ident()
         self._sock = sock
         self._server = server
         self._write_backlog = collections.deque()
