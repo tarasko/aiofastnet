@@ -169,12 +169,15 @@ Free-Threaded Python
 ``python3.14t``. The extension modules are built to work without forcing the
 legacy GIL back on, so separate event loops may run in separate threads.
 
-A threaded benchmark example is provided in ``examples/benchmark_threaded.py``. It
-shows the intended usage pattern: one event loop per thread, with each
-connection fully owned by the thread and loop that created it.
+The repository includes several free-threading examples:
 
-Separate multithreaded echo server and client examples are provided in
-``examples/echo_server_threaded.py`` and ``examples/echo_client_threaded.py``.
+- ``examples/benchmark_threaded.py`` runs multiple echo client/server pairs in
+  parallel to compare single-loop and multi-threaded execution.
+- ``examples/echo_server_threaded.py`` starts one listening echo server per
+  thread on the same port with ``reuse_port=True`` so the kernel can distribute
+  incoming connections across worker threads.
+- ``examples/echo_client_threaded.py`` starts one echo client per thread and
+  drives them in parallel against the shared server port.
 
 Transport objects remain thread-affine. Methods such as ``write()``,
 ``writelines()``, ``close()``, ``pause_reading()``, and similar transport

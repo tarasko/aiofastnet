@@ -1,3 +1,10 @@
+"""Multithreaded echo server example.
+
+Starts one event loop per thread and binds all server sockets to the same port
+with ``reuse_port=True`` so incoming connections are distributed across worker
+threads by the kernel.
+"""
+
 import argparse
 import asyncio
 import concurrent.futures

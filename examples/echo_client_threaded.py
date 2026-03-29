@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""Multithreaded echo client example.
+
+Starts one event loop per thread and runs one echo client connection in each
+thread, all targeting the same server host and port in parallel.
+"""
+
 import argparse
 import asyncio
 import concurrent.futures
