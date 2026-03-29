@@ -2,6 +2,9 @@ from cpython.object cimport (
     PyObject
 )
 
+cdef extern from "pythread.h":
+    unsigned long PyThread_get_thread_ident()
+
 cdef extern from * nogil:
     """
 #include <errno.h>
@@ -31,6 +34,7 @@ cdef extern from * nogil:
 
 #ifdef __WINDOWS__
     #include <winsock2.h>
+    #include <windows.h>
     #define AIOFN_EAGAIN WSAEWOULDBLOCK
     #define AIOFN_EWOULDBLOCK WSAEWOULDBLOCK
     int aiofn_get_last_error() { return WSAGetLastError(); }
@@ -56,7 +60,6 @@ cdef extern from * nogil:
     #include <sys/types.h>
     #include <sys/socket.h>
     #include <sys/uio.h>
-
     #define AIOFN_EAGAIN EAGAIN
     #ifdef EWOULDBLOCK
         #define AIOFN_EWOULDBLOCK EWOULDBLOCK
@@ -76,6 +79,7 @@ cdef extern from * nogil:
     {
         return writev(fd, iov, iovcnt);
     }
+
 #endif
     #define AIOFN_MAX_IOVEC 256
 
@@ -112,6 +116,7 @@ cdef extern from * nogil:
     cdef int AIOFN_EWOULDBLOCK
     cdef int AIOFN_EAGAIN
     cdef int AIOFN_MAX_IOVEC
+    ctypedef unsigned long aiofn_thread_id_t
 
     int aiofn_get_last_error()
     void aiofn_set_exc_from_error(int error)
@@ -126,4 +131,3 @@ cdef extern from * nogil:
         size_t iov_len
 
     Py_ssize_t aiofn_writev_sys(int fd, aiofn_iovec *iov, int iovcnt)
-

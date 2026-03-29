@@ -3,7 +3,6 @@ import argparse
 import asyncio
 import socket
 import sys
-from logging import basicConfig, DEBUG
 from pathlib import Path
 
 import matplotlib.pyplot as plt
