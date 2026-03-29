@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # Make 8 secure client-server pairs running on the same event loop
-# python -m examples.benchmark_threaded --pairs 8 --use-tls --no-thread
+# python -m examples.benchmark_threaded --pairs 8 --use-tls --no-threads
 # Result: mode=single-loop tls=True pairs=8 duration=2.000s message_size=256 total_requests=57413 total_rps=28706.50
 
 # Make 8 secure client-server pairs, each pair running in its own loop in its own thread.

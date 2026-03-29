@@ -173,6 +173,9 @@ A threaded benchmark example is provided in ``examples/benchmark_threaded.py``. 
 shows the intended usage pattern: one event loop per thread, with each
 connection fully owned by the thread and loop that created it.
 
+Separate multithreaded echo server and client examples are provided in
+``examples/echo_server_threaded.py`` and ``examples/echo_client_threaded.py``.
+
 Transport objects remain thread-affine. Methods such as ``write()``,
 ``writelines()``, ``close()``, ``pause_reading()``, and similar transport
 operations must be called from the same thread that established the connection.
