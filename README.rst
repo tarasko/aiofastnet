@@ -53,7 +53,7 @@ Why Use aiofastnet
   stock ``asyncio`` loops, ``uvloop``, and ``winloop``.
 - **Particularly strong for SSL-heavy workloads**. ``aiofastnet`` uses OpenSSL
   more directly and avoids extra copies in the data path.
-- **Safer ``write()`` / ``writelines()`` behavior**. If the socket cannot accept
+- **Safer transport write() / writelines() behavior**. If the socket cannot accept
   everything immediately, only ``bytes`` and ``memoryview`` objects backed by
   ``bytes`` are retained without copying. Other objects, including
   ``bytearray`` and non-``bytes`` exporters, are copied before being queued.
