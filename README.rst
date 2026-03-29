@@ -171,12 +171,12 @@ legacy GIL back on, so separate event loops may run in separate threads.
 
 The repository includes several free-threading examples:
 
-- ``examples/benchmark_threaded.py`` runs multiple echo client/server pairs in
+- `examples/benchmark_threaded.py <https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_threaded.py>`_ runs multiple echo client/server pairs in
   parallel to compare single-loop and multi-threaded execution.
-- ``examples/echo_server_threaded.py`` starts one listening echo server per
+- `examples/echo_server_threaded.py <https://github.com/tarasko/aiofastnet/blob/master/examples/echo_server_threaded.py>`_ starts one listening echo server per
   thread on the same port with ``reuse_port=True`` so the kernel can distribute
   incoming connections across worker threads.
-- ``examples/echo_client_threaded.py`` starts one echo client per thread and
+- `examples/echo_client_threaded.py <https://github.com/tarasko/aiofastnet/blob/master/examples/echo_client_threaded.py>`_ starts one echo client per thread and
   drives them in parallel against the shared server port.
 
 Transport objects remain thread-affine. Methods such as ``write()``,
