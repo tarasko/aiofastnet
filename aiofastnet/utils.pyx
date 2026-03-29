@@ -67,7 +67,7 @@ cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz
     return PyBytes_FromStringAndSize(ptr, sz)
 
 
-cdef Py_ssize_t aiofn_recv(int sockfd, void* buf, Py_ssize_t len) except? -1:
+cdef Py_ssize_t aiofn_recv(int sockfd, void* buf, Py_ssize_t len) except? -1 nogil:
     cdef:
         ssize_t bytes_read
         int last_error
@@ -84,12 +84,13 @@ cdef Py_ssize_t aiofn_recv(int sockfd, void* buf, Py_ssize_t len) except? -1:
         if not AIOFN_IS_WINDOWS and last_error == errno.EINTR:
             continue
 
-        aiofn_set_exc_from_error(last_error)
+        with gil:
+            aiofn_set_exc_from_error(last_error)
 
         return bytes_read
 
 
-cdef Py_ssize_t aiofn_send(int sockfd, void* buf, Py_ssize_t len) except? -1:
+cdef Py_ssize_t aiofn_send(int sockfd, void* buf, Py_ssize_t len) except? -1 nogil:
     cdef:
         ssize_t bytes_sent
         int last_error
@@ -107,16 +108,18 @@ cdef Py_ssize_t aiofn_send(int sockfd, void* buf, Py_ssize_t len) except? -1:
             if not AIOFN_IS_WINDOWS and last_error == errno.EINTR:
                 continue
 
-            aiofn_set_exc_from_error(last_error)
+            with gil:
+                aiofn_set_exc_from_error(last_error)
             return bytes_sent
 
         if bytes_sent == 0:
             # This should never happen, but who knows?
             # May be len is 0?
-            raise RuntimeError(f"send syscall has sent 0 bytes and did not indicate any error, buf_len={len}")
+            with gil:
+                raise RuntimeError(f"send syscall has sent 0 bytes and did not indicate any error, buf_len={len}")
 
 
-cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* iov, Py_ssize_t iovcnt) except? -1:
+cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* iov, Py_ssize_t iovcnt) except? -1 nogil:
     cdef:
         Py_ssize_t bytes_sent
         int last_error
@@ -135,10 +138,12 @@ cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* iov, Py_ssize_t iovcnt) ex
             if not AIOFN_IS_WINDOWS and last_error == errno.EINTR:
                 continue
 
-            aiofn_set_exc_from_error(last_error)
+            with gil:
+                aiofn_set_exc_from_error(last_error)
             return bytes_sent
 
         if bytes_sent == 0:
             # This should never happen, but who knows?
             # May be len is 0?
-            raise RuntimeError(f"writev syscall has sent 0 bytes and did not indicate any error")
+            with gil:
+                raise RuntimeError(f"writev syscall has sent 0 bytes and did not indicate any error")

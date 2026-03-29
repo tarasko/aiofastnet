@@ -1,7 +1,6 @@
 import asyncio
 import socket
 import weakref
-from collections import deque
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 import importlib
@@ -321,6 +320,24 @@ class ConnectionType:
     name: str
     server_ssl_context: Optional[ssl.SSLContext] = None
     client_ssl_context: Optional[ssl.SSLContext] = None
+
+
+@pytest.fixture(params=["tcp", "ssl"])
+def conn_type(request):
+    if request.param == "tcp":
+        return ConnectionType(name="tcp")
+    else:
+        server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key")
+        return ConnectionType(
+            name="ssl",
+            server_ssl_context=server_context,
+            client_ssl_context=client_context,
+        )
+
+
+@pytest.fixture
+async def loop_debug():
+    asyncio.get_running_loop().set_debug(True)
 
 
 @asynccontextmanager
