@@ -1,8 +1,18 @@
+import asyncio
+import os
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from tests.utils import TestServer, TestClient, conn_type
+
+
+@pytest.fixture()
+def event_loop_policy():
+    if os.name == 'nt':
+        return asyncio.WindowsSelectorEventLoopPolicy()
+    else:
+        return asyncio.DefaultEventLoopPolicy()
 
 
 async def test_wrong_thread_assert(conn_type):
