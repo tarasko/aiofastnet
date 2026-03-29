@@ -162,6 +162,40 @@ transport implementation. For transports created through ``aiofastnet``, a
 compatibility wrapper preserves the documented ``write()`` /
 ``writelines()`` buffer-safety behavior.
 
+Free-Threaded Python
+====================
+
+``aiofastnet`` is compatible with free-threaded Python builds such as
+``python3.14t``. The extension modules are built to work without forcing the
+legacy GIL back on, so separate event loops may run in separate threads.
+
+A threaded benchmark example is provided in ``examples/benchmark_threaded.py``. It
+shows the intended usage pattern: one event loop per thread, with each
+connection fully owned by the thread and loop that created it.
+
+Transport objects remain thread-affine. Methods such as ``write()``,
+``writelines()``, ``close()``, ``pause_reading()``, and similar transport
+operations must be called from the same thread that established the connection.
+Calling transport methods directly from a different thread raises
+``RuntimeError``.
+
+This matches the general ``asyncio`` model: loops and loop-owned objects are
+not meant to be used concurrently from arbitrary threads. ``aiofastnet`` does
+not add internal transport locking for cross-thread access.
+
+To use ``aiofastnet`` correctly with multithreading:
+
+- Create a separate event loop in each worker thread.
+- Create connections and servers inside the loop thread that will own them.
+- Keep all direct transport interaction on that same thread.
+- If another thread needs to send data or close a transport, schedule that work
+  onto the owning loop with ``loop.call_soon_threadsafe(...)`` instead of
+  touching the transport directly.
+
+In other words, free-threaded Python lets multiple loops make progress in
+parallel, but each individual connection is still owned by exactly one loop and
+one thread.
+
 Building From Source
 ====================
 
