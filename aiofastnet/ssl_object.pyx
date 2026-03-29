@@ -202,122 +202,7 @@ cdef class SSLObject:
 
         return PyUnicode_FromStringAndSize(<const char*>protocol, protocol_len)
 
-    cdef inline make_exc_from_ssl_error(self, str descr, int err_code):
-        assert err_code != SSL_ERROR_NONE, "check logic"
-
-        if err_code == SSL_ERROR_WANT_READ:
-            return ssl.SSLWantReadError(descr)
-        elif err_code == SSL_ERROR_WANT_WRITE:
-            return ssl.SSLWantWriteError(descr)
-        elif err_code == SSL_ERROR_ZERO_RETURN:
-            return ssl.SSLZeroReturnError(descr)
-        elif err_code == SSL_ERROR_SYSCALL:
-            return ssl.SSLSyscallError(descr)
-        elif err_code == SSL_ERROR_SSL:
-            return self._exc_from_err_last_error(descr)
-        else:
-            return ssl.SSLError(f"{descr}, unknown error_code={err_code}")
-
-    cdef inline _exc_from_err_last_error(self, str descr):
-        cdef unsigned long last_error = _err_last_error()
-        cdef int lib = ERR_GET_LIB(last_error)
-        cdef const char * lib_ptr
-        cdef const char * reason_ptr
-        cdef const char * verify_ptr
-
-        _log_error_queue()
-
-        lib_ptr = ERR_lib_error_string(last_error)
-        lib_name = PyUnicode_FromString(lib_ptr) if lib_ptr != NULL else f"UNKNOWN_{lib}"
-        lib_name = lib_name.upper()
-        reason_ptr = ERR_reason_error_string(last_error)
-        reason_name = PyUnicode_FromString(
-            reason_ptr) if reason_ptr != NULL else ""
-        reason_name = reason_name.upper().replace(" ", "_")
-
-        if reason_name == "CERTIFICATE_VERIFY_FAILED":
-            assert self.server_hostname is not None
-            verify_code = SSL_get_verify_result(self.ssl)
-            verify_ptr = X509_verify_cert_error_string(verify_code)
-            txt = PyUnicode_FromString(verify_ptr) if verify_ptr != NULL else ""
-            str_error = f"[{lib_name}: {reason_name}] {descr}: {txt}"
-            exc = ssl.SSLCertVerificationError()
-            exc.verify_code = verify_code
-            exc.verify_message = txt
-        else:
-            str_error = f"[{lib_name}: {reason_name}] {descr}"
-            exc = ssl.SSLError()
-        exc.strerror = str_error
-        exc.library = lib_name
-        exc.reason = reason_name
-        return exc
-
-    cdef inline _configure_hostname(self):
-        if not self.server_hostname or self.server_hostname.startswith("."):
-            raise ValueError("server_hostname cannot be an empty string or start with a leading dot.")
-
-        cdef bytes server_hostname_b = self.server_hostname.encode()
-        cdef char* server_hostname_ptr = PyBytes_AS_STRING(server_hostname_b)
-
-        cdef ASN1_OCTET_STRING* ip = a2i_IPADDRESS(PyBytes_AS_STRING(server_hostname_b))
-        if ip == NULL:
-            ERR_clear_error()
-
-        cdef X509_VERIFY_PARAM* ssl_verification_params
-        try:
-            # Only send SNI extension for non-IP hostnames
-            if ip == NULL:
-                if not SSL_set_tlsext_host_name(self.ssl, server_hostname_ptr):
-                    _log_error_queue()
-                    ERR_clear_error()
-                    raise ssl.SSLError("SSL_set_tlsext_host_name failed")
-
-            if self.ssl_ctx_py.check_hostname:
-                ssl_verification_params = SSL_get0_param(self.ssl)
-                if ip == NULL:
-                    if not X509_VERIFY_PARAM_set1_host(ssl_verification_params, server_hostname_ptr, len(server_hostname_b)):
-                        raise ssl.SSLError("X509_VERIFY_PARAM_set1_host failed")
-                else:
-                    if not X509_VERIFY_PARAM_set1_ip(ssl_verification_params, ASN1_STRING_get0_data(ip), ASN1_STRING_length(ip)):
-                        raise ssl.SSLError("X509_VERIFY_PARAM_set1_host failed")
-        finally:
-            if ip != NULL:
-                ASN1_OCTET_STRING_free(ip)
-
-    cdef inline bytes _certificate_to_der(self, X509* certificate):
-        cdef int der_len = i2d_X509(certificate, NULL)
-        cdef bytes der
-        cdef unsigned char* p
-
-        if der_len <= 0:
-            raise ssl.SSLError("i2d_X509 failed")
-
-        der = PyBytes_FromStringAndSize(NULL, der_len)
-        if der is None:
-            raise MemoryError()
-
-        p = <unsigned char*>PyBytes_AS_STRING(der)
-        if i2d_X509(certificate, &p) != der_len:
-            raise ssl.SSLError("i2d_X509 produced invalid DER size")
-
-        return der
-
-    cdef inline _decode_certificate(self, X509* certificate):
-        cdef bytes der = self._certificate_to_der(certificate)
-        cdef str path = ""
-
-        pem = ssl.DER_cert_to_PEM_cert(der)
-        tmp = tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="ascii")
-        try:
-            tmp.write(pem)
-            tmp.close()
-            path = tmp.name
-            return ssl._ssl._test_decode_cert(path)
-        finally:
-            if path:
-                os.unlink(path)
-
-    cdef inline int get_error(self, int ret) noexcept:
+    cdef int get_error(self, int ret) noexcept:
         return SSL_get_error(self.ssl, ret)
 
     cdef int do_handshake(self) noexcept:
@@ -338,7 +223,7 @@ cdef class SSLObject:
     cdef Py_ssize_t pending(self) noexcept:
         return <Py_ssize_t>SSL_pending(self.ssl)
 
-    cdef inline int outgoing_bio_reset(self) noexcept:
+    cdef int outgoing_bio_reset(self) noexcept:
         return BIO_reset(self.outgoing)
 
     cdef Py_ssize_t outgoing_bio_pending(self) except -1:
@@ -380,6 +265,121 @@ cdef class SSLObject:
 
     cdef int renegotiate(self) noexcept:
         return SSL_renegotiate(self.ssl)
+
+    cdef make_exc_from_ssl_error(self, str descr, int err_code):
+        assert err_code != SSL_ERROR_NONE, "check logic"
+
+        if err_code == SSL_ERROR_WANT_READ:
+            return ssl.SSLWantReadError(descr)
+        elif err_code == SSL_ERROR_WANT_WRITE:
+            return ssl.SSLWantWriteError(descr)
+        elif err_code == SSL_ERROR_ZERO_RETURN:
+            return ssl.SSLZeroReturnError(descr)
+        elif err_code == SSL_ERROR_SYSCALL:
+            return ssl.SSLSyscallError(descr)
+        elif err_code == SSL_ERROR_SSL:
+            return self._exc_from_err_last_error(descr)
+        else:
+            return ssl.SSLError(f"{descr}, unknown error_code={err_code}")
+
+    cdef _exc_from_err_last_error(self, str descr):
+        cdef unsigned long last_error = _err_last_error()
+        cdef int lib = ERR_GET_LIB(last_error)
+        cdef const char * lib_ptr
+        cdef const char * reason_ptr
+        cdef const char * verify_ptr
+
+        _log_error_queue()
+
+        lib_ptr = ERR_lib_error_string(last_error)
+        lib_name = PyUnicode_FromString(lib_ptr) if lib_ptr != NULL else f"UNKNOWN_{lib}"
+        lib_name = lib_name.upper()
+        reason_ptr = ERR_reason_error_string(last_error)
+        reason_name = PyUnicode_FromString(
+            reason_ptr) if reason_ptr != NULL else ""
+        reason_name = reason_name.upper().replace(" ", "_")
+
+        if reason_name == "CERTIFICATE_VERIFY_FAILED":
+            assert self.server_hostname is not None
+            verify_code = SSL_get_verify_result(self.ssl)
+            verify_ptr = X509_verify_cert_error_string(verify_code)
+            txt = PyUnicode_FromString(verify_ptr) if verify_ptr != NULL else ""
+            str_error = f"[{lib_name}: {reason_name}] {descr}: {txt}"
+            exc = ssl.SSLCertVerificationError()
+            exc.verify_code = verify_code
+            exc.verify_message = txt
+        else:
+            str_error = f"[{lib_name}: {reason_name}] {descr}"
+            exc = ssl.SSLError()
+        exc.strerror = str_error
+        exc.library = lib_name
+        exc.reason = reason_name
+        return exc
+
+    cdef _configure_hostname(self):
+        if not self.server_hostname or self.server_hostname.startswith("."):
+            raise ValueError("server_hostname cannot be an empty string or start with a leading dot.")
+
+        cdef bytes server_hostname_b = self.server_hostname.encode()
+        cdef char* server_hostname_ptr = PyBytes_AS_STRING(server_hostname_b)
+
+        cdef ASN1_OCTET_STRING* ip = a2i_IPADDRESS(PyBytes_AS_STRING(server_hostname_b))
+        if ip == NULL:
+            ERR_clear_error()
+
+        cdef X509_VERIFY_PARAM* ssl_verification_params
+        try:
+            # Only send SNI extension for non-IP hostnames
+            if ip == NULL:
+                if not SSL_set_tlsext_host_name(self.ssl, server_hostname_ptr):
+                    _log_error_queue()
+                    ERR_clear_error()
+                    raise ssl.SSLError("SSL_set_tlsext_host_name failed")
+
+            if self.ssl_ctx_py.check_hostname:
+                ssl_verification_params = SSL_get0_param(self.ssl)
+                if ip == NULL:
+                    if not X509_VERIFY_PARAM_set1_host(ssl_verification_params, server_hostname_ptr, len(server_hostname_b)):
+                        raise ssl.SSLError("X509_VERIFY_PARAM_set1_host failed")
+                else:
+                    if not X509_VERIFY_PARAM_set1_ip(ssl_verification_params, ASN1_STRING_get0_data(ip), ASN1_STRING_length(ip)):
+                        raise ssl.SSLError("X509_VERIFY_PARAM_set1_host failed")
+        finally:
+            if ip != NULL:
+                ASN1_OCTET_STRING_free(ip)
+
+    cdef bytes _certificate_to_der(self, X509* certificate):
+        cdef int der_len = i2d_X509(certificate, NULL)
+        cdef bytes der
+        cdef unsigned char* p
+
+        if der_len <= 0:
+            raise ssl.SSLError("i2d_X509 failed")
+
+        der = PyBytes_FromStringAndSize(NULL, der_len)
+        if der is None:
+            raise MemoryError()
+
+        p = <unsigned char*>PyBytes_AS_STRING(der)
+        if i2d_X509(certificate, &p) != der_len:
+            raise ssl.SSLError("i2d_X509 produced invalid DER size")
+
+        return der
+
+    cdef _decode_certificate(self, X509* certificate):
+        cdef bytes der = self._certificate_to_der(certificate)
+        cdef str path = ""
+
+        pem = ssl.DER_cert_to_PEM_cert(der)
+        tmp = tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="ascii")
+        try:
+            tmp.write(pem)
+            tmp.close()
+            path = tmp.name
+            return ssl._ssl._test_decode_cert(path)
+        finally:
+            if path:
+                os.unlink(path)
 
 
 cdef ssl_error_name(int err):

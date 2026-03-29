@@ -10,6 +10,7 @@ from logging import getLogger
 from cpython.memoryview cimport PyMemoryView_FromMemory
 from cpython.buffer cimport PyBUF_READ
 from cpython.bytes cimport *
+from cpython.pythread cimport PyThread_get_thread_ident
 
 from . import constants
 
@@ -93,6 +94,7 @@ cdef class SocketTransport(Transport):
     cdef:
         object __weakref__
         object _loop
+        unsigned long _thread_id
         object _protocol
         bint _protocol_buffered
         bint _protocol_aiofn
@@ -119,6 +121,7 @@ cdef class SocketTransport(Transport):
     def __init__(self, loop, sock, protocol, waiter=None, extra=None, server=None):
         assert loop is not None
         self._loop = loop
+        self._thread_id = PyThread_get_thread_ident()
         self.set_protocol(protocol)
         self._set_write_buffer_limits()
         self._extra = {} if extra is None else extra
@@ -176,37 +179,51 @@ cdef class SocketTransport(Transport):
             if self._server is not None:
                 self._server._detach(self)
 
+    cdef inline _check_thread(self, meth):
+        assert self._thread_id == PyThread_get_thread_ident(), \
+            (f"SocketTransport.{meth} called from a wrong thread: "
+             f"transport thread id={self._thread_id}, "
+             f"curr thread_id={PyThread_get_thread_ident()}")
+
     cpdef set_protocol(self, protocol):
+        self._check_thread("set_protocol")
         self._protocol = protocol
         self._protocol_buffered = aiofn_is_buffered_protocol(protocol)
         self._protocol_aiofn = isinstance(protocol, Protocol)
         self._protocol_connected = True
 
     cpdef get_protocol(self):
+        self._check_thread("get_protocol")
         return self._protocol
 
     cpdef get_extra_info(self, name, default=None):
-        """Get optional transport information."""
+        self._check_thread("get_extra_info")
         return self._extra.get(name, default)
 
     cpdef tuple get_write_buffer_limits(self):
+        self._check_thread("get_write_buffer_limits")
         return (self._low_water, self._high_water)
 
     cpdef set_write_buffer_limits(self, high=None, low=None):
+        self._check_thread("set_write_buffer_limits")
         self._set_write_buffer_limits(high=high, low=low)
         self._maybe_pause_protocol()
         self._maybe_resume_protocol()
 
     cpdef abort(self):
+        self._check_thread("abort")
         self._force_close(None)
 
     cpdef is_closing(self):
+        self._check_thread("is_closing")
         return self._closing
 
     cpdef is_reading(self):
+        self._check_thread("is_reading")
         return not self.is_closing() and not self._paused
 
     cpdef pause_reading(self):
+        self._check_thread("pause_reading")
         if not self.is_reading():
             return
         self._paused = True
@@ -215,6 +232,7 @@ cdef class SocketTransport(Transport):
             _logger.debug("%r pauses reading", self)
 
     cpdef resume_reading(self):
+        self._check_thread("resume_reading")
         if self._closing or not self._paused:
             return
         self._paused = False
@@ -227,6 +245,7 @@ cdef class SocketTransport(Transport):
             _logger.debug("%r resumes reading", self)
 
     cpdef close(self):
+        self._check_thread("close")
         if self._closing:
             return
         self._closing = True
@@ -237,6 +256,7 @@ cdef class SocketTransport(Transport):
             self._loop.call_soon(self._call_connection_lost, None)
 
     cpdef get_write_buffer_size(self):
+        self._check_thread("get_write_buffer_size")
         cdef Py_ssize_t total = 0
         for data in self._write_backlog:
             total += len(data)
@@ -357,6 +377,7 @@ cdef class SocketTransport(Transport):
             self.close()
 
     cpdef write(self, data):
+        self._check_thread("write")
         aiofn_validate_buffer(data)
 
         if self._eof:
@@ -390,6 +411,7 @@ cdef class SocketTransport(Transport):
         self._maybe_pause_protocol()
 
     cdef write_c(self, char* ptr, Py_ssize_t sz):
+        self._check_thread("write_c")
         if sz <= 0:
             return
 
@@ -413,6 +435,7 @@ cdef class SocketTransport(Transport):
         self._maybe_pause_protocol()
 
     cpdef writelines(self, list_of_data):
+        self._check_thread("writelines")
         if self._eof:
             raise RuntimeError('Cannot call writelines() after write_eof()')
         if list_of_data:
@@ -449,6 +472,7 @@ cdef class SocketTransport(Transport):
         return True
 
     cpdef write_eof(self):
+        self._check_thread("write_eof")
         if self._closing or self._eof:
             return
         self._eof = True
@@ -634,6 +658,7 @@ cdef class SocketTransport(Transport):
         self._low_water = low
 
     async def sendfile(self, file, offset, count):
+        self._check_thread("sendfile")
         cdef SendFileRequest req = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
         req.file = file
         req.offset = offset

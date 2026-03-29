@@ -8,6 +8,7 @@
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#include <pthread.h>
 #endif
 
 BIO *(*aiofn_BIO_new)(const BIO_METHOD *type) = NULL;
@@ -79,9 +80,14 @@ const unsigned char *(*aiofn_ASN1_STRING_get0_data)(const ASN1_OCTET_STRING *x) 
 int (*aiofn_ASN1_STRING_length)(ASN1_OCTET_STRING *x) = NULL;
 ASN1_OCTET_STRING *(*aiofn_a2i_IPADDRESS)(const char *ipasc) = NULL;
 
-static int g_initialized = 0;
 static const char *g_last_error = NULL;
 static char g_last_error_buf[1024];
+
+#ifdef _WIN32
+static INIT_ONCE g_init_once = INIT_ONCE_STATIC_INIT;
+#else
+static pthread_once_t g_init_once = PTHREAD_ONCE_INIT;
+#endif
 
 static void set_last_error(const char *fmt, ...) {
     va_list ap;
@@ -161,10 +167,7 @@ static void *resolve_required(const char *name) {
         }                                                                      \
     } while (0)
 
-int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path) {
-    if (g_initialized) {
-        return 1;
-    }
+static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto_lib_path) {
     g_last_error = NULL;
     g_last_error_buf[0] = '\0';
 
@@ -274,9 +277,57 @@ int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path) {
     LOAD_REQUIRED(aiofn_ASN1_STRING_length, "ASN1_STRING_length");
     LOAD_REQUIRED(aiofn_a2i_IPADDRESS, "a2i_IPADDRESS");
 
-    g_initialized = 1;
     return 1;
 }
+
+#ifdef _WIN32
+typedef struct {
+    const char *ssl_lib_path;
+    const char *crypto_lib_path;
+    int result;
+} aiofn_init_context;
+
+static BOOL CALLBACK init_openssl_once_cb(PINIT_ONCE once, PVOID param, PVOID *context) {
+    aiofn_init_context *ctx = (aiofn_init_context *)param;
+    (void)once;
+    (void)context;
+    ctx->result = init_openssl_compat_impl(ctx->ssl_lib_path, ctx->crypto_lib_path);
+    return TRUE;
+}
+#else
+static const char *g_init_ssl_lib_path = NULL;
+static const char *g_init_crypto_lib_path = NULL;
+static int g_init_result = 0;
+
+static void init_openssl_once_cb(void) {
+    g_init_result = init_openssl_compat_impl(g_init_ssl_lib_path, g_init_crypto_lib_path);
+}
+#endif
+
+int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path) {
+#ifdef _WIN32
+    aiofn_init_context ctx = {
+        .ssl_lib_path = ssl_lib_path,
+        .crypto_lib_path = crypto_lib_path,
+        .result = 0,
+    };
+    if (!InitOnceExecuteOnce(&g_init_once, init_openssl_once_cb, &ctx, NULL)) {
+        set_last_error("InitOnceExecuteOnce failed");
+        return 0;
+    }
+    return ctx.result;
+#else
+    g_init_ssl_lib_path = ssl_lib_path;
+    g_init_crypto_lib_path = crypto_lib_path;
+    if (pthread_once(&g_init_once, init_openssl_once_cb) != 0) {
+        set_last_error("pthread_once failed");
+        return 0;
+    }
+    return g_init_result;
+#endif
+}
+
+#undef LOAD_REQUIRED
 
 int aiofn_BIO_pending(BIO *b) {
     long n = aiofn_BIO_ctrl(b, BIO_CTRL_PENDING, 0, NULL);

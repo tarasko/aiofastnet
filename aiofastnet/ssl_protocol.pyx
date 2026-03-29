@@ -10,6 +10,7 @@ from cpython.bytes cimport *
 from cpython.bytearray cimport *
 from cpython.memoryview cimport *
 from cpython.unicode cimport *
+from cpython.pythread cimport PyThread_get_thread_ident
 
 from . import constants
 from .utils cimport (
@@ -66,21 +67,33 @@ cdef inline _create_transport_context(server_side, server_hostname):
 
 cdef class SSLTransport(Transport):
     cdef:
+        unsigned long _thread_id
         SSLProtocol _ssl_protocol
 
     def __init__(self, SSLProtocol ssl_protocol):
+        self._thread_id = PyThread_get_thread_ident()
         self._ssl_protocol = ssl_protocol
 
+    cdef inline _check_thread(self, meth):
+        assert self._thread_id == PyThread_get_thread_ident(), \
+            (f"SSLTransport.{meth} called from a wrong thread: "
+             f"transport thread id={self._thread_id}, "
+             f"curr thread_id={PyThread_get_thread_ident()}")
+
     def get_extra_info(self, name, default=None):
+        self._check_thread("get_extra_info")
         return self._ssl_protocol._get_extra_info(name, default)
 
     def set_protocol(self, protocol):
+        self._check_thread("set_protocol")
         self._ssl_protocol._set_app_protocol(protocol)
 
     def get_protocol(self):
+        self._check_thread("get_protocol")
         return self._ssl_protocol._get_app_protocol()
 
     def is_reading(self):
+        self._check_thread("is_reading")
         return self._ssl_protocol._get_tcp_transport().is_reading()
 
     def pause_reading(self):
@@ -89,6 +102,7 @@ cdef class SSLTransport(Transport):
         No data will be passed to the protocol's data_received()
         method until resume_reading() is called.
         """
+        self._check_thread("pause_reading")
         self._ssl_protocol.pause_reading()
 
     def resume_reading(self):
@@ -97,6 +111,7 @@ cdef class SSLTransport(Transport):
         Data received will once again be passed to the protocol's
         data_received() method.
         """
+        self._check_thread("resume_reading")
         self._ssl_protocol.resume_reading()
 
     def set_write_buffer_limits(self, high=None, low=None):
@@ -118,11 +133,13 @@ cdef class SSLTransport(Transport):
         reduces opportunities for doing I/O and computation
         concurrently.
         """
+        self._check_thread("set_write_buffer_limits")
         tcp_transport = self._ssl_protocol._get_tcp_transport()
         if tcp_transport is not None:
             tcp_transport.set_write_buffer_limits(high, low)
 
     def get_write_buffer_limits(self):
+        self._check_thread("get_write_buffer_limits")
         tcp_transport = self._ssl_protocol._get_tcp_transport()
         if tcp_transport is not None:
             return tcp_transport.get_write_buffer_limits()
@@ -130,6 +147,7 @@ cdef class SSLTransport(Transport):
             return 0, 0
 
     def get_write_buffer_size(self):
+        self._check_thread("get_write_buffer_size")
         """Return the current size of the write buffers."""
         tcp_transport = self._ssl_protocol._get_tcp_transport()
         if tcp_transport is not None:
@@ -138,6 +156,7 @@ cdef class SSLTransport(Transport):
             return 0
 
     cpdef write(self, data):
+        self._check_thread("write")
         """Write some data bytes to the transport.
 
         This does not block; it buffers the data and arranges for it
@@ -146,6 +165,7 @@ cdef class SSLTransport(Transport):
         self._ssl_protocol.write(data)
 
     cpdef writelines(self, list_of_data):
+        self._check_thread("writelines")
         """Write a list (or any iterable) of data bytes to the transport.
 
         The default implementation concatenates the arguments and
@@ -154,20 +174,18 @@ cdef class SSLTransport(Transport):
         self._ssl_protocol.writelines(list_of_data)
 
     cdef write_c(self, char* ptr, Py_ssize_t sz):
+        self._check_thread("write_c")
         self._ssl_protocol.write_c(ptr, sz)
 
     def write_eof(self):
-        """Close the write end after flushing buffered data.
-
-        This raises :exc:`NotImplementedError` right now.
-        """
+        self._check_thread("write_eof")
         raise NotImplementedError()
 
     def can_write_eof(self):
-        """Return True if this transport supports write_eof(), False if not."""
         return False
 
     def is_closing(self):
+        self._check_thread("is_closing")
         return self._ssl_protocol._is_closing()
 
     def close(self):
@@ -180,6 +198,7 @@ cdef class SSLTransport(Transport):
         """
         if self._ssl_protocol._is_debug:
             _logger.debug("%r: user called close(), flush data before closing transport", self._ssl_protocol)
+        self._check_thread("close")
         self._ssl_protocol._start_shutdown()
 
     def abort(self):
@@ -191,6 +210,7 @@ cdef class SSLTransport(Transport):
         """
         if self._ssl_protocol._is_debug:
             _logger.debug("%r: user called abort(), close transport immediately", self._ssl_protocol)
+        self._check_thread("abort")
         self._ssl_protocol._abort(None)
 
     def _force_close(self, exc):
