@@ -75,10 +75,13 @@ cdef class SSLTransport(Transport):
         self._ssl_protocol = ssl_protocol
 
     cdef inline _check_thread(self, meth):
-        assert self._thread_id == PyThread_get_thread_ident(), \
-            (f"SSLTransport.{meth} called from a wrong thread: "
-             f"transport thread id={self._thread_id}, "
-             f"curr thread_id={PyThread_get_thread_ident()}")
+        cdef unsigned long curr_thread_id = PyThread_get_thread_ident()
+        if self._thread_id != curr_thread_id:
+            raise RuntimeError(
+                f"SSLTransport.{meth} called from a wrong thread: "
+                f"transport thread id={self._thread_id}, "
+                f"curr thread_id={curr_thread_id}"
+            )
 
     def get_extra_info(self, name, default=None):
         self._check_thread("get_extra_info")

@@ -180,10 +180,13 @@ cdef class SocketTransport(Transport):
                 self._server._detach(self)
 
     cdef inline _check_thread(self, meth):
-        assert self._thread_id == PyThread_get_thread_ident(), \
-            (f"SocketTransport.{meth} called from a wrong thread: "
-             f"transport thread id={self._thread_id}, "
-             f"curr thread_id={PyThread_get_thread_ident()}")
+        cdef unsigned long curr_thread_id = PyThread_get_thread_ident()
+        if self._thread_id != curr_thread_id:
+            raise RuntimeError(
+                f"SocketTransport.{meth} called from a wrong thread: "
+                f"transport thread id={self._thread_id}, "
+                f"curr thread_id={curr_thread_id}"
+            )
 
     cpdef set_protocol(self, protocol):
         self._check_thread("set_protocol")
