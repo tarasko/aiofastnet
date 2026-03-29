@@ -44,15 +44,20 @@ def build_ssl_contexts(enable_ktls=False) -> tuple[ssl.SSLContext, ssl.SSLContex
 @asynccontextmanager
 async def EchoServer(use_aiofastnet,
                      server_ssl: ssl.SSLContext | None,
-                     sndbuf_size: int | None=None):
+                     sndbuf_size: int | None = None,
+                     host: str = "127.0.0.1",
+                     port: int = 0,
+                     reuse_port: bool | None = None):
     loop = asyncio.get_running_loop()
     create_server = partial(aiofastnet.create_server, loop) \
         if use_aiofastnet else loop.create_server
 
     server = await create_server(
         ServerProtocol,
-        host="127.0.0.1",
-        ssl=server_ssl
+        host=host,
+        port=port,
+        ssl=server_ssl,
+        reuse_port=reuse_port,
     )
     if sndbuf_size is not None:
         for server_sock in server.sockets:
@@ -70,17 +75,18 @@ async def EchoClient(use_aiofastnet,
                      duration: float,
                      payload: bytes,
                      client_ssl: ssl.SSLContext | None,
-                     sndbuf_size: int | None = None) -> ClientProtocol:
+                     sndbuf_size: int | None = None,
+                     host: str = "127.0.0.1") -> ClientProtocol:
     loop = asyncio.get_running_loop()
     create_connection = partial(aiofastnet.create_connection, loop) \
         if use_aiofastnet else loop.create_connection
 
     transport, client = await create_connection(
         lambda: ClientProtocol(payload, duration, 0),
-        host="127.0.0.1",
+        host=host,
         port=port,
         ssl=client_ssl,
-        server_hostname="127.0.0.1" if client_ssl is not None else None,
+        server_hostname=host if client_ssl is not None else None,
     )
     client_sock = transport.get_extra_info("socket")
     if client_sock is not None:
