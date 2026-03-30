@@ -7,3 +7,4 @@ uvloop; sys_platform != 'win32'
 winloop; sys_platform == 'win32'
 twine
 matplotlib
+psutil
