@@ -32,15 +32,18 @@ The benchmark below compares echo round-trips over loopback for TCP and SSL.
 The exact gains depend on workload, message sizes, CPU, OpenSSL version, and how
 much of your total runtime is spent in transport/SSL plumbing.
 
-Benchmark source:
-`examples/benchmark.py <https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark.py>`_
-
 .. image:: https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark.png
-    :target: https://github.com/tarasko/websocket-benchmark/blob/master
+    :target: https://github.com/tarasko/aiofastnet/master/examples/benchmark.png
     :align: center
+
+Source: `examples/benchmark.py <https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark.py>`_
 
 In these benchmarks, ``aiofastnet`` is up to 2.2x faster than standard
 ``asyncio``.
+
+.. image:: https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark_threaded.png
+    :target: https://github.com/tarasko/aiofastnet/master/examples/benchmark_threaded.png
+    :align: center
 
 Why Use aiofastnet
 ===================
