@@ -45,7 +45,7 @@ In these benchmarks, ``aiofastnet`` is up to 2.2x faster than standard
 as expected when multiple event loops run in parallel across multiple threads.
 
 .. image:: https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark_threaded.png
-    :target: https://github.com/tarasko/aiofastnet/master/examples/benchmark_threaded.png
+    :target: https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_threaded.png
     :align: center
 
 Source: `examples/benchmark_threaded.py <https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_threaded.py>`_
