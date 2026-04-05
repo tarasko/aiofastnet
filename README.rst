@@ -17,9 +17,9 @@ aiofastnet
 ``aiofastnet`` provides drop-in optimized replacements for asyncio's:
 
 - `loop.create_connection() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_connection>`_
-- `loop.open_connection() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.open_connection>`_
+- `loop.open_connection() <https://docs.python.org/3/library/asyncio-stream.html#asyncio.open_connection>`_
 - `loop.create_server() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_server>`_
-- `loop.start_server() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.start_server>`_
+- `loop.start_server() <https://docs.python.org/3/library/asyncio-stream.html#asyncio.start_server>`_
 - `loop.start_tls() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.start_tls>`_
 - `loop.sendfile() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sendfile>`_
 
