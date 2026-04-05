@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.3.0
+------------------
+
+* Add open_connection and start_server API
+
 0.2.0
 ------------------
 

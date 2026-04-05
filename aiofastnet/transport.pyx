@@ -308,7 +308,7 @@ cdef class SocketTransport(Transport):
             try:
                 bytes_read = aiofn_recv(self._sock_fd, buf_ptr, buf_len)
                 if self._is_debug:
-                    _logger.debug("%r aiofn_recv(,len=%d) = %d", self, buf_len, bytes_read)
+                    _logger.debug("%r: aiofn_recv(,len=%d) = %d", self, buf_len, bytes_read)
                 if bytes_read == -1:    # without exception this means EGAIN
                     return
             except BaseException as exc:
@@ -337,6 +337,9 @@ cdef class SocketTransport(Transport):
             # Already a good wrapper, returns bytes object.
             # Exactly what we need for non-buffered protocols
             data = self._sock.recv(_DATA_RECEIVED_MAX_SIZE)
+            if self._is_debug:
+                _logger.debug("%r: _sock.recv() = bytes(len=%d)",
+                              self, len(data))
         except (SystemExit, KeyboardInterrupt):
             raise
         except BaseException as exc:

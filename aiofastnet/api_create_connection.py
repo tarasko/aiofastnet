@@ -1,3 +1,9 @@
+# Portions of this file are derived from CPython's asyncio sources
+# (notably asyncio.base_events and asyncio.selector_events).
+# Copyright (c) Python Software Foundation.
+# Licensed under the Python Software Foundation License Version 2.
+# See LICENSES/PSF-2.0.txt and THIRD_PARTY_NOTICES for details.
+
 import asyncio
 import collections
 import itertools
