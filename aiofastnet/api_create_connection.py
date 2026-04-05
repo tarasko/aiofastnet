@@ -25,6 +25,8 @@ async def create_connection(
         server_hostname=None,
         ssl_handshake_timeout=None,
         ssl_shutdown_timeout=None,
+        ssl_incoming_bio_size=None,
+        ssl_outgoing_bio_size=None,
         happy_eyeballs_delay=None,
         interleave=None,
         all_errors=False):
@@ -163,7 +165,9 @@ async def create_connection(
         sock, protocol_factory, ssl,
         server_hostname=server_hostname,
         ssl_handshake_timeout=ssl_handshake_timeout,
-        ssl_shutdown_timeout=ssl_shutdown_timeout
+        ssl_shutdown_timeout=ssl_shutdown_timeout,
+        ssl_incoming_bio_size=ssl_incoming_bio_size,
+        ssl_outgoing_bio_size=ssl_outgoing_bio_size
     )
     if loop.get_debug():
         # Get the socket from the transport because SSL transport closes

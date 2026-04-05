@@ -27,6 +27,8 @@ async def _create_connection_transport(
         server_side: bool=False,
         ssl_handshake_timeout: Optional[float]=None,
         ssl_shutdown_timeout: Optional[float]=None,
+        ssl_incoming_bio_size: Optional[int]=None,
+        ssl_outgoing_bio_size: Optional[int]=None,
         server=None
 ) -> Tuple[asyncio.Transport, asyncio.BaseProtocol]:
     sock.setblocking(False)
@@ -44,7 +46,9 @@ async def _create_connection_transport(
                 loop, protocol, sslcontext, waiter,
                 server_side, server_hostname,
                 ssl_handshake_timeout=ssl_handshake_timeout,
-                ssl_shutdown_timeout=ssl_shutdown_timeout
+                ssl_shutdown_timeout=ssl_shutdown_timeout,
+                ssl_incoming_bio_size=ssl_incoming_bio_size,
+                ssl_outgoing_bio_size=ssl_outgoing_bio_size
             )
             loop_transport, ssl_protocol = await loop.create_connection(
                 ssl_protocol_factory, None, None, sock=sock)
