@@ -1,3 +1,4 @@
+from .api_streams import open_connection, start_server
 from .api_create_server import create_server
 from .api_create_connection import create_connection
 from .api_start_tls import start_tls
@@ -10,6 +11,8 @@ from .transport import (
 )
 
 __all__ = [
+    'open_connection',
+    'start_server',
     'create_server',
     'create_connection',
     'start_tls',
@@ -19,5 +22,5 @@ __all__ = [
     'aiofn_is_buffered_protocol'
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __author__ = "Taras Kozlov"

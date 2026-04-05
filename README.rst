@@ -17,11 +17,13 @@ aiofastnet
 ``aiofastnet`` provides drop-in optimized replacements for asyncio's:
 
 - `loop.create_connection() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_connection>`_
+- `loop.open_connection() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.open_connection>`_
 - `loop.create_server() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_server>`_
+- `loop.start_server() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.start_server>`_
 - `loop.start_tls() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.start_tls>`_
 - `loop.sendfile() <https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sendfile>`_
 
-If your library or application already uses the ``asyncio`` transport/protocol
+If your library or application already uses the ``asyncio`` streams or transport/protocol
 model, ``aiofastnet`` lets you keep the same architecture while replacing one of
 the most expensive layers underneath it.
 
@@ -55,7 +57,7 @@ Why Use aiofastnet
 
 - **Faster hot path**. Transport and SSL internals are reimplemented in Cython/C
   to reduce overhead on long-lived connections.
-- **Drop-in API**. Keep using the standard ``asyncio`` transport/protocol model
+- **Drop-in API**. Keep using the standard ``asyncio`` streams or transport/protocol model
   and familiar loop-level networking operations.
 - **Works with the event loop you already use**. ``aiofastnet`` works with
   stock ``asyncio`` loops, ``uvloop``, and ``winloop``.
