@@ -9,6 +9,7 @@ aiofastnet Release History
 ------------------
 
 * Add open_connection and start_server API
+* Add ssl_incoming_bio_size and ssl_outgoing_bio_size to API
 
 0.2.0
 ------------------
