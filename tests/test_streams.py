@@ -38,7 +38,8 @@ async def StreamEchoServer(host="127.0.0.1", port=0, ssl_context=None):
         yield EchoServerHandle(server=server, port=resolved_port, host=host,
                                clients=None, client_waiters=None)
     finally:
-        server.abort_clients()
+        if hasattr(server, "abort_clients"):
+            server.abort_clients()
         server.close()
         await server.wait_closed()
 
