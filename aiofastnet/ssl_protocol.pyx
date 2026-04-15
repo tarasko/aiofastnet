@@ -23,7 +23,7 @@ from .utils cimport (
 )
 from .transport cimport Transport, Protocol
 from .ssl_object cimport SSLObject, SSLError, ssl_error_name
-from .transport import aiofn_is_buffered_protocol
+from .transport cimport aiofn_is_buffered_protocol
 from .openssl cimport SSL_RECEIVED_SHUTDOWN
 
 
@@ -67,37 +67,22 @@ cdef inline _create_transport_context(server_side, server_hostname):
 
 cdef class SSLTransport(Transport):
     cdef:
-        unsigned long _thread_id
         SSLProtocol _ssl_protocol
 
     def __init__(self, SSLProtocol ssl_protocol):
-        self._thread_id = PyThread_get_thread_ident()
         self._ssl_protocol = ssl_protocol
 
-    cdef inline _check_thread(self, meth):
-        cdef unsigned long curr_thread_id = PyThread_get_thread_ident()
-        if self._thread_id != curr_thread_id:
-            raise RuntimeError(
-                f"SSLTransport.{meth} called from a wrong thread: "
-                f"transport thread id={self._thread_id}, "
-                f"curr thread_id={curr_thread_id}"
-            )
-
     def get_extra_info(self, name, default=None):
-        self._check_thread("get_extra_info")
-        return self._ssl_protocol._get_extra_info(name, default)
+        return self._ssl_protocol.get_extra_info(name, default)
 
     def set_protocol(self, protocol):
-        self._check_thread("set_protocol")
-        self._ssl_protocol._set_app_protocol(protocol)
+        self._ssl_protocol.set_protocol(protocol)
 
     def get_protocol(self):
-        self._check_thread("get_protocol")
-        return self._ssl_protocol._get_app_protocol()
+        return self._ssl_protocol.get_protocol()
 
     def is_reading(self):
-        self._check_thread("is_reading")
-        return self._ssl_protocol._get_tcp_transport().is_reading()
+        return self._ssl_protocol.is_reading()
 
     def pause_reading(self):
         """Pause the receiving end.
@@ -105,7 +90,6 @@ cdef class SSLTransport(Transport):
         No data will be passed to the protocol's data_received()
         method until resume_reading() is called.
         """
-        self._check_thread("pause_reading")
         self._ssl_protocol.pause_reading()
 
     def resume_reading(self):
@@ -114,7 +98,6 @@ cdef class SSLTransport(Transport):
         Data received will once again be passed to the protocol's
         data_received() method.
         """
-        self._check_thread("resume_reading")
         self._ssl_protocol.resume_reading()
 
     def set_write_buffer_limits(self, high=None, low=None):
@@ -136,30 +119,15 @@ cdef class SSLTransport(Transport):
         reduces opportunities for doing I/O and computation
         concurrently.
         """
-        self._check_thread("set_write_buffer_limits")
-        tcp_transport = self._ssl_protocol._get_tcp_transport()
-        if tcp_transport is not None:
-            tcp_transport.set_write_buffer_limits(high, low)
+        self._ssl_protocol.set_write_buffer_limits(high, low)
 
     def get_write_buffer_limits(self):
-        self._check_thread("get_write_buffer_limits")
-        tcp_transport = self._ssl_protocol._get_tcp_transport()
-        if tcp_transport is not None:
-            return tcp_transport.get_write_buffer_limits()
-        else:
-            return 0, 0
+        return self._ssl_protocol.get_write_buffer_limits()
 
     def get_write_buffer_size(self):
-        self._check_thread("get_write_buffer_size")
-        """Return the current size of the write buffers."""
-        tcp_transport = self._ssl_protocol._get_tcp_transport()
-        if tcp_transport is not None:
-            return tcp_transport.get_write_buffer_size()
-        else:
-            return 0
+        return self._ssl_protocol.get_write_buffer_size()
 
     cpdef write(self, data):
-        self._check_thread("write")
         """Write some data bytes to the transport.
 
         This does not block; it buffers the data and arranges for it
@@ -168,7 +136,6 @@ cdef class SSLTransport(Transport):
         self._ssl_protocol.write(data)
 
     cpdef writelines(self, list_of_data):
-        self._check_thread("writelines")
         """Write a list (or any iterable) of data bytes to the transport.
 
         The default implementation concatenates the arguments and
@@ -176,20 +143,28 @@ cdef class SSLTransport(Transport):
         """
         self._ssl_protocol.writelines(list_of_data)
 
+    cpdef write_nocheck(self, data):
+        self._ssl_protocol.write_nocheck(data)
+
+    cpdef writelines_nocheck(self, list_of_data):
+        """Write a list (or any iterable) of data bytes to the transport.
+
+        The default implementation concatenates the arguments and
+        calls write() on the result.
+        """
+        self._ssl_protocol.writelines_nocheck(list_of_data)
+
     cdef write_c(self, char* ptr, Py_ssize_t sz):
-        self._check_thread("write_c")
         self._ssl_protocol.write_c(ptr, sz)
 
     def write_eof(self):
-        self._check_thread("write_eof")
-        raise NotImplementedError()
+        self._ssl_protocol.write_eof()
 
     def can_write_eof(self):
         return False
 
     def is_closing(self):
-        self._check_thread("is_closing")
-        return self._ssl_protocol._is_closing()
+        return self._ssl_protocol.is_closing()
 
     def close(self):
         """Close the transport.
@@ -199,10 +174,7 @@ cdef class SSLTransport(Transport):
         protocol's connection_lost() method will (eventually) called
         with None as its argument.
         """
-        if self._ssl_protocol._is_debug:
-            _logger.debug("%r: user called close(), flush data before closing transport", self._ssl_protocol)
-        self._check_thread("close")
-        self._ssl_protocol._start_shutdown()
+        self._ssl_protocol.close()
 
     def abort(self):
         """Close the transport immediately.
@@ -211,10 +183,7 @@ cdef class SSLTransport(Transport):
         The protocol's connection_lost() method will (eventually) be
         called with None as its argument.
         """
-        if self._ssl_protocol._is_debug:
-            _logger.debug("%r: user called abort(), close transport immediately", self._ssl_protocol)
-        self._check_thread("abort")
-        self._ssl_protocol._abort(None)
+        self._ssl_protocol.abort()
 
     def _force_close(self, exc):
         """Used by upstream SSLProtocol in case of TLS over TLS"""
@@ -236,6 +205,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         list _write_backlog
 
         object _loop
+        unsigned long _thread_id
         SSLTransport _app_transport
 
         bint _is_aiofn_transport
@@ -327,6 +297,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         self._write_backlog = []
 
         self._loop = loop
+        self._thread_id = PyThread_get_thread_ident()
         self._set_app_protocol(app_protocol)
         self._app_transport = None
         # transport, ex: SocketTransport
@@ -373,21 +344,200 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
     cpdef is_buffered_protocol(self):
         return True
 
-    cpdef _set_app_protocol(self, app_protocol):
-        self._app_protocol = app_protocol
-        self._app_protocol_is_buffered = aiofn_is_buffered_protocol(app_protocol)
-        self._app_protocol_aiofn = isinstance(app_protocol, Protocol)
-
-    cpdef _get_app_protocol(self):
-        return self._app_protocol
-
     cpdef get_app_transport(self):
         if self._app_transport is None:
             self._app_transport = SSLTransport(self)
         return self._app_transport
 
-    cdef inline _get_tcp_transport(self):
-        return self._transport
+    cdef inline _set_app_protocol(self, app_protocol):
+        self._app_protocol = app_protocol
+        self._app_protocol_is_buffered = aiofn_is_buffered_protocol(app_protocol)
+        self._app_protocol_aiofn = isinstance(app_protocol, Protocol)
+
+    cdef inline _check_thread(self, meth):
+        cdef unsigned long curr_thread_id = PyThread_get_thread_ident()
+        if self._thread_id != curr_thread_id:
+            raise RuntimeError(
+                f"SSLTransport.{meth} called from a wrong thread: "
+                f"transport thread id={self._thread_id}, "
+                f"curr thread_id={curr_thread_id}"
+            )
+
+    cdef inline get_extra_info(self, name, default=None):
+        self._check_thread("get_extra_info")
+        if name == "ssl_object":
+            return self._ssl_object
+        elif name == "ssl_protocol":
+            return self
+        elif name == "ssl_layer_num":
+            return self._ssl_layer_num
+        elif name in self._extra:
+            return self._extra[name]
+        elif self._transport is not None:
+            return self._transport.get_extra_info(name, default)
+        else:
+            return default
+
+    cdef inline set_protocol(self, protocol):
+        self._check_thread("set_protocol")
+        self._set_app_protocol(protocol)
+
+    cdef inline get_protocol(self):
+        self._check_thread("get_protocol")
+        return self._app_protocol
+
+    cdef inline is_reading(self):
+        self._check_thread("is_reading")
+        return self._transport.is_reading()
+
+    cdef inline pause_reading(self):
+        self._check_thread("pause_reading")
+        self._reading_paused = True
+        self._transport.pause_reading()
+
+    cdef inline resume_reading(self):
+        self._check_thread("resume_reading")
+        if self._reading_paused:
+            self._reading_paused = False
+            self._loop.call_soon(self.buffer_updated, 0)
+        self._transport.resume_reading()
+
+    cdef inline set_write_buffer_limits(self, high=None, low=None):
+        self._check_thread("set_write_buffer_limits")
+        if self._transport is not None:
+            self._transport.set_write_buffer_limits(high, low)
+
+    cdef inline get_write_buffer_limits(self):
+        self._check_thread("get_write_buffer_limits")
+        if self._transport is not None:
+            return self._transport.get_write_buffer_limits()
+        else:
+            return 0, 0
+
+    cdef inline get_write_buffer_size(self):
+        self._check_thread("get_write_buffer_size")
+        if self._transport is not None:
+            return self._transport.get_write_buffer_size()
+        else:
+            return 0
+
+    cdef inline write(self, data):
+        self._check_thread("write")
+        aiofn_validate_buffer(data)
+        self.write_nocheck(data)
+
+    cdef inline writelines(self, list_of_data):
+        self._check_thread("writelines")
+        for data in list_of_data:
+            aiofn_validate_buffer(data)
+        self.writelines_nocheck(list_of_data)
+
+    cdef inline write_c(self, char* data_ptr, Py_ssize_t data_len):
+        if not self._is_protocol_ready():
+            return
+
+        if data_len == 0:
+            return
+
+        if self._write_backlog:
+            self._write_backlog.append(PyBytes_FromStringAndSize(data_ptr, data_len))
+            return
+
+        try:
+            tail = self._write_impl(None, data_ptr, data_len, True)
+            if tail is not None:
+                self._write_backlog.append(tail)
+                return
+        except BaseException as ex:
+            self._fatal_error(ex, 'Fatal error on SSL protocol')
+
+    cdef inline write_nocheck(self, data):
+        if not self._is_protocol_ready():
+            return
+
+        if self._write_backlog:
+            if data:
+                self._write_backlog.append(aiofn_maybe_copy_buffer(data))
+            return
+
+        cdef:
+            char * data_ptr
+            Py_ssize_t data_len
+
+        aiofn_unpack_buffer(data, &data_ptr, &data_len)
+        if data_len == 0:
+            return
+
+        try:
+            tail = self._write_impl(data, data_ptr, data_len, True)
+            if tail is not None:
+                self._write_backlog.append(tail)
+                if self._is_debug:
+                    _logger.debug("%r: appended %d bytes to write_backlog", self, len(tail))
+                return
+        except BaseException as ex:
+            self._fatal_error(ex, 'Fatal error on SSL protocol')
+
+    cdef inline writelines_nocheck(self, list_of_data):
+        """
+        Write a list (or any iterable) of data bytes to the transport.
+        """
+        if not self._is_protocol_ready():
+            return
+
+        if self._write_backlog:
+            for data in list_of_data:
+                if data:
+                    self._write_backlog.append(aiofn_maybe_copy_buffer(data))
+            return
+
+        cdef:
+            char* data_ptr
+            Py_ssize_t data_len
+            bint add_to_backlog = False
+            Py_ssize_t data_cnt = len(list_of_data)
+            Py_ssize_t idx
+            bint is_last
+
+        try:
+            for idx in range(data_cnt):
+                data = list_of_data[idx]
+                if add_to_backlog:
+                    if len(data) > 0:
+                        self._write_backlog.append(aiofn_maybe_copy_buffer(data))
+                    continue
+
+                aiofn_unpack_buffer(data, &data_ptr, &data_len)
+                if data_len == 0:
+                    continue
+
+                is_last = idx == (data_cnt - 1)
+                tail = self._write_impl(data, data_ptr, data_len, is_last)
+                if tail is not None:
+                    self._write_backlog.append(tail)
+                    add_to_backlog = True
+        except BaseException as ex:
+            self._fatal_error(ex, 'Fatal error on SSL protocol')
+
+    cdef inline write_eof(self):
+        self._check_thread("write_eof")
+        raise NotImplementedError()
+
+    cdef inline is_closing(self):
+        self._check_thread("is_closing")
+        return self._state in (FLUSHING, SHUTDOWN, UNWRAPPED)
+
+    cdef inline close(self):
+        self._check_thread("close")
+        if self._is_debug:
+            _logger.debug("%r: user called close(), flush data before closing transport", self)
+        self._start_shutdown()
+
+    cdef inline abort(self):
+        self._check_thread("abort")
+        if self._is_debug:
+            _logger.debug("%r: user called abort(), close transport immediately", self)
+        self._abort(None)
 
     def connection_made(self, transport):
         """Called when the low-level connection is made.
@@ -509,20 +659,6 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         except Exception:
             self._transport.close()
             raise
-
-    cdef inline _get_extra_info(self, name, default=None):
-        if name == "ssl_object":
-            return self._ssl_object
-        elif name == "ssl_protocol":
-            return self
-        elif name == "ssl_layer_num":
-            return self._ssl_layer_num
-        elif name in self._extra:
-            return self._extra[name]
-        elif self._transport is not None:
-            return self._transport.get_extra_info(name, default)
-        else:
-            return default
 
     cdef inline _set_state(self, SSLProtocolState new_state):
         cdef bint allowed = False
@@ -692,9 +828,6 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
     # Shutdown flow
 
-    cdef inline bint _is_closing(self) noexcept:
-        return self._state in (FLUSHING, SHUTDOWN, UNWRAPPED)
-
     cdef inline _start_shutdown(self):
         if self._state in (FLUSHING, SHUTDOWN, UNWRAPPED):
             return
@@ -841,112 +974,6 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             self._transport._force_close(exc)
 
     # Outgoing flow
-
-    cdef inline write(self, data):
-        """Write some data bytes to the transport.
-
-        This does not block; it buffers the data and arranges for it
-        to be sent out asynchronously.
-        """
-        if not self._is_protocol_ready():
-            return
-
-        aiofn_validate_buffer(data)
-
-        cdef:
-            char * data_ptr
-            Py_ssize_t data_len
-
-        try:
-            if self._write_backlog:
-                if data:
-                    self._write_backlog.append(aiofn_maybe_copy_buffer(data))
-                return
-
-            aiofn_unpack_buffer(data, &data_ptr, &data_len)
-            if data_len == 0:
-                return
-
-            tail = self._write_impl(data, data_ptr, data_len, True)
-            if tail is not None:
-                self._write_backlog.append(tail)
-                if self._is_debug:
-                    _logger.debug("%r: appended %d bytes to write_backlog", self, len(tail))
-                return
-        except BaseException as ex:
-            self._fatal_error(ex, 'Fatal error on SSL protocol')
-
-    cdef inline write_c(self, char* data_ptr, Py_ssize_t data_len):
-        if not self._is_protocol_ready():
-            return
-
-        if data_len == 0:
-            return
-
-        try:
-            if self._write_backlog:
-                self._write_backlog.append(PyBytes_FromStringAndSize(data_ptr, data_len))
-                return
-
-            tail = self._write_impl(None, data_ptr, data_len, True)
-            if tail is not None:
-                self._write_backlog.append(tail)
-                return
-        except BaseException as ex:
-            self._fatal_error(ex, 'Fatal error on SSL protocol')
-
-    cdef inline writelines(self, list_of_data):
-        """
-        Write a list (or any iterable) of data bytes to the transport.
-        """
-        if not self._is_protocol_ready():
-            return
-
-        for data in list_of_data:
-            aiofn_validate_buffer(data)
-
-        cdef:
-            char* data_ptr
-            Py_ssize_t data_len
-            bint add_to_backlog = False
-            Py_ssize_t data_cnt = len(list_of_data)
-            Py_ssize_t idx
-            bint is_last
-
-        try:
-            if self._write_backlog:
-                self._write_backlog.extend(aiofn_maybe_copy_buffer(data)
-                                           for data in list_of_data if data)
-                return
-
-            for idx in range(data_cnt):
-                data = list_of_data[idx]
-                if add_to_backlog:
-                    if len(data) > 0:
-                        self._write_backlog.append(aiofn_maybe_copy_buffer(data))
-                    continue
-
-                aiofn_unpack_buffer(data, &data_ptr, &data_len)
-                if data_len == 0:
-                    continue
-
-                is_last = idx == (data_cnt - 1)
-                tail = self._write_impl(data, data_ptr, data_len, is_last)
-                if tail is not None:
-                    self._write_backlog.append(tail)
-                    add_to_backlog = True
-        except BaseException as ex:
-            self._fatal_error(ex, 'Fatal error on SSL protocol')
-
-    cdef inline pause_reading(self):
-        self._reading_paused = True
-        self._transport.pause_reading()
-
-    cdef inline resume_reading(self):
-        if self._reading_paused:
-            self._reading_paused = False
-            self._loop.call_soon(self.buffer_updated, 0)
-        self._transport.resume_reading()
 
     cpdef pause_writing(self):
         self._app_protocol.pause_writing()
@@ -1255,17 +1282,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
     cdef inline _fatal_error(self, exc, message='Fatal error on transport'):
         self._abort(exc)
-
-        if isinstance(exc, OSError):
-            if self._loop.get_debug():
-                _logger.debug("%r: %s", self, message, exc_info=True)
-        elif not isinstance(exc, asyncio.CancelledError):
-            self._loop.call_exception_handler({
-                'message': message,
-                'exception': exc,
-                'transport': self._transport,
-                'protocol': self,
-            })
+        self._fatal_error_no_close(exc, message)
 
     cdef inline _fatal_error_no_close(self, exc, message='Fatal error on transport'):
         if isinstance(exc, OSError):
@@ -1306,3 +1323,4 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             self._do_handshake()
         except Exception as ex:
             self._fatal_error(ex, "Fatal error on SSL renegotiation")
+#
