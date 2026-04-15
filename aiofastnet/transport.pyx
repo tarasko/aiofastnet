@@ -43,6 +43,12 @@ cdef class Transport:
     cpdef writelines(self, list_of_data):
         raise NotImplementedError()
 
+    cpdef write_unsafe(self, data):
+        raise NotImplementedError()
+
+    cpdef writelines_unsafe(self, list_of_data):
+        raise NotImplementedError()
+
     cdef write_c(self, char* ptr, Py_ssize_t sz):
         self.write(PyMemoryView_FromMemory(ptr, sz, PyBUF_READ))
 
@@ -385,7 +391,19 @@ cdef class SocketTransport(Transport):
     cpdef write(self, data):
         self._check_thread("write")
         aiofn_validate_buffer(data)
+        self.write_unsafe(data)
 
+    cpdef writelines(self, list_of_data):
+        self._check_thread("writelines")
+        if list_of_data:
+            for data in list_of_data:
+                aiofn_validate_buffer(data)
+        else:
+            return
+
+        self.writelines_unsafe(list_of_data)
+
+    cpdef write_unsafe(self, data):
         if self._eof:
             raise RuntimeError('Cannot call write() after write_eof()')
         if not data:
@@ -416,39 +434,9 @@ cdef class SocketTransport(Transport):
         self._write_backlog.append(data)
         self._maybe_pause_protocol()
 
-    cdef write_c(self, char* ptr, Py_ssize_t sz):
-        self._check_thread("write_c")
-        if sz <= 0:
-            return
-
-        if self._conn_lost:
-            if self._conn_lost >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
-                _logger.warning('socket.send() raised exception.')
-            self._conn_lost += 1
-            return
-
-        if not self._write_backlog:
-            data = self._write_one(None, ptr, sz)
-            if data is None:
-                return
-
-            # Not all was written; register write handler.
-            self._loop.add_writer(self._sock_fd_obj, self._write_ready)
-        else:
-            data = PyBytes_FromStringAndSize(ptr, sz)
-
-        self._write_backlog.append(data)
-        self._maybe_pause_protocol()
-
-    cpdef writelines(self, list_of_data):
-        self._check_thread("writelines")
+    cpdef writelines_unsafe(self, list_of_data):
         if self._eof:
             raise RuntimeError('Cannot call writelines() after write_eof()')
-        if list_of_data:
-            for data in list_of_data:
-                aiofn_validate_buffer(data)
-        else:
-            return
 
         if self._conn_lost:
             if self._conn_lost >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
@@ -473,6 +461,29 @@ cdef class SocketTransport(Transport):
             if self._write_backlog:
                 self._loop.add_writer(self._sock_fd_obj, self._write_ready)
                 self._maybe_pause_protocol()
+
+    cdef write_c(self, char* ptr, Py_ssize_t sz):
+        if sz <= 0:
+            return
+
+        if self._conn_lost:
+            if self._conn_lost >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
+                _logger.warning('socket.send() raised exception.')
+            self._conn_lost += 1
+            return
+
+        if not self._write_backlog:
+            data = self._write_one(None, ptr, sz)
+            if data is None:
+                return
+
+            # Not all was written; register write handler.
+            self._loop.add_writer(self._sock_fd_obj, self._write_ready)
+        else:
+            data = PyBytes_FromStringAndSize(ptr, sz)
+
+        self._write_backlog.append(data)
+        self._maybe_pause_protocol()
 
     cpdef can_write_eof(self):
         return True

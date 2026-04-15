@@ -24,9 +24,9 @@ cdef class ServerProtocol(Protocol, asyncio.BufferedProtocol):
         if nbytes > 0:
             # bytearray slicing creates a copy, so write is safe.
             if self._aiofn_transport:
-                (<Transport>self._transport).write(memoryview(self._read_buf)[:nbytes])
+                (<Transport>self._transport).write_unsafe(memoryview(self._read_buf)[:nbytes])
             else:
-                self._transport.write(memoryview(self._read_buf)[:nbytes])
+                self._transport.write_unsafe(memoryview(self._read_buf)[:nbytes])
 
 
 cdef class ClientProtocol(Protocol, asyncio.BufferedProtocol):
@@ -97,6 +97,6 @@ cdef class ClientProtocol(Protocol, asyncio.BufferedProtocol):
                 self._deadline = self._loop.time() + self._duration
 
         if isinstance(self._transport, Transport):
-            (<Transport>self._transport).write(self._payload)
+            (<Transport>self._transport).write_unsafe(self._payload)
         else:
-            self._transport.write(self._payload)
+            self._transport.write_unsafe(self._payload)
