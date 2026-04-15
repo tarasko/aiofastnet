@@ -15,17 +15,17 @@ cpdef aiofn_validate_buffer(buffer):
 
 
 cdef aiofn_unpack_buffer(object bytes_like_obj, char** ptr_out, Py_ssize_t* size_out):
-    if bytes_like_obj is None:
+    cdef Py_buffer pybuf
+
+    if bytes_like_obj is not None:
+        PyObject_GetBuffer(bytes_like_obj, &pybuf, PyBUF_SIMPLE)
+        ptr_out[0] = <char *> pybuf.buf
+        size_out[0] = pybuf.len
+        # We can already release because we still keep the reference to the message
+        PyBuffer_Release(&pybuf)
+    else:
         ptr_out[0] = NULL
         size_out[0] = 0
-        return
-
-    cdef Py_buffer pybuf
-    PyObject_GetBuffer(bytes_like_obj, &pybuf, PyBUF_SIMPLE)
-    ptr_out[0] = <char*>pybuf.buf
-    size_out[0] = pybuf.len
-    # We can already release because we still keep the reference to the message
-    PyBuffer_Release(&pybuf)
 
 
 cpdef object aiofn_maybe_copy_buffer(object buffer):

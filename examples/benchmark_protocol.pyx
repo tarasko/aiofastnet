@@ -24,7 +24,7 @@ cdef class ServerProtocol(Protocol, asyncio.BufferedProtocol):
         if nbytes > 0:
             data = memoryview(self._read_buf)[:nbytes]
             if self._aiofn_transport:
-                (<Transport>self._transport).write_unsafe(data)
+                (<Transport>self._transport).write_nocheck(data)
             else:
                 self._transport.write(data)
 
@@ -97,6 +97,6 @@ cdef class ClientProtocol(Protocol, asyncio.BufferedProtocol):
                 self._deadline = self._loop.time() + self._duration
 
         if isinstance(self._transport, Transport):
-            (<Transport>self._transport).write_unsafe(self._payload)
+            (<Transport>self._transport).write_nocheck(self._payload)
         else:
             self._transport.write(self._payload)

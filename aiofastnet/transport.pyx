@@ -43,10 +43,10 @@ cdef class Transport:
     cpdef writelines(self, list_of_data):
         raise NotImplementedError()
 
-    cpdef write_unsafe(self, data):
+    cpdef write_nocheck(self, data):
         raise NotImplementedError()
 
-    cpdef writelines_unsafe(self, list_of_data):
+    cpdef writelines_nocheck(self, list_of_data):
         raise NotImplementedError()
 
     cdef write_c(self, char* ptr, Py_ssize_t sz):
@@ -391,7 +391,7 @@ cdef class SocketTransport(Transport):
     cpdef write(self, data):
         self._check_thread("write")
         aiofn_validate_buffer(data)
-        self.write_unsafe(data)
+        self.write_nocheck(data)
 
     cpdef writelines(self, list_of_data):
         self._check_thread("writelines")
@@ -401,9 +401,9 @@ cdef class SocketTransport(Transport):
         else:
             return
 
-        self.writelines_unsafe(list_of_data)
+        self.writelines_nocheck(list_of_data)
 
-    cpdef write_unsafe(self, data):
+    cpdef write_nocheck(self, data):
         if self._eof:
             raise RuntimeError('Cannot call write() after write_eof()')
         if not data:
@@ -434,7 +434,7 @@ cdef class SocketTransport(Transport):
         self._write_backlog.append(data)
         self._maybe_pause_protocol()
 
-    cpdef writelines_unsafe(self, list_of_data):
+    cpdef writelines_nocheck(self, list_of_data):
         if self._eof:
             raise RuntimeError('Cannot call writelines() after write_eof()')
 
