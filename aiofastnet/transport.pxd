@@ -20,3 +20,5 @@ cdef class Protocol:
     cpdef data_received(self, bytes data)
     cpdef Py_ssize_t get_local_write_buffer_size(self) except -1
 
+
+cpdef aiofn_is_buffered_protocol(protocol)

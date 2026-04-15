@@ -23,7 +23,7 @@ from .utils cimport (
 )
 from .transport cimport Transport, Protocol
 from .ssl_object cimport SSLObject, SSLError, ssl_error_name
-from .transport import aiofn_is_buffered_protocol
+from .transport cimport aiofn_is_buffered_protocol
 from .openssl cimport SSL_RECEIVED_SHUTDOWN
 
 
@@ -354,17 +354,17 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         self._app_protocol_is_buffered = aiofn_is_buffered_protocol(app_protocol)
         self._app_protocol_aiofn = isinstance(app_protocol, Protocol)
 
-    cdef inline _check_thread(self, cls_name, meth):
+    cdef inline _check_thread(self, meth):
         cdef unsigned long curr_thread_id = PyThread_get_thread_ident()
         if self._thread_id != curr_thread_id:
             raise RuntimeError(
-                f"{cls_name}.{meth} called from a wrong thread: "
+                f"SSLTransport.{meth} called from a wrong thread: "
                 f"transport thread id={self._thread_id}, "
                 f"curr thread_id={curr_thread_id}"
             )
 
     cdef inline get_extra_info(self, name, default=None):
-        self._check_thread("SSLTransport", "get_extra_info")
+        self._check_thread("get_extra_info")
         if name == "ssl_object":
             return self._ssl_object
         elif name == "ssl_protocol":
@@ -379,55 +379,55 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             return default
 
     cdef inline set_protocol(self, protocol):
-        self._check_thread("SSLTransport", "set_protocol")
+        self._check_thread("set_protocol")
         self._set_app_protocol(protocol)
 
     cdef inline get_protocol(self):
-        self._check_thread("SSLTransport", "get_protocol")
+        self._check_thread("get_protocol")
         return self._app_protocol
 
     cdef inline is_reading(self):
-        self._check_thread("SSLTransport", "is_reading")
+        self._check_thread("is_reading")
         return self._transport.is_reading()
 
     cdef inline pause_reading(self):
-        self._check_thread("SSLTransport", "pause_reading")
+        self._check_thread("pause_reading")
         self._reading_paused = True
         self._transport.pause_reading()
 
     cdef inline resume_reading(self):
-        self._check_thread("SSLTransport", "resume_reading")
+        self._check_thread("resume_reading")
         if self._reading_paused:
             self._reading_paused = False
             self._loop.call_soon(self.buffer_updated, 0)
         self._transport.resume_reading()
 
     cdef inline set_write_buffer_limits(self, high=None, low=None):
-        self._check_thread("SSLTransport", "set_write_buffer_limits")
+        self._check_thread("set_write_buffer_limits")
         if self._transport is not None:
             self._transport.set_write_buffer_limits(high, low)
 
     cdef inline get_write_buffer_limits(self):
-        self._check_thread("SSLTransport", "get_write_buffer_limits")
+        self._check_thread("get_write_buffer_limits")
         if self._transport is not None:
             return self._transport.get_write_buffer_limits()
         else:
             return 0, 0
 
     cdef inline get_write_buffer_size(self):
-        self._check_thread("SSLTransport", "get_write_buffer_size")
+        self._check_thread("get_write_buffer_size")
         if self._transport is not None:
             return self._transport.get_write_buffer_size()
         else:
             return 0
 
     cdef inline write(self, data):
-        self._check_thread("SSLTransport", "write")
+        self._check_thread("write")
         aiofn_validate_buffer(data)
         self.write_nocheck(data)
 
     cdef inline writelines(self, list_of_data):
-        self._check_thread("SSLTransport", "writelines")
+        self._check_thread("writelines")
         for data in list_of_data:
             aiofn_validate_buffer(data)
         self.writelines_nocheck(list_of_data)
@@ -486,8 +486,9 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             return
 
         if self._write_backlog:
-            self._write_backlog.extend(aiofn_maybe_copy_buffer(data)
-                                       for data in list_of_data if data)
+            for data in list_of_data:
+                if data:
+                    self._write_backlog.append(aiofn_maybe_copy_buffer(data))
             return
 
         cdef:
@@ -519,21 +520,21 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             self._fatal_error(ex, 'Fatal error on SSL protocol')
 
     cdef inline write_eof(self):
-        self._check_thread("SSLTransport", "write_eof")
+        self._check_thread("write_eof")
         raise NotImplementedError()
 
     cdef inline is_closing(self):
-        self._check_thread("SSLTransport", "is_closing")
+        self._check_thread("is_closing")
         return self._state in (FLUSHING, SHUTDOWN, UNWRAPPED)
 
     cdef inline close(self):
-        self._check_thread("SSLTransport", "close")
+        self._check_thread("close")
         if self._is_debug:
             _logger.debug("%r: user called close(), flush data before closing transport", self)
         self._start_shutdown()
 
     cdef inline abort(self):
-        self._check_thread("SSLTransport", "abort")
+        self._check_thread("abort")
         if self._is_debug:
             _logger.debug("%r: user called abort(), close transport immediately", self)
         self._abort(None)
