@@ -22,11 +22,11 @@ cdef class ServerProtocol(Protocol, asyncio.BufferedProtocol):
 
     cpdef buffer_updated(self, Py_ssize_t nbytes):
         if nbytes > 0:
-            # bytearray slicing creates a copy, so write is safe.
+            data = memoryview(self._read_buf)[:nbytes]
             if self._aiofn_transport:
-                (<Transport>self._transport).write_unsafe(memoryview(self._read_buf)[:nbytes])
+                (<Transport>self._transport).write_unsafe(data)
             else:
-                self._transport.write_unsafe(memoryview(self._read_buf)[:nbytes])
+                self._transport.write(data)
 
 
 cdef class ClientProtocol(Protocol, asyncio.BufferedProtocol):
@@ -99,4 +99,4 @@ cdef class ClientProtocol(Protocol, asyncio.BufferedProtocol):
         if isinstance(self._transport, Transport):
             (<Transport>self._transport).write_unsafe(self._payload)
         else:
-            self._transport.write_unsafe(self._payload)
+            self._transport.write(self._payload)

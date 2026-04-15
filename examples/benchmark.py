@@ -81,21 +81,9 @@ def _plot_results(
 
 def main():
     parser = argparse.ArgumentParser(description="Echo round-trip benchmark over loopback.")
-    parser.add_argument(
-        "--msg-sizes",
-        default="256,8192,32768,100000",
-        help="Comma-separated message sizes in bytes",
-    )
-    parser.add_argument(
-        "--loops",
-        default="asyncio,uvloop",
-        help="Comma-separated event loops (asyncio,uvloop)",
-    )
-    parser.add_argument(
-        "--variant",
-        default="native,aiofastnet",
-        help="Comma-separated backend variants (native,aiofastnet)",
-    )
+    parser.add_argument("--msg-sizes", default="256,8192,32768,100000", help="Comma-separated message sizes in bytes")
+    parser.add_argument("--loops", default="asyncio,uvloop", help="Comma-separated event loops (asyncio,uvloop)")
+    parser.add_argument("--variant", default="native,aiofastnet", help="Comma-separated backend variants (native,aiofastnet)")
     parser.add_argument("--transport", default="ssl,tcp", help="Comma-separated transport types (tcp,ssl)")
     parser.add_argument("--duration", type=float, default=5.0, help="Benchmark duration in seconds" )
     parser.add_argument(

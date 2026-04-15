@@ -848,10 +848,10 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         This does not block; it buffers the data and arranges for it
         to be sent out asynchronously.
         """
+        aiofn_validate_buffer(data)
+
         if not self._is_protocol_ready():
             return
-
-        aiofn_validate_buffer(data)
 
         cdef:
             char * data_ptr
