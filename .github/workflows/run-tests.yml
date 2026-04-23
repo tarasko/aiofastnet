@@ -64,7 +64,7 @@ jobs:
       matrix:
         include:
           - python-tag: cp314-cp314
-          - python-tag: cp314t-cp314t
+          - python-tag: cp314-cp314t
 
     steps:
     - uses: actions/checkout@v6
