@@ -5,6 +5,12 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.4.0
+------------------
+
+* Build for windows arm64
+* Add write_nocheck, writelines_nocheck, write_c to the Transport interface
+
 0.3.0
 ------------------
 
