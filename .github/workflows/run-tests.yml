@@ -64,9 +64,7 @@ jobs:
       matrix:
         include:
           - python-tag: cp314-cp314
-            python-gil: "1"
           - python-tag: cp314t-cp314t
-            python-gil: "0"
 
     steps:
     - uses: actions/checkout@v6
@@ -76,16 +74,16 @@ jobs:
         docker run --rm \
           -v "$PWD:/work" \
           -w /work \
-          -e PYTHON_GIL=${{ matrix.python-gil }} \
           quay.io/pypa/musllinux_1_2_x86_64 \
           sh -lc '
-            export PATH="/opt/python/${{ matrix.python-tag }}/bin:$PATH"
-            python -VV
-            python -c "import sys, sysconfig; print(sys.version); print(\"Py_GIL_DISABLED=\", sysconfig.get_config_var(\"Py_GIL_DISABLED\")); print(\"GIL enabled=\", sys._is_gil_enabled())"
-            python -m pip install --upgrade pip
-            pip install -r requirements.txt
-            pip install -r requirements-test.txt
-            python setup.py build_ext --inplace
-            pytest -v
+            manylinux-interpreters ensure ${{ matrix.python-tag }}
+            PYBIN="/opt/python/${{ matrix.python-tag }}/bin"
+            "$PYBIN/python" -VV
+            "$PYBIN/python" -c "import sys, sysconfig; print(sys.version); print(\"Py_GIL_DISABLED=\", sysconfig.get_config_var(\"Py_GIL_DISABLED\")); print(\"GIL enabled=\", getattr(sys, \"_is_gil_enabled\", lambda: \"n/a\")())"
+            "$PYBIN/python" -m pip install --upgrade pip
+            "$PYBIN/python" -m pip install -r requirements.txt
+            "$PYBIN/python" -m pip install -r requirements-test.txt
+            "$PYBIN/python" setup.py build_ext --inplace
+            "$PYBIN/python" -m pytest -v
           '
         
