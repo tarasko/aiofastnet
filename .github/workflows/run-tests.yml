@@ -55,4 +55,37 @@ jobs:
     - name: Run tests
       run: |
         pytest -v
+
+  build-musllinux:
+    name: musllinux (${{ matrix.python-tag }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-tag: cp314-cp314
+            python-gil: "1"
+          - python-tag: cp314t-cp314t
+            python-gil: "0"
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Run tests on musllinux
+      run: |
+        docker run --rm \
+          -v "$PWD:/work" \
+          -w /work \
+          -e PYTHON_GIL=${{ matrix.python-gil }} \
+          quay.io/pypa/musllinux_1_2_x86_64 \
+          sh -lc '
+            export PATH="/opt/python/${{ matrix.python-tag }}/bin:$PATH"
+            python -VV
+            python -c "import sys, sysconfig; print(sys.version); print(\"Py_GIL_DISABLED=\", sysconfig.get_config_var(\"Py_GIL_DISABLED\")); print(\"GIL enabled=\", sys._is_gil_enabled())"
+            python -m pip install --upgrade pip
+            pip install -r requirements.txt
+            pip install -r requirements-test.txt
+            python setup.py build_ext --inplace
+            pytest -v
+          '
         
