@@ -64,15 +64,13 @@ class _WrappedTransport(Transport):
         return self._transport.get_write_buffer_limits()
 
     def write(self, data):
-        return self._transport.write(aiofn_validate_and_maybe_copy_buffer(data))
+        return self.write_nocheck(data)
 
     def write_nocheck(self, data):
         return self._transport.write(aiofn_validate_and_maybe_copy_buffer(data))
 
     def writelines(self, list_of_data):
-        lst = [aiofn_validate_and_maybe_copy_buffer(data)
-               for data in list_of_data if data]
-        self._transport.writelines(lst)
+        return self.writelines_nocheck(list_of_data)
 
     def writelines_nocheck(self, list_of_data):
         lst = [aiofn_validate_and_maybe_copy_buffer(data)
