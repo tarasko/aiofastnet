@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.5.0
+------------------
+
+* Add missing write_nocheck and writelines_nocheck to WrappedTransport
+
 0.4.0
 ------------------
 
