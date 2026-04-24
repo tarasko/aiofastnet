@@ -66,7 +66,15 @@ class _WrappedTransport(Transport):
     def write(self, data):
         return self._transport.write(aiofn_validate_and_maybe_copy_buffer(data))
 
+    def write_nocheck(self, data):
+        return self._transport.write(aiofn_validate_and_maybe_copy_buffer(data))
+
     def writelines(self, list_of_data):
+        lst = [aiofn_validate_and_maybe_copy_buffer(data)
+               for data in list_of_data if data]
+        self._transport.writelines(lst)
+
+    def writelines_nocheck(self, list_of_data):
         lst = [aiofn_validate_and_maybe_copy_buffer(data)
                for data in list_of_data if data]
         self._transport.writelines(lst)
