@@ -3,26 +3,19 @@ import argparse
 import asyncio
 import logging
 import socket
-import ssl
 import sys
 from functools import partial
 from logging import basicConfig
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import aiofastnet
 
-from examples.benchmark_protocol import ServerProtocol, ClientProtocol
+from examples.utils import build_ssl_contexts, run_pair, set_socket_sndbuf
 
 try:
     import uvloop
 except ImportError:
     uvloop = None
-
-
-def _set_socket_sndbuf(sock: socket.socket, size: int) -> int:
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, max(1, size // 2))
-    return sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
 
 
 def _build_ssl_contexts() -> tuple[ssl.SSLContext, ssl.SSLContext]:
@@ -54,56 +47,13 @@ def _build_ssl_contexts() -> tuple[ssl.SSLContext, ssl.SSLContext]:
 
 
 async def run_benchmark(args, loop_kind: str, use_aiofastnet: bool, transport_kind: str, msg_size: int):
-    loop = asyncio.get_running_loop()
-    host = "127.0.0.1"
-    port = 0
-    # loop.set_debug(True)
-
-    if use_aiofastnet:
-        create_server = partial(aiofastnet.create_server, loop)
-        create_connection = partial(aiofastnet.create_connection, loop)
-    else:
-        create_server = loop.create_server
-        create_connection = loop.create_connection
-
     payload = b"x" * msg_size
 
-    server_ssl_ctx = None
-    client_ssl_ctx = None
-    if transport_kind == "ssl":
-        server_ssl_ctx, client_ssl_ctx = _build_ssl_contexts()
+    server_ssl_ctx, client_ssl_ctx = build_ssl_contexts() \
+        if transport_kind == "ssl" else (None, None)
 
-    server = await create_server(
-        ServerProtocol,
-        host=host,
-        port=port,
-        ssl=server_ssl_ctx,
-    )
-    for server_sock in server.sockets:
-        _set_socket_sndbuf(server_sock, args.sndbuf_size)
-
-    client_proto = ClientProtocol(payload, args.duration)
-    try:
-        bound_port = server.sockets[0].getsockname()[1]
-        transport, _ = await create_connection(
-            lambda: client_proto,
-            host=host,
-            port=bound_port,
-            ssl=client_ssl_ctx,
-        )
-        client_sock = transport.get_extra_info("socket")
-        if client_sock is not None:
-            _set_socket_sndbuf(client_sock, args.sndbuf_size)
-
-        try:
-            await client_proto.closed
-        except TimeoutError:
-            transport.abort()
-    finally:
-        server.close()
-        await server.wait_closed()
-
-    rps = client_proto.requests / args.duration
+    requests = await run_pair(use_aiofastnet, args.duration, payload, server_ssl_ctx, client_ssl_ctx, None, args.sndbuf_size)
+    rps = requests/args.duration
     print(f"{transport_kind}-{loop_kind}-{'aiofastnet' if use_aiofastnet else 'native'}-{msg_size}: {rps:.2f}")
 
     return rps
@@ -162,21 +112,9 @@ def _plot_results(
 
 def main():
     parser = argparse.ArgumentParser(description="Echo round-trip benchmark over loopback.")
-    parser.add_argument(
-        "--msg-sizes",
-        default="256,8192,32768,100000",
-        help="Comma-separated message sizes in bytes",
-    )
-    parser.add_argument(
-        "--loops",
-        default="asyncio,uvloop",
-        help="Comma-separated event loops (asyncio,uvloop)",
-    )
-    parser.add_argument(
-        "--variant",
-        default="native,aiofastnet",
-        help="Comma-separated backend variants (native,aiofastnet)",
-    )
+    parser.add_argument("--msg-sizes", default="256,8192,32768,100000", help="Comma-separated message sizes in bytes")
+    parser.add_argument("--loops", default="asyncio,uvloop", help="Comma-separated event loops (asyncio,uvloop)")
+    parser.add_argument("--variant", default="native,aiofastnet", help="Comma-separated backend variants (native,aiofastnet)")
     parser.add_argument("--transport", default="ssl,tcp", help="Comma-separated transport types (tcp,ssl)")
     parser.add_argument("--duration", type=float, default=5.0, help="Benchmark duration in seconds" )
     parser.add_argument(
@@ -212,7 +150,7 @@ def main():
     all_results: dict[str, dict[int, dict[str, float]]] = {}
     uvloop_version = getattr(uvloop, "__version__", "not installed")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe_sock:
-        effective_sndbuf = _set_socket_sndbuf(probe_sock, args.sndbuf_size)
+        effective_sndbuf = set_socket_sndbuf(probe_sock, args.sndbuf_size)
 
     print(f"msg_sizes={','.join(str(x) for x in args.msg_sizes)}")
     print(f"loops={','.join(args.loops)}")

@@ -10,6 +10,7 @@ dist
 perf.data
 perf.data.old
 playground.py
+.codex
 
 !static_mem_bio.c
 !certdecode.c

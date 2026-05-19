@@ -10,7 +10,10 @@ async def start_tls(loop: asyncio.AbstractEventLoop,
                     server_side=False,
                     server_hostname=None,
                     ssl_handshake_timeout=None,
-                    ssl_shutdown_timeout=None) -> asyncio.Transport:
+                    ssl_shutdown_timeout=None,
+                    ssl_incoming_bio_size=None,
+                    ssl_outgoing_bio_size=None
+                    ) -> asyncio.Transport:
     """Upgrade transport to TLS.
 
     Return new transport that *protocol* should start using
@@ -34,6 +37,8 @@ async def start_tls(loop: asyncio.AbstractEventLoop,
         call_connection_made=False,
         ssl_handshake_timeout=ssl_handshake_timeout,
         ssl_shutdown_timeout=ssl_shutdown_timeout,
+        ssl_incoming_bio_size=ssl_incoming_bio_size,
+        ssl_outgoing_bio_size=ssl_outgoing_bio_size
         )
 
     # Pause early so that "ssl_protocol.data_received()" doesn't

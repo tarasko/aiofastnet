@@ -14,27 +14,10 @@ from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Transport
 from tests.utils import TestClient, TestServer, \
     multiloop_event_loop_policy, make_test_ssl_contexts, ConnectionType, \
-    AsyncClient, TestException, exc_queue, _logger
+    AsyncClient, TestException, exc_queue, _logger, conn_type, loop_debug
 
 event_loop_policy = multiloop_event_loop_policy()
 
-
-@pytest.fixture
-async def loop_debug():
-    asyncio.get_running_loop().set_debug(True)
-
-
-@pytest.fixture(params=["tcp", "ssl"])
-def conn_type(request):
-    if request.param == "tcp":
-        return ConnectionType(name="tcp")
-    else:
-        server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key")
-        return ConnectionType(
-            name="ssl",
-            server_ssl_context=server_context,
-            client_ssl_context=client_context,
-        )
 
 @pytest.fixture(params=["simple", "buffered"])
 def buffered_protocol(request):
@@ -252,14 +235,14 @@ async def test_pause_reading(conn_type):
             client.transport.write(payload)
             client.transport.pause_reading()
             with pytest.raises(asyncio.TimeoutError):
-                await client.wait_new_data(0.2)
+                await client.wait_new_data(0.3)
             client.transport.resume_reading()
 
-            await client.wait_new_data(0.2)
+            await client.wait_new_data(0.3)
             client.transport.pause_reading()
 
             with pytest.raises(asyncio.TimeoutError):
-                await client.wait_new_data(0.2)
+                await client.wait_new_data(0.3)
 
             client.transport.resume_reading()
 

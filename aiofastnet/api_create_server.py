@@ -40,6 +40,8 @@ async def create_server(
         keep_alive=None,
         ssl_handshake_timeout=None,
         ssl_shutdown_timeout=None,
+        ssl_incoming_bio_size=None,
+        ssl_outgoing_bio_size=None,
         start_serving=True):
     """Create a TCP server.
 
@@ -179,8 +181,12 @@ async def create_server(
 
     server = Server(
         loop, sockets, protocol_factory,
-        ssl, backlog, ssl_handshake_timeout,
-        ssl_shutdown_timeout)
+        ssl, backlog,
+        ssl_handshake_timeout,
+        ssl_shutdown_timeout,
+        ssl_incoming_bio_size,
+        ssl_outgoing_bio_size
+    )
     if start_serving:
         server._start_serving()
         # Skip one loop iteration so that all 'loop.add_reader'
@@ -193,9 +199,9 @@ async def create_server(
 
 
 class Server(asyncio.AbstractServer):
-
     def __init__(self, loop, sockets, protocol_factory, ssl_context, backlog,
-                 ssl_handshake_timeout, ssl_shutdown_timeout=None):
+                 ssl_handshake_timeout, ssl_shutdown_timeout,
+                 ssl_incoming_bio_size, ssl_outgoing_bio_size):
         self._loop = loop
         self._sockets = sockets
         # Weak references so we don't break Transport's ability to
@@ -207,6 +213,8 @@ class Server(asyncio.AbstractServer):
         self._ssl_context = ssl_context
         self._ssl_handshake_timeout = ssl_handshake_timeout
         self._ssl_shutdown_timeout = ssl_shutdown_timeout
+        self._ssl_incoming_bio_size = ssl_incoming_bio_size
+        self._ssl_outgoing_bio_size = ssl_outgoing_bio_size
         self._serving = False
         self._serving_forever_fut = None
 
@@ -238,8 +246,11 @@ class Server(asyncio.AbstractServer):
             _start_serving(
                 self._loop,
                 self._protocol_factory, sock, self._ssl_context,
-                self, self._backlog, self._ssl_handshake_timeout,
-                self._ssl_shutdown_timeout)
+                self, self._backlog,
+                self._ssl_handshake_timeout,
+                self._ssl_shutdown_timeout,
+                self._ssl_incoming_bio_size,
+                self._ssl_outgoing_bio_size)
 
     def get_loop(self):
         return self._loop
@@ -368,9 +379,13 @@ async def _create_server_fallback(loop,
 
 def _accept_connection(
         loop, protocol_factory, sock,
-        sslcontext=None, server=None, backlog=100,
-        ssl_handshake_timeout=constants.SSL_HANDSHAKE_TIMEOUT,
-        ssl_shutdown_timeout=constants.SSL_SHUTDOWN_TIMEOUT):
+        sslcontext, server,
+        backlog,
+        ssl_handshake_timeout,
+        ssl_shutdown_timeout,
+        ssl_incoming_bio_size,
+        ssl_outgoing_bio_size,
+):
     # This method is only called once for each event loop tick where the
     # listening socket has triggered an EVENT_READ. There may be multiple
     # connections waiting for an .accept() so it is called in a loop.
@@ -405,14 +420,19 @@ def _accept_connection(
                 loop.call_later(constants.ACCEPT_RETRY_DELAY,
                                 _start_serving,
                                 loop, protocol_factory, sock, sslcontext, server,
-                                backlog, ssl_handshake_timeout,
-                                ssl_shutdown_timeout)
+                                backlog,
+                                ssl_handshake_timeout,
+                                ssl_shutdown_timeout,
+                                ssl_incoming_bio_size,
+                                ssl_outgoing_bio_size,
+                                )
             else:
                 raise  # The event loop will catch, log and ignore it.
         else:
             accept = _accept_connection2(
                 loop, protocol_factory, conn, sslcontext, server,
-                ssl_handshake_timeout, ssl_shutdown_timeout)
+                ssl_handshake_timeout, ssl_shutdown_timeout,
+                ssl_incoming_bio_size, ssl_outgoing_bio_size)
             asyncio.create_task(accept)
 
 
@@ -420,9 +440,11 @@ async def _accept_connection2(
         loop,
         protocol_factory,
         sock,
-        sslcontext=None, server=None,
-        ssl_handshake_timeout=constants.SSL_HANDSHAKE_TIMEOUT,
-        ssl_shutdown_timeout=constants.SSL_SHUTDOWN_TIMEOUT):
+        sslcontext, server,
+        ssl_handshake_timeout,
+        ssl_shutdown_timeout,
+        ssl_incoming_bio_size,
+        ssl_outgoing_bio_size):
     protocol = None
     transport = None
     try:
@@ -431,6 +453,8 @@ async def _accept_connection2(
             server_hostname=None, server_side=True,
             ssl_handshake_timeout=ssl_handshake_timeout,
             ssl_shutdown_timeout=ssl_shutdown_timeout,
+            ssl_incoming_bio_size=ssl_incoming_bio_size,
+            ssl_outgoing_bio_size=ssl_outgoing_bio_size,
             server=server
         )
     except (SystemExit, KeyboardInterrupt):
@@ -450,12 +474,16 @@ async def _accept_connection2(
 
 
 def _start_serving(loop, protocol_factory, sock,
-                   sslcontext=None, server=None, backlog=100,
-                   ssl_handshake_timeout=constants.SSL_HANDSHAKE_TIMEOUT,
-                   ssl_shutdown_timeout=constants.SSL_SHUTDOWN_TIMEOUT):
+                   sslcontext, server, backlog,
+                   ssl_handshake_timeout,
+                   ssl_shutdown_timeout,
+                   ssl_incoming_bio_size,
+                   ssl_outgoing_bio_size
+                   ):
     loop.add_reader(sock.fileno(), _accept_connection, loop,
                     protocol_factory, sock, sslcontext, server, backlog,
-                    ssl_handshake_timeout, ssl_shutdown_timeout)
+                    ssl_handshake_timeout, ssl_shutdown_timeout,
+                    ssl_incoming_bio_size, ssl_outgoing_bio_size)
 
 
 def _set_reuseport(sock):
