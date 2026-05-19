@@ -14,6 +14,8 @@ from cpython.pythread cimport PyThread_get_thread_ident
 
 from . import constants
 from .utils cimport (
+    SSLProtocolState,
+    AppProtocolState,
     aiofn_unpack_buffer,
     aiofn_validate_buffer,
     aiofn_maybe_copy_buffer,
@@ -26,30 +28,6 @@ from .transport cimport Transport, Protocol
 from .ssl_object cimport SSLObject, SSLError, ssl_error_name
 from .transport cimport aiofn_is_buffered_protocol
 from .openssl cimport SSL_RECEIVED_SHUTDOWN
-
-
-cpdef enum SSLProtocolState:
-    UNWRAPPED = 0
-    DO_HANDSHAKE = 1
-    WRAPPED = 2
-    FLUSHING = 3
-    SHUTDOWN = 4
-
-
-cdef enum AppProtocolState:
-    # This tracks the state of app protocol (https://git.io/fj59P):
-    #
-    #     INIT -cm-> CON_MADE [-dr*->] [-er-> EOF?] -cl-> CON_LOST
-    #
-    # * cm: connection_made()
-    # * dr: data_received()
-    # * er: eof_received()
-    # * cl: connection_lost()
-
-    STATE_INIT = 0
-    STATE_CON_MADE = 1
-    STATE_EOF = 2
-    STATE_CON_LOST = 3
 
 
 cdef object _logger = getLogger('aiofastnet.ssl')
@@ -309,12 +287,12 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         self._ssl_handshake_complete_waiter = ssl_handshake_complete_waiter
         self._ssl_layer_num = 0
 
-        self._state = UNWRAPPED
+        self._state = SSLProtocolState.UNWRAPPED
         self._conn_lost = 0  # Set when connection_lost called
         if call_connection_made:
-            self._app_state = STATE_INIT
+            self._app_state = AppProtocolState.STATE_INIT
         else:
-            self._app_state = STATE_CON_MADE
+            self._app_state = AppProtocolState.STATE_CON_MADE
 
         self._handshake_timeout_handle = None
         self._shutdown_timeout_handle = None
@@ -526,7 +504,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
     cdef inline is_closing(self):
         self._check_thread("is_closing")
-        return self._state in (FLUSHING, SHUTDOWN, UNWRAPPED)
+        return self._state in (SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN, SSLProtocolState.UNWRAPPED)
 
     cdef inline close(self):
         self._check_thread("close")
@@ -564,12 +542,12 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
         self._conn_lost += 1
 
-        if self._state != DO_HANDSHAKE:
-            if self._app_state == STATE_CON_MADE or \
-                    self._app_state == STATE_EOF:
-                self._app_state = STATE_CON_LOST
+        if self._state != SSLProtocolState.DO_HANDSHAKE:
+            if self._app_state == AppProtocolState.STATE_CON_MADE or \
+                    self._app_state == AppProtocolState.STATE_EOF:
+                self._app_state = AppProtocolState.STATE_CON_LOST
                 self._loop.call_soon(self._app_protocol.connection_lost, exc)
-        self._set_state(UNWRAPPED)
+        self._set_state(SSLProtocolState.UNWRAPPED)
         self._transport = None
 
         # Decrease ref counters to user instances to avoid cyclic references
@@ -603,16 +581,16 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
         self._ssl_object.incoming_bio_produce(nbytes)
 
-        if self._state == WRAPPED:
+        if self._state == SSLProtocolState.WRAPPED:
             self._do_read()
 
-        elif self._state == DO_HANDSHAKE:
+        elif self._state == SSLProtocolState.DO_HANDSHAKE:
             self._do_handshake()
 
-        elif self._state == FLUSHING:
+        elif self._state == SSLProtocolState.FLUSHING:
             self._do_flush()
 
-        elif self._state == SHUTDOWN:
+        elif self._state == SSLProtocolState.SHUTDOWN:
             self._do_shutdown()
 
     # Underlying transport use this to take into account upstream write buffer
@@ -642,19 +620,19 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             if unlikely(self._is_debug):
                 _logger.debug("%r: received EOF", self)
 
-            if self._state == DO_HANDSHAKE:
+            if self._state == SSLProtocolState.DO_HANDSHAKE:
                 self._on_handshake_complete(ConnectionResetError)
 
-            elif self._state == WRAPPED or self._state == FLUSHING:
+            elif self._state == SSLProtocolState.WRAPPED or self._state == SSLProtocolState.FLUSHING:
                 # We treat a low-level EOF as a critical situation similar to a
                 # broken connection - just send whatever is in the buffer and
                 # close. No application level eof_received() is called -
                 # because we don't want the user to think that this is a
                 # graceful shutdown triggered by SSL "close_notify".
-                self._set_state(SHUTDOWN)
+                self._set_state(SSLProtocolState.SHUTDOWN)
                 self._on_shutdown_complete(None)
 
-            elif self._state == SHUTDOWN:
+            elif self._state == SSLProtocolState.SHUTDOWN:
                 self._on_shutdown_complete(None)
 
         except Exception:
@@ -668,26 +646,26 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             _logger.debug("%r: change state to %s",
                           self, SSLProtocolState(new_state).name)
 
-        if new_state == UNWRAPPED:
+        if new_state == SSLProtocolState.UNWRAPPED:
             allowed = True
 
-        elif self._state == UNWRAPPED and new_state == DO_HANDSHAKE:
+        elif self._state == SSLProtocolState.UNWRAPPED and new_state == SSLProtocolState.DO_HANDSHAKE:
             allowed = True
 
-        elif self._state == DO_HANDSHAKE and new_state == WRAPPED:
+        elif self._state == SSLProtocolState.DO_HANDSHAKE and new_state == SSLProtocolState.WRAPPED:
             allowed = True
 
         # User requested re-negotiate
-        elif self._state == WRAPPED and new_state == DO_HANDSHAKE:
+        elif self._state == SSLProtocolState.WRAPPED and new_state == SSLProtocolState.DO_HANDSHAKE:
             allowed = True
 
-        elif self._state == WRAPPED and new_state == FLUSHING:
+        elif self._state == SSLProtocolState.WRAPPED and new_state == SSLProtocolState.FLUSHING:
             allowed = True
 
-        elif self._state == WRAPPED and new_state == SHUTDOWN:
+        elif self._state == SSLProtocolState.WRAPPED and new_state == SSLProtocolState.SHUTDOWN:
             allowed = True
 
-        elif self._state == FLUSHING and new_state == SHUTDOWN:
+        elif self._state == SSLProtocolState.FLUSHING and new_state == SSLProtocolState.SHUTDOWN:
             allowed = True
 
         if allowed:
@@ -707,7 +685,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         else:
             self._handshake_start_time = None
 
-        self._set_state(DO_HANDSHAKE)
+        self._set_state(SSLProtocolState.DO_HANDSHAKE)
 
         # start handshake timeout count down
         self._handshake_timeout_handle = \
@@ -717,7 +695,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         self._do_handshake()
 
     cdef inline _check_handshake_timeout(self):
-        if self._state == DO_HANDSHAKE:
+        if self._state == SSLProtocolState.DO_HANDSHAKE:
             msg = (
                 f"SSL handshake is taking longer than "
                 f"{self._ssl_handshake_timeout} seconds: "
@@ -767,11 +745,11 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
         try:
             if handshake_exc is None:
-                self._set_state(WRAPPED)
+                self._set_state(SSLProtocolState.WRAPPED)
             else:
                 raise handshake_exc
         except Exception as exc:
-            self._set_state(UNWRAPPED)
+            self._set_state(SSLProtocolState.UNWRAPPED)
             if isinstance(exc, ssl.CertificateError):
                 msg = 'SSL handshake failed on verifying the certificate'
             else:
@@ -792,8 +770,8 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             compression=self._ssl_object.compression()
         )
         self._wakeup_waiter()
-        if self._app_state == STATE_INIT:
-            self._app_state = STATE_CON_MADE
+        if self._app_state == AppProtocolState.STATE_INIT:
+            self._app_state = AppProtocolState.STATE_CON_MADE
             try:
                 self._app_protocol.connection_made(self.get_app_transport())
             except (SystemExit, KeyboardInterrupt):
@@ -819,7 +797,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                 # it doesn't have SSLTransport yet. Reproduced in test_start_tls.
                 # We must pause reading and resume right before waiter wakes up
 
-                if self._app_state == STATE_CON_MADE:
+                if self._app_state == AppProtocolState.STATE_CON_MADE:
                     self._transport.pause_reading()
                     self._loop.call_soon(self._transport.resume_reading)
 
@@ -830,22 +808,22 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
     # Shutdown flow
 
     cdef inline _start_shutdown(self):
-        if self._state in (FLUSHING, SHUTDOWN, UNWRAPPED):
+        if self._state in (SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN, SSLProtocolState.UNWRAPPED):
             return
         # we don't need the context for _abort or the timeout, because
         # TCP transport._force_close() should be able to call
         # connection_lost() in the right context
-        if self._state == DO_HANDSHAKE:
+        if self._state == SSLProtocolState.DO_HANDSHAKE:
             self._abort(None)
         else:
-            self._set_state(FLUSHING)
+            self._set_state(SSLProtocolState.FLUSHING)
             self._shutdown_timeout_handle = \
                 self._loop.call_later(self._ssl_shutdown_timeout,
                                       lambda: self._check_shutdown_timeout())
             self._do_flush()
 
     cdef inline _check_shutdown_timeout(self):
-        if self._state in (FLUSHING, SHUTDOWN):
+        if self._state in (SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN):
             self._abort(asyncio.TimeoutError('SSL shutdown timed out'))
 
     cdef inline _do_read_into_void(self):
@@ -907,7 +885,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             self._on_shutdown_complete(ex)
         else:
             if not self.get_local_write_buffer_size():
-                self._set_state(SHUTDOWN)
+                self._set_state(SSLProtocolState.SHUTDOWN)
                 self._do_shutdown()
 
     cdef inline _do_shutdown(self):
@@ -970,7 +948,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
     cdef inline _abort(self, exc):
         if unlikely(self._is_debug):
             _logger.debug("%r: abort called (%s)", self, str(exc))
-        self._set_state(UNWRAPPED)
+        self._set_state(SSLProtocolState.UNWRAPPED)
         if self._transport is not None:
             self._transport._force_close(exc)
 
@@ -983,7 +961,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         self._app_protocol.resume_writing()
 
     cdef inline bint _is_protocol_ready(self) except -1:
-        if self._state in (FLUSHING, SHUTDOWN, UNWRAPPED):
+        if self._state in (SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN, SSLProtocolState.UNWRAPPED):
             if self._conn_lost >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
                 _logger.warning('SSL connection is closed')
             self._conn_lost += 1
@@ -992,7 +970,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             return True
 
     cdef inline _flush_write_backlog(self):
-        if self._state not in (WRAPPED, FLUSHING):
+        if self._state not in (SSLProtocolState.WRAPPED, SSLProtocolState.FLUSHING):
             return
 
         cdef:
@@ -1121,7 +1099,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
     # Incoming flow
 
     cpdef _do_read(self):
-        if unlikely(self._state not in (WRAPPED, FLUSHING)):
+        if unlikely(self._state not in (SSLProtocolState.WRAPPED, SSLProtocolState.FLUSHING)):
             return
 
         try:
@@ -1268,8 +1246,8 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         raise self._ssl_object.make_exc_from_ssl_error("SSL_read_ex failed", last_error)
 
     cdef inline _call_eof_received(self):
-        if self._app_state == STATE_CON_MADE:
-            self._app_state = STATE_EOF
+        if self._app_state == AppProtocolState.STATE_CON_MADE:
+            self._app_state = AppProtocolState.STATE_EOF
             try:
                 keep_open = self._app_protocol.eof_received()
             except (KeyboardInterrupt, SystemExit):
@@ -1303,7 +1281,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
     # Used for testing only
     def _renegotiate(self):
-        if self._state != WRAPPED:
+        if self._state != SSLProtocolState.WRAPPED:
             raise RuntimeError(
                 "renegotiation requires an active wrapped SSL connection")
 

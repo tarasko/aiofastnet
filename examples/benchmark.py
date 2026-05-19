@@ -18,38 +18,10 @@ except ImportError:
     uvloop = None
 
 
-def _build_ssl_contexts() -> tuple[ssl.SSLContext, ssl.SSLContext]:
-    project_root = Path(__file__).resolve().parents[1]
-    cert_file = project_root / "tests" / "test.crt"
-    key_file = project_root / "tests" / "test.key"
-
-    if not cert_file.exists() or not key_file.exists():
-        raise FileNotFoundError(
-            f"Missing cert or key: cert={cert_file}, key={key_file}"
-        )
-
-    server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    server_ctx.load_cert_chain(certfile=str(cert_file), keyfile=str(key_file))
-    server_ctx.options |= ssl.OP_ENABLE_KTLS
-    server_ctx.set_ciphers("ECDHE-RSA-AES128-GCM-SHA256")
-    server_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-    server_ctx.maximum_version = ssl.TLSVersion.TLSv1_2
-
-    client_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-    client_ctx.check_hostname = False
-    client_ctx.verify_mode = ssl.CERT_NONE
-    client_ctx.options |= ssl.OP_ENABLE_KTLS
-    client_ctx.set_ciphers("ECDHE-RSA-AES128-GCM-SHA256")
-    client_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-    client_ctx.maximum_version = ssl.TLSVersion.TLSv1_2
-
-    return server_ctx, client_ctx
-
-
 async def run_benchmark(args, loop_kind: str, use_aiofastnet: bool, transport_kind: str, msg_size: int):
     payload = b"x" * msg_size
 
-    server_ssl_ctx, client_ssl_ctx = build_ssl_contexts() \
+    server_ssl_ctx, client_ssl_ctx = build_ssl_contexts(enable_ktls=True) \
         if transport_kind == "ssl" else (None, None)
 
     requests = await run_pair(use_aiofastnet, args.duration, payload, server_ssl_ctx, client_ssl_ctx, None, args.sndbuf_size)
@@ -183,5 +155,5 @@ def main():
 
 
 if __name__ == "__main__":
-#    basicConfig(level=logging.DEBUG)
+    basicConfig(level=logging.DEBUG)
     main()

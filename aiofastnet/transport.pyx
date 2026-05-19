@@ -21,21 +21,6 @@ cdef object _logger = getLogger('aiofastnet')
 cdef object _DATA_RECEIVED_MAX_SIZE = 256 * 1024
 
 
-cdef _set_result_unless_cancelled(fut, result):
-    """Helper setting the result only if the future was not cancelled."""
-    if fut.cancelled():
-        return
-    fut.set_result(result)
-
-
-cdef _set_nodelay(sock):
-    if hasattr(socket, 'TCP_NODELAY'):
-        if (sock.family in {socket.AF_INET, socket.AF_INET6} and
-                sock.type == socket.SOCK_STREAM and
-                sock.proto == socket.IPPROTO_TCP):
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-
-
 cdef class Transport:
     cpdef write(self, data):
         raise NotImplementedError()
@@ -156,7 +141,7 @@ cdef class SocketTransport(Transport):
         self._eof = False
         self._is_debug = loop.get_debug()
 
-        _set_nodelay(self._sock)
+        aiofn_set_nodelay(self._sock)
 
         self._loop.call_soon(self._protocol.connection_made, self)
         # only start reading when connection_made() has been called
@@ -164,7 +149,7 @@ cdef class SocketTransport(Transport):
                              self._sock_fd_obj, self._read_ready)
         if waiter is not None:
             # only wake up the waiter when connection_made() has been called
-            self._loop.call_soon(_set_result_unless_cancelled, waiter, None)
+            self._loop.call_soon(aiofn_set_result_unless_cancelled, waiter, None)
 
     def __repr__(self):
         info = [f'fd={self._sock_fd_obj}', 'SocketTransport']
