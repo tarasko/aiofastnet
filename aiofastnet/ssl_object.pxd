@@ -11,9 +11,6 @@ cpdef enum SSLError:
     SSL_ERROR_ZERO_RETURN = 6
 
 
-cdef load_openssl()
-
-
 cdef class SSLObject:
     # Wraps raw openssl pointers and provide some methods that may be
     # interesting for the user.

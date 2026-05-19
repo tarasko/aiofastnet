@@ -1,5 +1,3 @@
-import threading
-
 from .openssl cimport *
 from .openssl_compat import find_openssl_library_paths
 
@@ -18,14 +16,9 @@ import tempfile
 import logging
 
 cdef object _logger = logging.getLogger('aiofastnet.ssl')
-cdef bint _openssl_loaded = False
-cdef object _openssl_load_lock = threading.Lock()
 
 
-cdef load_openssl():
-    global _openssl_loaded
-    global _openssl_load_lock
-
+cdef _init_openssl():
     cdef:
         bytes ssl_lib_name
         bytes crypto_lib_name
@@ -33,25 +26,23 @@ cdef load_openssl():
         const char* crypto_lib_ptr
         const char* missing_lib
 
-    with _openssl_load_lock:
-        if _openssl_loaded:
-            return
+    ssl_lib_name, crypto_lib_name = find_openssl_library_paths()
+    _logger.info("Found libssl: %s", ssl_lib_name.decode())
+    _logger.info("Found libcrypto: %s", crypto_lib_name.decode())
 
-        ssl_lib_name, crypto_lib_name = find_openssl_library_paths()
-        _logger.info("Found libssl: %s", ssl_lib_name.decode())
-        _logger.info("Found libcrypto: %s", crypto_lib_name.decode())
+    if init_openssl_compat(ssl_lib_name, crypto_lib_name) != 1:
+        missing_lib = openssl_compat_last_error()
+        if missing_lib != NULL:
+            raise ImportError(
+                f"aiofastnet: failed to initialize OpenSSL compatibility layer; "
+                f"missing symbol: {PyUnicode_FromString(missing_lib)}; "
+                f"ssl_lib={ssl_lib_name.decode()}, crypto_lib={crypto_lib_name.decode()}")
+        raise ImportError("aiofastnet: failed to initialize OpenSSL compatibility layer")
 
-        if init_openssl_compat(ssl_lib_name, crypto_lib_name) != 1:
-            missing_lib = openssl_compat_last_error()
-            if missing_lib != NULL:
-                raise ImportError(
-                    f"aiofastnet: failed to initialize OpenSSL compatibility layer; "
-                    f"missing symbol: {PyUnicode_FromString(missing_lib)}; "
-                    f"ssl_lib={ssl_lib_name.decode()}, crypto_lib={crypto_lib_name.decode()}")
-            raise ImportError("aiofastnet: failed to initialize OpenSSL compatibility layer")
+    _logger.info("OpenSSL: SSL_sendfile loaded=%d", SSL_sendfile_available())
 
-        _logger.info("OpenSSL: SSL_sendfile loaded=%d", SSL_sendfile_available())
-        _openssl_loaded = True
+
+_init_openssl()
 
 
 ctypedef struct PySSLContextHack:

@@ -24,7 +24,7 @@ from .utils cimport (
     unlikely
 )
 from .transport cimport Transport, Protocol
-from .ssl_object cimport (SSLObject, SSLError, load_openssl, ssl_error_name)
+from .ssl_object cimport (SSLObject, SSLError, ssl_error_name)
 from .transport import aiofn_is_buffered_protocol
 
 
@@ -86,7 +86,6 @@ cdef class TlsTransport(Transport):
                  ssl_handshake_timeout=None,
                  ssl_shutdown_timeout=None,
                  server=None):
-        load_openssl()
 
         if ssl_handshake_timeout is None:
             ssl_handshake_timeout = constants.SSL_HANDSHAKE_TIMEOUT
