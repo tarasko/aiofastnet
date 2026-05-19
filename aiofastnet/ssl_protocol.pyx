@@ -19,7 +19,8 @@ from .utils cimport (
     aiofn_maybe_copy_buffer,
     aiofn_maybe_copy_buffer_tail,
     aiofn_allocate_bytes,
-    aiofn_finalize_bytes
+    aiofn_finalize_bytes,
+    unlikely
 )
 from .transport cimport Transport, Protocol
 from .ssl_object cimport SSLObject, SSLError, ssl_error_name
@@ -439,13 +440,13 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         if data_len == 0:
             return
 
-        if self._write_backlog:
+        if unlikely(self._write_backlog):
             self._write_backlog.append(PyBytes_FromStringAndSize(data_ptr, data_len))
             return
 
         try:
             tail = self._write_impl(None, data_ptr, data_len, True)
-            if tail is not None:
+            if unlikely(tail is not None):
                 self._write_backlog.append(tail)
                 return
         except BaseException as ex:
@@ -455,7 +456,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         if not self._is_protocol_ready():
             return
 
-        if self._write_backlog:
+        if unlikely(self._write_backlog):
             if data:
                 self._write_backlog.append(aiofn_maybe_copy_buffer(data))
             return
@@ -470,9 +471,9 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
         try:
             tail = self._write_impl(data, data_ptr, data_len, True)
-            if tail is not None:
+            if unlikely(tail is not None):
                 self._write_backlog.append(tail)
-                if self._is_debug:
+                if unlikely(self._is_debug):
                     _logger.debug("%r: appended %d bytes to write_backlog", self, len(tail))
                 return
         except BaseException as ex:
@@ -485,7 +486,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         if not self._is_protocol_ready():
             return
 
-        if self._write_backlog:
+        if unlikely(self._write_backlog):
             for data in list_of_data:
                 if data:
                     self._write_backlog.append(aiofn_maybe_copy_buffer(data))
@@ -502,7 +503,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         try:
             for idx in range(data_cnt):
                 data = list_of_data[idx]
-                if add_to_backlog:
+                if unlikely(add_to_backlog):
                     if len(data) > 0:
                         self._write_backlog.append(aiofn_maybe_copy_buffer(data))
                     continue
@@ -513,7 +514,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
                 is_last = idx == (data_cnt - 1)
                 tail = self._write_impl(data, data_ptr, data_len, is_last)
-                if tail is not None:
+                if unlikely(tail is not None):
                     self._write_backlog.append(tail)
                     add_to_backlog = True
         except BaseException as ex:
@@ -529,13 +530,13 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
     cdef inline close(self):
         self._check_thread("close")
-        if self._is_debug:
+        if unlikely(self._is_debug):
             _logger.debug("%r: user called close(), flush data before closing transport", self)
         self._start_shutdown()
 
     cdef inline abort(self):
         self._check_thread("abort")
-        if self._is_debug:
+        if unlikely(self._is_debug):
             _logger.debug("%r: user called abort(), close transport immediately", self)
         self._abort(None)
 
@@ -597,16 +598,16 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         return PyMemoryView_FromMemory(buf_ptr, buf_len, PyBUF_WRITE)
 
     cpdef buffer_updated(self, Py_ssize_t nbytes):
-        if self._is_debug:
+        if unlikely(self._is_debug):
             _logger.debug("%r: buffer_updated(%d)", self, nbytes)
 
         self._ssl_object.incoming_bio_produce(nbytes)
 
-        if self._state == DO_HANDSHAKE:
-            self._do_handshake()
-
-        elif self._state == WRAPPED:
+        if self._state == WRAPPED:
             self._do_read()
+
+        elif self._state == DO_HANDSHAKE:
+            self._do_handshake()
 
         elif self._state == FLUSHING:
             self._do_flush()
@@ -638,7 +639,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         transport is up to the protocol.
         """
         try:
-            if self._is_debug:
+            if unlikely(self._is_debug):
                 _logger.debug("%r: received EOF", self)
 
             if self._state == DO_HANDSHAKE:
@@ -663,7 +664,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
     cdef inline _set_state(self, SSLProtocolState new_state):
         cdef bint allowed = False
 
-        if self._is_debug:
+        if unlikely(self._is_debug):
             _logger.debug("%r: change state to %s",
                           self, SSLProtocolState(new_state).name)
 
@@ -700,7 +701,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
     # Handshake flow
 
     cdef inline _start_handshake(self):
-        if self._is_debug:
+        if unlikely(self._is_debug):
             _logger.debug("%r: starts SSL handshake", self)
             self._handshake_start_time = self._loop.time()
         else:
@@ -732,7 +733,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         while True:
             rc = self._ssl_object.do_handshake()
             if rc == 1:
-                if self._is_debug:
+                if unlikely(self._is_debug):
                     _logger.debug("%r: SSL_do_handshake()=%d", self, rc)
                 self._on_handshake_complete(None)
                 self._flush_outgoing_bio()
@@ -742,7 +743,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             # SSL_ERROR_WANT_WRITE. Handshake does not need much space, but for
             # correctness-sake we need flush and re-try
             ssl_error = self._ssl_object.get_error(rc)
-            if self._is_debug:
+            if unlikely(self._is_debug):
                 _logger.debug("%r: SSL_do_handshake()=%d, %s",
                               self, rc, ssl_error_name(ssl_error))
 
@@ -779,7 +780,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             self._wakeup_waiter(exc)
             return
 
-        if self._is_debug:
+        if unlikely(self._is_debug):
             dt = self._loop.time() - self._handshake_start_time
             _logger.debug("%r: SSL handshake took %.1f ms", self, dt * 1e3)
 
@@ -823,7 +824,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                     self._loop.call_soon(self._transport.resume_reading)
 
                 self._ssl_handshake_complete_waiter.set_result(None)
-            if self._is_debug:
+            if unlikely(self._is_debug):
                 _logger.debug("%r: _wakeup_waiter set result on handshake completion future", self)
 
     # Shutdown flow
@@ -866,13 +867,13 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             )
 
             if rc == 1:
-                if self._is_debug:
+                if unlikely(self._is_debug):
                     _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d",
                                   self, PyByteArray_GET_SIZE(buffer), bytes_read, rc)
                 continue
 
             ssl_error = self._ssl_object.get_error(rc)
-            if self._is_debug:
+            if unlikely(self._is_debug):
                 _logger.debug("%r: SSL_read_ex(buf_len=%d, ...)=%d, %s",
                               self, PyByteArray_GET_SIZE(buffer),
                               rc, ssl_error_name(ssl_error))
@@ -921,7 +922,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
             while True:
                 rc = self._ssl_object.shutdown()
-                if self._is_debug and rc in (1, 0):
+                if unlikely(self._is_debug) and rc in (1, 0):
                     _logger.debug("%r: SSL_shutdown()=%d", self, rc)
 
                 self._flush_outgoing_bio()
@@ -939,7 +940,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
                 err_code = self._ssl_object.get_error(rc)
 
-                if self._is_debug:
+                if unlikely(self._is_debug):
                     _logger.debug("%r: SSL_shutdown()=%d, %s",
                                   self, rc, ssl_error_name(err_code))
 
@@ -967,7 +968,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             self._transport.close()
 
     cdef inline _abort(self, exc):
-        if self._is_debug:
+        if unlikely(self._is_debug):
             _logger.debug("%r: abort called (%s)", self, str(exc))
         self._set_state(UNWRAPPED)
         if self._transport is not None:
@@ -1052,7 +1053,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             rc = self._ssl_object.write_ex(data_ptr, data_len, &bytes_written)
 
             if rc:
-                if self._is_debug:
+                if unlikely(self._is_debug):
                     _logger.debug("%r: SSL_write_ex(..., %d, %d) = %d", self,
                                   data_len, bytes_written, rc)
 
@@ -1070,7 +1071,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             else:
                 ssl_error = self._ssl_object.get_error(rc)
 
-                if self._is_debug:
+                if unlikely(self._is_debug):
                     _logger.debug("%r: SSL_write_ex(..., %d, %d)=%d, %s",
                                   self, data_len, bytes_written, rc,
                                   ssl_error_name(ssl_error))
@@ -1113,16 +1114,16 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         else:
             self._transport.write(PyBytes_FromStringAndSize(ptr, sz))
 
-        if self._is_debug:
-            _logger.debug("%r: flushed %d bytes from outgoing BIO", self, sz)
-
         self._ssl_object.outgoing_bio_consume(sz)
+        if unlikely(self._is_debug):
+            _logger.debug("%r: flushed %d bytes from outgoing BIO", self, sz)
 
     # Incoming flow
 
     cpdef _do_read(self):
-        if self._state not in (WRAPPED, FLUSHING):
+        if unlikely(self._state not in (WRAPPED, FLUSHING)):
             return
+
         try:
             if not self._reading_paused:
                 if self._app_protocol_is_buffered:
@@ -1164,13 +1165,13 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             buf_ptr += last_bytes_read
             buf_len -= last_bytes_read
             total_bytes_read += last_bytes_read
-            if self._is_debug:
+            if unlikely(self._is_debug):
                 _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d",
                               self, buf_len, last_bytes_read, rc)
 
 
         cdef int last_error = self._ssl_object.get_error(rc)
-        if self._is_debug:
+        if unlikely(self._is_debug):
             _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d, %s",
                           self, buf_len, last_bytes_read, rc,
                           ssl_error_name(last_error))
@@ -1222,7 +1223,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             else:
                 curr_chunk = aiofn_finalize_bytes(bytes_obj, bytes_read)
 
-            if self._is_debug:
+            if unlikely(self._is_debug):
                 _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d",
                               self, bytes_estimated, bytes_read, rc)
 
@@ -1234,7 +1235,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                 data.append(curr_chunk)
 
         cdef int last_error = self._ssl_object.get_error(rc)
-        if self._is_debug:
+        if unlikely(self._is_debug):
             _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d, %s",
                           self, bytes_estimated, bytes_read, rc,
                           ssl_error_name(last_error))

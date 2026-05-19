@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.6.0
+------------------
+
+* Add unlikely for debug statement and a few rare branches
+
 0.5.0
 ------------------
 

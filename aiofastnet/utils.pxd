@@ -8,3 +8,8 @@ cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz
 cdef Py_ssize_t aiofn_recv(int sockfd, void* buf, Py_ssize_t len) except? -1 nogil
 cdef Py_ssize_t aiofn_send(int sockfd, void* buf, Py_ssize_t len) except? -1 nogil
 cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* iov, Py_ssize_t iovcnt) except? -1 nogil
+
+
+cdef extern from *:
+    cdef bint unlikely(bint val) noexcept
+    cdef bint likely(bint val) noexcept

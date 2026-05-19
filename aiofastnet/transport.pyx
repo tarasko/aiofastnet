@@ -237,7 +237,7 @@ cdef class SocketTransport(Transport):
             return
         self._paused = True
         self._loop.remove_reader(self._sock_fd_obj)
-        if self._is_debug:
+        if unlikely(self._is_debug):
             _logger.debug("%r pauses reading", self)
 
     cpdef resume_reading(self):
@@ -250,7 +250,7 @@ cdef class SocketTransport(Transport):
             return
         self._loop.add_reader(self._sock_fd_obj, self._read_ready)
 
-        if self._is_debug:
+        if unlikely(self._is_debug):
             _logger.debug("%r resumes reading", self)
 
     cpdef close(self):
@@ -313,7 +313,7 @@ cdef class SocketTransport(Transport):
 
             try:
                 bytes_read = aiofn_recv(self._sock_fd, buf_ptr, buf_len)
-                if self._is_debug:
+                if unlikely(self._is_debug):
                     _logger.debug("%r: aiofn_recv(,len=%d) = %d", self, buf_len, bytes_read)
                 if bytes_read == -1:    # without exception this means EGAIN
                     return
@@ -343,7 +343,7 @@ cdef class SocketTransport(Transport):
             # Already a good wrapper, returns bytes object.
             # Exactly what we need for non-buffered protocols
             data = self._sock.recv(_DATA_RECEIVED_MAX_SIZE)
-            if self._is_debug:
+            if unlikely(self._is_debug):
                 _logger.debug("%r: _sock.recv() = bytes(len=%d)",
                               self, len(data))
         except (SystemExit, KeyboardInterrupt):
@@ -409,7 +409,7 @@ cdef class SocketTransport(Transport):
         if not data:
             return
 
-        if self._conn_lost:
+        if unlikely(self._conn_lost):
             if self._conn_lost >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
                 _logger.warning('socket.send() raised exception.')
             self._conn_lost += 1
@@ -438,13 +438,13 @@ cdef class SocketTransport(Transport):
         if self._eof:
             raise RuntimeError('Cannot call writelines() after write_eof()')
 
-        if self._conn_lost:
+        if unlikely(self._conn_lost):
             if self._conn_lost >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
                 _logger.warning('socket.send() raised exception.')
             self._conn_lost += 1
             return
 
-        if self._write_backlog:
+        if unlikely(self._write_backlog):
             for data in list_of_data:
                 if not data:
                     continue
@@ -466,7 +466,7 @@ cdef class SocketTransport(Transport):
         if sz <= 0:
             return
 
-        if self._conn_lost:
+        if unlikely(self._conn_lost):
             if self._conn_lost >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
                 _logger.warning('socket.send() raised exception.')
             self._conn_lost += 1
@@ -495,7 +495,7 @@ cdef class SocketTransport(Transport):
         self._eof = True
         if not self._write_backlog:
             self._sock.shutdown(socket.SHUT_WR)
-            if self._is_debug:
+            if unlikely(self._is_debug):
                 _logger.debug("%r: shutdown(SHUT_WR) done", self)
 
     cdef inline _write_one(self, object data, char* data_ptr, Py_ssize_t data_len):
@@ -507,7 +507,7 @@ cdef class SocketTransport(Transport):
         while True:
             try:
                 bytes_sent = aiofn_send(self._sock_fd, data_ptr, data_len)
-                if self._is_debug:
+                if unlikely(self._is_debug):
                     _logger.debug("%r aiofn_send(...,len=%d)=%d", self,
                                   data_len, bytes_sent)
             except BaseException as exc:
@@ -547,11 +547,11 @@ cdef class SocketTransport(Transport):
                 data_len = len(data)
                 if data_len <= bytes_sent:
                     bytes_sent -= data_len
-                    if self._is_debug:
+                    if unlikely(self._is_debug):
                         _logger.debug("%r: wrote item of size %d from backlog", self, data_len)
                 else:
                     self._write_backlog.appendleft(data[bytes_sent:])
-                    if self._is_debug:
+                    if unlikely(self._is_debug):
                         _logger.debug("%r: partially wrote %d out of %d from backlog item", self, bytes_sent, data_len)
                     break
 
@@ -582,7 +582,7 @@ cdef class SocketTransport(Transport):
         else:
             bytes_sent = aiofn_writev(self._sock_fd, self._iovecs, idx)
 
-            if self._is_debug:
+            if unlikely(self._is_debug):
                 _logger.debug("%r: aiofn_writev(..., len(iovecs)=%d)=%d", self, idx, bytes_sent)
             self._adjust_leftover_buffer(list_of_data, bytes_sent)
 
@@ -591,7 +591,7 @@ cdef class SocketTransport(Transport):
         if self._conn_lost:
             return
         try:
-            if self._is_debug:
+            if unlikely(self._is_debug):
                 _logger.debug("%r write_ready event, resume writing from backlog", self)
             self._write_many(self._write_backlog)
         except BaseException as exc:
@@ -607,7 +607,7 @@ cdef class SocketTransport(Transport):
                     self._call_connection_lost(None)
                 elif self._eof:
                     self._sock.shutdown(socket.SHUT_WR)
-                    if self._is_debug:
+                    if unlikely(self._is_debug):
                         _logger.debug("%r: shutdown(SHUT_WR) done", self)
 
     cpdef _call_connection_lost(self, exc):
@@ -686,7 +686,7 @@ cdef class SocketTransport(Transport):
             if self._try_sendfile(req):
                 return await req.waiter
 
-        if self._is_debug:
+        if unlikely(self._is_debug):
             _logger.debug("%r: enqueue SendFileRequest(offset=%d,count=%d)",
                           self, req.offset, req.count)
 
