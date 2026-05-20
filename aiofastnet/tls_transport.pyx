@@ -1,14 +1,12 @@
 import asyncio
-import socket
 import ssl
 import warnings
 from asyncio.trsock import TransportSocket
 from logging import getLogger
 
 from cpython.bytearray cimport PyByteArray_AS_STRING, PyByteArray_GET_SIZE
-from cpython.bytes cimport PyBytes_FromStringAndSize, PyBytes_AS_STRING
+from cpython.bytes cimport PyBytes_FromStringAndSize
 from cpython.object cimport PyObject
-from libc.stdint cimport uint8_t
 
 from . import constants
 from .utils cimport (
@@ -18,6 +16,7 @@ from .utils cimport (
     aiofn_validate_buffer,
     aiofn_maybe_copy_buffer,
     aiofn_maybe_copy_buffer_tail,
+    aiofn_send,
     aiofn_allocate_bytes,
     aiofn_finalize_bytes,
     aiofn_set_nodelay,
@@ -756,37 +755,40 @@ cdef class TlsTransport(Transport):
         cdef int rc
         cdef int ssl_error
 
-        while data_len != 0:
-            rc = self._ssl_object.write_ex(data_ptr, data_len, &bytes_written)
-            if rc:
+        if False: #and self._ssl_object.ktls_send_enabled():
+            bytes_written = aiofn_send(self._sock_fd, data_ptr, data_len)
+        else:
+            while data_len != 0:
+                rc = self._ssl_object.write_ex(data_ptr, data_len, &bytes_written)
+                if rc:
+                    if unlikely(self._is_debug):
+                        _logger.debug("%r: SSL_write_ex(..., data_len=%d, bytes_written=%d) = %d", self,
+                                      data_len, bytes_written, rc)
+
+                    self._want_write = False
+                    if data_len == <Py_ssize_t>bytes_written:
+                        self._drop_writer()
+                        return None
+                    data_ptr += bytes_written
+                    data_len -= bytes_written
+                    continue
+
+                ssl_error = self._ssl_object.get_error(rc)
                 if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_write_ex(..., data_len=%d, bytes_written=%d) = %d", self,
-                                  data_len, bytes_written, rc)
+                    _logger.debug("%r: SSL_write_ex(..., data_len=%d) = %d, %s",
+                                  self, data_len, rc,
+                                  ssl_error_name(ssl_error))
 
-                self._want_write = False
-                if data_len == <Py_ssize_t>bytes_written:
+                if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
+                    self._want_write = True
+                    self._ensure_writer()
+                    return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
+                if ssl_error == SSLError.SSL_ERROR_WANT_READ:
+                    self._want_write = False
                     self._drop_writer()
-                    return None
-                data_ptr += bytes_written
-                data_len -= bytes_written
-                continue
+                    return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
 
-            ssl_error = self._ssl_object.get_error(rc)
-            if unlikely(self._is_debug):
-                _logger.debug("%r: SSL_write_ex(..., data_len=%d) = %d, %s",
-                              self, data_len, rc,
-                              ssl_error_name(ssl_error))
-
-            if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
-                self._want_write = True
-                self._ensure_writer()
-                return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
-            if ssl_error == SSLError.SSL_ERROR_WANT_READ:
-                self._want_write = False
-                self._drop_writer()
-                return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
-
-            raise self._ssl_object.make_exc_from_ssl_error("SSL_write_ex failed", ssl_error)
+                raise self._ssl_object.make_exc_from_ssl_error("SSL_write_ex failed", ssl_error)
 
         self._want_write = False
         self._drop_writer()
