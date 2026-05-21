@@ -88,8 +88,8 @@ cdef class TlsTransport(Transport):
         dict _extra
         WriteWatermarks _write_watermarks
 
-        object _sock
         object _server
+        object _sock
         object _sock_fd_obj
         int _sock_fd
         bint _closing
@@ -143,8 +143,8 @@ cdef class TlsTransport(Transport):
             sslcontext = _create_transport_context(server_side, server_hostname)
 
         self._loop = loop
-        self._sock = sock
         self._server = server
+        self._sock = sock
         self._sock_fd_obj = sock.fileno()
         self._sock_fd = self._sock_fd_obj
         self._extra = {'socket': TransportSocket(sock), 'sslcontext': sslcontext}
@@ -705,6 +705,14 @@ cdef class TlsTransport(Transport):
         except BaseException as exc:
             self._fatal_error(exc, "Error occurred during write")
 
+    cdef inline _append_to_backlog(self, data, maybe_pause_protocol):
+        if data:
+            data = aiofn_maybe_copy_buffer(data)
+            self._write_backlog.append(data)
+            self._write_backlog_size += len(data)
+            if maybe_pause_protocol:
+                self._maybe_pause_protocol()
+
     cpdef write(self, data):
         aiofn_validate_buffer(data)
         self.write_nocheck(data)
@@ -718,10 +726,7 @@ cdef class TlsTransport(Transport):
 
         try:
             if self._write_backlog:
-                if data:
-                    self._write_backlog.append(aiofn_maybe_copy_buffer(data))
-                    self._write_backlog_size += len(data)
-                    self._maybe_pause_protocol()
+                self._append_to_backlog(data, True)
                 return
 
             aiofn_unpack_buffer(data, &data_ptr, &data_len)
@@ -729,31 +734,20 @@ cdef class TlsTransport(Transport):
                 return
 
             tail = self._write_impl(data, data_ptr, data_len)
-            if tail is not None:
-                self._write_backlog.append(tail)
-                self._write_backlog_size += len(tail)
-                self._maybe_pause_protocol()
+            self._append_to_backlog(tail, True)
         except BaseException as ex:
             self._fatal_error(ex, 'Fatal error on TLS transport')
-
 
     cdef write_c(self, char* data_ptr, Py_ssize_t data_len):
         if not self._is_protocol_ready() or data_len == 0:
             return
 
         try:
-            if self._write_backlog:
-                data = PyBytes_FromStringAndSize(data_ptr, data_len)
-                self._write_backlog.append(data)
-                self._write_backlog_size += len(data)
-                self._maybe_pause_protocol()
-                return
-
-            tail = self._write_impl(None, data_ptr, data_len)
-            if tail is not None:
-                self._write_backlog.append(tail)
-                self._write_backlog_size += len(tail)
-                self._maybe_pause_protocol()
+            if not self._write_backlog:
+                tail = self._write_impl(None, data_ptr, data_len)
+                self._append_to_backlog(tail, True)
+            else:
+                self._append_to_backlog(PyBytes_FromStringAndSize(data_ptr, data_len), True)
         except BaseException as ex:
             self._fatal_error(ex, 'Fatal error on TLS transport')
 
@@ -772,20 +766,14 @@ cdef class TlsTransport(Transport):
         try:
             if self._write_backlog:
                 for data in list_of_data:
-                    if data:
-                        data = aiofn_maybe_copy_buffer(data)
-                        self._write_backlog.append(data)
-                        self._write_backlog_size += len(data)
+                    self._append_to_backlog(data, False)
                 self._maybe_pause_protocol()
                 return
 
             for idx in range(len(list_of_data)):
                 data = list_of_data[idx]
                 if add_to_backlog:
-                    if len(data) > 0:
-                        data = aiofn_maybe_copy_buffer(data)
-                        self._write_backlog.append(data)
-                        self._write_backlog_size += len(data)
+                    self._append_to_backlog(data, False)
                     continue
 
                 aiofn_unpack_buffer(data, &data_ptr, &data_len)
@@ -816,6 +804,7 @@ cdef class TlsTransport(Transport):
                           self, req.offset, req.count)
 
         self._write_backlog.append(req)
+        self._write_backlog_size += req.count
         if len(self._write_backlog) == 1:
             self._loop.add_writer(self._sock_fd_obj, self._write_ready)
             self._maybe_pause_protocol()
@@ -831,13 +820,14 @@ cdef class TlsTransport(Transport):
                                   req.offset, req.count, bytes_written)
 
                 self._want_write = False
-                if req.count == <Py_ssize_t> bytes_written:
+                req.offset += bytes_written
+                req.count -= bytes_written
+                if req.count == 0:
                     self._drop_writer()
                     req.waiter.set_result(None)
                     return True
-                req.offset += bytes_written
-                req.count -= bytes_written
-                continue
+                else:
+                    continue
             else:
                 ssl_error = self._ssl_object.get_error(bytes_written)
                 if unlikely(self._is_debug):
@@ -857,10 +847,12 @@ cdef class TlsTransport(Transport):
                 raise self._ssl_object.make_exc_from_ssl_error("SSL_sendfile failed", ssl_error)
 
     cdef inline _flush_write_backlog(self):
-        cdef char* data_ptr
-        cdef Py_ssize_t data_len
-        cdef Py_ssize_t idx = 0
-        cdef Py_ssize_t items_completed = 0
+        cdef:
+            char* data_ptr
+            Py_ssize_t data_len
+            Py_ssize_t idx = 0
+            Py_ssize_t items_completed = 0
+            Py_ssize_t orig_req_size
 
         if self._state not in (SSLProtocolState.WRAPPED, SSLProtocolState.FLUSHING) or not self._write_backlog:
             return
@@ -868,7 +860,11 @@ cdef class TlsTransport(Transport):
         for idx in range(len(self._write_backlog)):
             data = self._write_backlog[idx]
             if isinstance(data, SendFileRequest):
-                if not self._try_sendfile(data):
+                orig_req_size = (<SendFileRequest>data).count
+                sendfile_completed = self._try_sendfile(data)
+                self._write_backlog_size -= orig_req_size
+                self._write_backlog_size += (<SendFileRequest>data).count
+                if not sendfile_completed:
                     break
             else:
                 aiofn_unpack_buffer(data, &data_ptr, &data_len)

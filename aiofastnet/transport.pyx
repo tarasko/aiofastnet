@@ -157,11 +157,12 @@ cdef class SocketTransport(Transport):
         dict _extra
         WriteWatermarks _write_watermarks
 
-        object _sock
         object _server
-        object _write_backlog
+        object _sock
         object _sock_fd_obj
         int _sock_fd
+
+        object _write_backlog
         int _conn_lost
         bint _closing
         bint _paused
@@ -188,11 +189,11 @@ cdef class SocketTransport(Transport):
                 self._extra['peername'] = sock.getpeername()
             except socket.error:
                 self._extra['peername'] = None
-        self._sock = sock
         self._server = server
-        self._write_backlog = collections.deque()
+        self._sock = sock
         self._sock_fd_obj = sock.fileno()
         self._sock_fd = self._sock_fd_obj
+        self._write_backlog = collections.deque()
         self._conn_lost = 0  # Set when call to connection_lost scheduled.
         self._closing = False  # Set when close() called.
         self._paused = False  # Set when pause_reading() called
