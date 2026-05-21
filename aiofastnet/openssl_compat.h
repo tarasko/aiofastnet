@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -97,7 +98,10 @@ extern void (*aiofn_BIO_meth_free)(BIO_METHOD *biom);
 extern SSL *(*aiofn_SSL_new)(SSL_CTX *ctx);
 extern void (*aiofn_SSL_free)(SSL *ssl);
 extern void (*aiofn_SSL_set_bio)(SSL *ssl, BIO *rbio, BIO *wbio);
+extern void (*aiofn_SSL_set0_rbio)(SSL *ssl, BIO *rbio);
+extern void (*aiofn_SSL_set0_wbio)(SSL *ssl, BIO *wbio);
 extern int (*aiofn_SSL_set_fd)(SSL *ssl, int fd);
+extern int (*aiofn_SSL_set_wfd)(SSL *ssl, int fd);
 extern BIO *(*aiofn_SSL_get_rbio)(const SSL *ssl);
 extern BIO *(*aiofn_SSL_get_wbio)(const SSL *ssl);
 extern void (*aiofn_SSL_set_accept_state)(SSL *ssl);
@@ -111,9 +115,11 @@ extern int (*aiofn_SSL_is_init_finished)(const SSL *s);
 extern int (*aiofn_SSL_pending)(const SSL *ssl);
 extern int (*aiofn_SSL_renegotiate)(SSL *ssl);
 extern int (*aiofn_SSL_do_handshake)(SSL *ssl);
+extern int (*aiofn_SSL_read)(SSL *ssl, void *buf, int num);
+extern int (*aiofn_SSL_write)(SSL *ssl, const void *buf, int num);
 extern int (*aiofn_SSL_read_ex)(SSL *ssl, void *buf, size_t num, size_t *readbytes);
 extern int (*aiofn_SSL_write_ex)(SSL *ssl, const void *buf, size_t num, size_t *written);
-extern void *aiofn_SSL_sendfile;
+extern ssize_t (*aiofn_SSL_sendfile)(SSL *ssl, int fd, off_t offset, size_t size, int flags);
 extern int (*aiofn_SSL_shutdown)(SSL *ssl);
 extern int (*aiofn_SSL_get_shutdown)(const SSL *ssl);
 extern long (*aiofn_SSL_get_verify_result)(const SSL *ssl);
@@ -156,7 +162,6 @@ long aiofn_BIO_set_nbio(BIO *b, long n);
 int aiofn_BIO_reset(BIO *b);
 int aiofn_BIO_get_ktls_send(BIO *b);
 int aiofn_BIO_get_ktls_recv(BIO *b);
-int aiofn_SSL_sendfile_available(void);
 int aiofn_ERR_GET_LIB(unsigned long e);
 
 #define BIO_new aiofn_BIO_new
@@ -185,12 +190,15 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define BIO_reset aiofn_BIO_reset
 #define BIO_get_ktls_send aiofn_BIO_get_ktls_send
 #define BIO_get_ktls_recv aiofn_BIO_get_ktls_recv
-#define SSL_sendfile_available aiofn_SSL_sendfile_available
+#define SSL_sendfile aiofn_SSL_sendfile
 
 #define SSL_new aiofn_SSL_new
 #define SSL_free aiofn_SSL_free
 #define SSL_set_bio aiofn_SSL_set_bio
+#define SSL_set0_rbio aiofn_SSL_set0_rbio
+#define SSL_set0_wbio aiofn_SSL_set0_wbio
 #define SSL_set_fd aiofn_SSL_set_fd
+#define SSL_set_wfd aiofn_SSL_set_wfd
 #define SSL_get_rbio aiofn_SSL_get_rbio
 #define SSL_get_wbio aiofn_SSL_get_wbio
 #define SSL_set_accept_state aiofn_SSL_set_accept_state
@@ -203,6 +211,8 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define SSL_pending aiofn_SSL_pending
 #define SSL_renegotiate aiofn_SSL_renegotiate
 #define SSL_do_handshake aiofn_SSL_do_handshake
+#define SSL_read aiofn_SSL_read
+#define SSL_write aiofn_SSL_write
 #define SSL_read_ex aiofn_SSL_read_ex
 #define SSL_write_ex aiofn_SSL_write_ex
 #define SSL_shutdown aiofn_SSL_shutdown

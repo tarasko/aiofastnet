@@ -36,7 +36,10 @@ void (*aiofn_BIO_meth_free)(BIO_METHOD *biom) = NULL;
 SSL *(*aiofn_SSL_new)(SSL_CTX *ctx) = NULL;
 void (*aiofn_SSL_free)(SSL *ssl) = NULL;
 void (*aiofn_SSL_set_bio)(SSL *ssl, BIO *rbio, BIO *wbio) = NULL;
+void (*aiofn_SSL_set0_rbio)(SSL *ssl, BIO *rbio) = NULL;
+void (*aiofn_SSL_set0_wbio)(SSL *ssl, BIO *wbio) = NULL;
 int (*aiofn_SSL_set_fd)(SSL *ssl, int fd) = NULL;
+int (*aiofn_SSL_set_wfd)(SSL *ssl, int fd) = NULL;
 BIO *(*aiofn_SSL_get_rbio)(const SSL *ssl) = NULL;
 BIO *(*aiofn_SSL_get_wbio)(const SSL *ssl) = NULL;
 void (*aiofn_SSL_set_accept_state)(SSL *ssl) = NULL;
@@ -48,9 +51,11 @@ int (*aiofn_SSL_is_init_finished)(const SSL *s) = NULL;
 int (*aiofn_SSL_pending)(const SSL *ssl) = NULL;
 int (*aiofn_SSL_renegotiate)(SSL *ssl) = NULL;
 int (*aiofn_SSL_do_handshake)(SSL *ssl) = NULL;
+int (*aiofn_SSL_read)(SSL *ssl, void *buf, int num) = NULL;
+int (*aiofn_SSL_write)(SSL *ssl, const void *buf, int num) = NULL;
 int (*aiofn_SSL_read_ex)(SSL *ssl, void *buf, size_t num, size_t *readbytes) = NULL;
 int (*aiofn_SSL_write_ex)(SSL *ssl, const void *buf, size_t num, size_t *written) = NULL;
-void *aiofn_SSL_sendfile = NULL;
+ssize_t (*aiofn_SSL_sendfile)(SSL *ssl, int fd, off_t offset, size_t size, int flags) = NULL;
 int (*aiofn_SSL_shutdown)(SSL *ssl) = NULL;
 int (*aiofn_SSL_get_shutdown)(const SSL *ssl) = NULL;
 long (*aiofn_SSL_get_verify_result)(const SSL *ssl) = NULL;
@@ -235,7 +240,10 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
     LOAD_REQUIRED(aiofn_SSL_new, "SSL_new");
     LOAD_REQUIRED(aiofn_SSL_free, "SSL_free");
     LOAD_REQUIRED(aiofn_SSL_set_bio, "SSL_set_bio");
+    LOAD_REQUIRED(aiofn_SSL_set0_rbio, "SSL_set0_rbio");
+    LOAD_REQUIRED(aiofn_SSL_set0_wbio, "SSL_set0_wbio");
     LOAD_REQUIRED(aiofn_SSL_set_fd, "SSL_set_fd");
+    LOAD_REQUIRED(aiofn_SSL_set_wfd, "SSL_set_wfd");
     LOAD_REQUIRED(aiofn_SSL_get_rbio, "SSL_get_rbio");
     LOAD_REQUIRED(aiofn_SSL_get_wbio, "SSL_get_wbio");
     LOAD_REQUIRED(aiofn_SSL_set_accept_state, "SSL_set_accept_state");
@@ -247,6 +255,8 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
     LOAD_REQUIRED(aiofn_SSL_pending, "SSL_pending");
     LOAD_REQUIRED(aiofn_SSL_renegotiate, "SSL_renegotiate");
     LOAD_REQUIRED(aiofn_SSL_do_handshake, "SSL_do_handshake");
+    LOAD_REQUIRED(aiofn_SSL_read, "SSL_read");
+    LOAD_REQUIRED(aiofn_SSL_write, "SSL_write");
     LOAD_REQUIRED(aiofn_SSL_read_ex, "SSL_read_ex");
     LOAD_REQUIRED(aiofn_SSL_write_ex, "SSL_write_ex");
     aiofn_SSL_sendfile = resolve_symbol("SSL_sendfile");
@@ -376,10 +386,6 @@ int aiofn_BIO_get_ktls_send(BIO *b) {
 
 int aiofn_BIO_get_ktls_recv(BIO *b) {
     return aiofn_BIO_ctrl(b, BIO_CTRL_GET_KTLS_RECV, 0, NULL) > 0;
-}
-
-int aiofn_SSL_sendfile_available(void) {
-    return aiofn_SSL_sendfile != NULL;
 }
 
 int aiofn_ERR_GET_LIB(unsigned long e) {

@@ -26,20 +26,20 @@ def build_ssl_contexts(enable_ktls=False) -> tuple[ssl.SSLContext, ssl.SSLContex
 
     tls_version = ssl.TLSVersion.TLSv1_2
     cipher = "ECDHE-RSA-AES128-GCM-SHA256"
-    if enable_ktls:
-        server_ctx.options |= ssl.OP_ENABLE_KTLS
-        server_ctx.set_ciphers(cipher)
-        server_ctx.minimum_version = tls_version
-        server_ctx.maximum_version = tls_version
+    server_ctx.set_ciphers(cipher)
+    server_ctx.minimum_version = tls_version
+    server_ctx.maximum_version = tls_version
 
     client_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     client_ctx.check_hostname = False
     client_ctx.verify_mode = ssl.CERT_NONE
+    client_ctx.set_ciphers(cipher)
+    client_ctx.minimum_version = tls_version
+    client_ctx.maximum_version = tls_version
+
     if enable_ktls:
+        server_ctx.options |= ssl.OP_ENABLE_KTLS
         client_ctx.options |= ssl.OP_ENABLE_KTLS
-        client_ctx.set_ciphers(cipher)
-        client_ctx.minimum_version = tls_version
-        client_ctx.maximum_version = tls_version
 
     return server_ctx, client_ctx
 

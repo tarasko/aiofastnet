@@ -319,7 +319,9 @@ class EchoServerHandle:
 class ConnectionType:
     name: str
     server_ssl_context: Optional[ssl.SSLContext] = None
+    server_ssl_context_with_ktls: Optional[ssl.SSLContext] = None
     client_ssl_context: Optional[ssl.SSLContext] = None
+    client_ssl_context_with_ktls: Optional[ssl.SSLContext] = None
 
 
 @pytest.fixture(params=["tcp", "ssl"])
@@ -328,10 +330,13 @@ def conn_type(request):
         return ConnectionType(name="tcp")
     else:
         server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key")
+        server_context_ktls, client_context_ktls = make_test_ssl_contexts("tests/test.crt", "tests/test.key", True)
         return ConnectionType(
-            name="ssl",
-            server_ssl_context=server_context,
-            client_ssl_context=client_context,
+            "ssl",
+            server_context,
+            server_context_ktls,
+            client_context,
+            client_context_ktls
         )
 
 
@@ -353,6 +358,7 @@ async def TestServer(protocol_factory=None, host="127.0.0.1", port=0, ssl_contex
         host=host,
         port=port,
         ssl=ssl_context,
+        ssl_merge_transports=True
     )
     try:
         resolved_port = server.sockets[0].getsockname()[1]
@@ -384,6 +390,7 @@ async def TestClient(server_or_host, port=None, ssl_context=None, server_hostnam
         port=port,
         ssl=ssl_context,
         server_hostname=server_hostname,
+        ssl_merge_transports=True
     )
     try:
         yield client
@@ -394,25 +401,26 @@ async def TestClient(server_or_host, port=None, ssl_context=None, server_hostnam
         except (TestException, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
             pass
 
-def make_test_ssl_contexts(cert_file: Union[str, Path], key_file: Union[str, Path]):
+def make_test_ssl_contexts(cert_file: Union[str, Path], key_file: Union[str, Path], enable_ktls=False):
     cert_file = str(cert_file)
     key_file = str(key_file)
 
     server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     server_context.load_cert_chain(certfile=cert_file, keyfile=key_file)
-    server_context.options |= ssl.OP_ENABLE_KTLS
+    server_context.minimum_version = ssl.TLSVersion.TLSv1_2
+    server_context.maximum_version = ssl.TLSVersion.TLSv1_2
     server_context.set_ciphers("ECDHE-RSA-AES128-GCM-SHA256")
+    if enable_ktls:
+        server_context.options |= ssl.OP_ENABLE_KTLS
 
     client_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     client_context.check_hostname = False
     client_context.verify_mode = ssl.CERT_NONE
-    client_context.options |= ssl.OP_ENABLE_KTLS
-    client_context.set_ciphers("ECDHE-RSA-AES128-GCM-SHA256")
-
-    server_context.minimum_version = ssl.TLSVersion.TLSv1_2
-    server_context.maximum_version = ssl.TLSVersion.TLSv1_2
     client_context.minimum_version = ssl.TLSVersion.TLSv1_2
     client_context.maximum_version = ssl.TLSVersion.TLSv1_2
+    client_context.set_ciphers("ECDHE-RSA-AES128-GCM-SHA256")
+    if enable_ktls:
+        client_context.options |= ssl.OP_ENABLE_KTLS
 
     return server_context, client_context
 

@@ -351,18 +351,20 @@ def TmpFromData(data):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="sendfile is implemented only for linux and macos")
-async def test_sendfile():
+async def test_sendfile(loop_debug, conn_type):
     loop = asyncio.get_running_loop()
     header = b"h" * (256*1024)
     payload = b"p" * (3*1024*1024)
     tail = b"t" * (256*1024)
     with TmpFromData(payload) as tmp:
-        async with TestServer() as server:
-            async with TestClient(server) as client:
+        async with TestServer(ssl_context=conn_type.server_ssl_context_with_ktls) as server:
+            async with TestClient(server, ssl_context=conn_type.client_ssl_context_with_ktls) as client:
+                _logger.debug("Begin writing header(%d)", len(header))
                 client.transport.write(header)
+                _logger.debug("Call sendfile")
                 await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2)
                 assert client.transport.is_reading()
-                _logger.debug("Begin writing tail")
+                _logger.debug("Begin writing tail(%d)", len(tail))
                 client.transport.write(tail)
 
                 reply = await client.readn(len(header))

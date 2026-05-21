@@ -1,4 +1,5 @@
 from libc.stdint cimport uint64_t, uint8_t
+from posix.types cimport off_t
 
 cdef extern from "openssl_compat.h" nogil:
     ctypedef struct SSL_CTX:
@@ -46,12 +47,15 @@ cdef extern from "openssl_compat.h" nogil:
     int BIO_reset(BIO *b)
     int BIO_get_ktls_send(BIO *b)
     int BIO_get_ktls_recv(BIO *b)
-    int SSL_sendfile_available()
+    ssize_t SSL_sendfile(SSL *ssl, int fd, off_t offset, size_t size, int flags)
 
     SSL *SSL_new(SSL_CTX *ctx)
     void SSL_free(SSL *ssl)
     void SSL_set_bio(SSL *ssl, BIO *rbio, BIO *wbio)
+    void SSL_set0_rbio(SSL *ssl, BIO *rbio)
+    void SSL_set0_wbio(SSL *ssl, BIO *wbio)
     int SSL_set_fd(SSL *ssl, int fd)
+    int SSL_set_wfd(SSL *ssl, int fd)
     BIO *SSL_get_rbio(const SSL *ssl)
     BIO *SSL_get_wbio(const SSL *ssl)
     void SSL_set_accept_state(SSL *ssl)
@@ -64,6 +68,8 @@ cdef extern from "openssl_compat.h" nogil:
     int SSL_pending(const SSL *ssl)
     int SSL_renegotiate(SSL *ssl)
     int SSL_do_handshake(SSL *ssl)
+    int SSL_read(SSL *ssl, void *buf, int num)
+    int SSL_write(SSL *ssl, const void *buf, int num)
     int SSL_read_ex(SSL *ssl, void *buf, size_t num, size_t *readbytes)
     int SSL_write_ex(SSL *s, const void *buf, size_t num, size_t *written)
     int SSL_shutdown(SSL *ssl)

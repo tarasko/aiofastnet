@@ -24,6 +24,7 @@ from .utils cimport (
     aiofn_finalize_bytes,
     unlikely
 )
+from .utils import SSLProtocolState as py_SSLProtocolState
 from .transport cimport Transport, Protocol
 from .ssl_object cimport SSLObject, SSLError, ssl_error_name
 from .transport cimport aiofn_is_buffered_protocol
@@ -644,7 +645,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
         if unlikely(self._is_debug):
             _logger.debug("%r: change state to %s",
-                          self, SSLProtocolState(new_state).name)
+                          self, py_SSLProtocolState(new_state).name)
 
         if new_state == SSLProtocolState.UNWRAPPED:
             allowed = True
