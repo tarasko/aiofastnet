@@ -21,4 +21,21 @@ cdef class Protocol:
     cpdef Py_ssize_t get_local_write_buffer_size(self) except -1
 
 
+cdef class WriteWatermarks:
+    cdef:
+        object _loop
+        Py_ssize_t _high_water
+        Py_ssize_t _low_water
+        bint _paused
+
+    cpdef tuple get_write_buffer_limits(self)
+    cpdef set_write_buffer_limits(self, transport, app_protocol,
+                                  Py_ssize_t write_buffer_size,
+                                  high=*, low=*)
+    cpdef maybe_pause_protocol(self, transport, app_protocol, Py_ssize_t write_buffer_size)
+    cpdef maybe_resume_protocol(self, transport, app_protocol, Py_ssize_t write_buffer_size)
+
+    cdef inline _set_write_buffer_limits(self, high, low)
+
+
 cpdef aiofn_is_buffered_protocol(protocol)

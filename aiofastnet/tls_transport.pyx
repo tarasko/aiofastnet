@@ -3,7 +3,6 @@ import os
 import ssl
 import warnings
 from asyncio.trsock import TransportSocket
-from collections import deque
 from logging import getLogger
 
 from cpython.bytearray cimport PyByteArray_AS_STRING, PyByteArray_GET_SIZE
@@ -26,7 +25,7 @@ from .utils cimport (
     aiofn_set_nodelay,
     unlikely
 )
-from .transport cimport Transport, Protocol
+from .transport cimport Transport, Protocol, WriteWatermarks
 from .ssl_object cimport (SSLObject, SSLError, ssl_error_name)
 from .transport import aiofn_is_buffered_protocol
 
@@ -86,10 +85,8 @@ cdef class TlsTransport(Transport):
         bint _app_protocol_is_buffered
         bint _app_protocol_aiofn
         bint _protocol_connected
-        bint _protocol_paused
-        Py_ssize_t _high_water
-        Py_ssize_t _low_water
         dict _extra
+        WriteWatermarks _write_watermarks
 
         object _sock
         object _server
@@ -160,6 +157,8 @@ cdef class TlsTransport(Transport):
         except OSError:
             self._extra['peername'] = None
 
+        self._write_watermarks = WriteWatermarks(loop)
+
         self._write_backlog = []
         self._write_backlog_size = 0
         self._ssl_handshake_complete_waiter = waiter
@@ -181,7 +180,6 @@ cdef class TlsTransport(Transport):
         self._app_state = AppProtocolState.STATE_INIT
 
         self._set_protocol(app_protocol)
-        self._set_write_buffer_limits()
 
         self._ssl_object = SSLObject(
             sslcontext,
@@ -239,12 +237,11 @@ cdef class TlsTransport(Transport):
         return self._extra.get(name, default)
 
     cpdef tuple get_write_buffer_limits(self):
-        return (self._low_water, self._high_water)
+        return self._write_watermarks.get_write_buffer_limits()
 
     cpdef set_write_buffer_limits(self, high=None, low=None):
-        self._set_write_buffer_limits(high, low)
-        self._maybe_pause_protocol()
-        self._maybe_resume_protocol()
+        self._write_watermarks.set_write_buffer_limits(
+            self, self._app_protocol, self.get_write_buffer_size(), high, low)
 
     cpdef get_write_buffer_size(self):
         cdef Py_ssize_t total = self._write_backlog_size
@@ -1000,48 +997,7 @@ cdef class TlsTransport(Transport):
             })
 
     cdef inline _maybe_pause_protocol(self):
-        cdef Py_ssize_t size = self.get_write_buffer_size()
-        if size <= self._high_water:
-            return
-        if not self._protocol_paused:
-            self._protocol_paused = True
-            try:
-                self._app_protocol.pause_writing()
-            except (KeyboardInterrupt, SystemExit):
-                raise
-            except BaseException as exc:
-                self._loop.call_exception_handler({
-                    'message': 'protocol.pause_writing() failed',
-                    'exception': exc,
-                    'transport': self,
-                    'protocol': self._app_protocol,
-                })
+        self._write_watermarks.maybe_pause_protocol(self, self._app_protocol, self.get_write_buffer_size())
 
     cdef inline _maybe_resume_protocol(self):
-        if self._protocol_paused and self.get_write_buffer_size() <= self._low_water:
-            self._protocol_paused = False
-            try:
-                self._app_protocol.resume_writing()
-            except (KeyboardInterrupt, SystemExit):
-                raise
-            except BaseException as exc:
-                self._loop.call_exception_handler({
-                    'message': 'protocol.resume_writing() failed',
-                    'exception': exc,
-                    'transport': self,
-                    'protocol': self._app_protocol,
-                })
-
-    cdef inline _set_write_buffer_limits(self, high=None, low=None):
-        if high is None:
-            if low is None:
-                high = 64 * 1024
-            else:
-                high = 4 * low
-        if low is None:
-            low = high // 4
-
-        if not high >= low >= 0:
-            raise ValueError(f'high ({high!r}) must be >= low ({low!r}) must be >= 0')
-        self._high_water = high
-        self._low_water = low
+        self._write_watermarks.maybe_resume_protocol(self, self._app_protocol, self.get_write_buffer_size())
