@@ -95,7 +95,6 @@ cdef class TlsTransport(Transport):
         bint _closing
         bint _paused
         bint _writer_active
-        bint _want_write
         bint _want_read
         bint _is_debug
 
@@ -171,7 +170,6 @@ cdef class TlsTransport(Transport):
         self._closing = False
         self._paused = False
         self._writer_active = False
-        self._want_write = False
         self._want_read = False
         self._is_debug = loop.get_debug()
         self._server_side = server_side
@@ -538,8 +536,6 @@ cdef class TlsTransport(Transport):
     cdef inline _do_flush(self):
         try:
             self._do_read_into_void()
-            if not self._want_write:
-                self._flush_write_backlog()
         except BaseException as ex:
             self._on_shutdown_complete(ex)
         else:
@@ -688,8 +684,6 @@ cdef class TlsTransport(Transport):
         if self._conn_lost or self._sock is None:
             return
 
-        self._want_write = False
-
         try:
             if self._state == SSLProtocolState.DO_HANDSHAKE:
                 self._do_handshake()
@@ -795,21 +789,23 @@ cdef class TlsTransport(Transport):
             raise NotImplementedError()
 
         cdef SendFileRequest req = _make_send_file_request(file, offset, count)
-        if not self._write_backlog:
-            if self._try_sendfile(req):
-                return await req.waiter
 
-        if unlikely(self._is_debug):
-            _logger.debug("%r: enqueue SendFileRequest(offset=%d,count=%d)",
-                          self, req.offset, req.count)
+        try:
+            if not self._write_backlog:
+                if self._try_sendfile(req):
+                    return await req.waiter
 
-        self._write_backlog.append(req)
-        self._write_backlog_size += req.count
-        if len(self._write_backlog) == 1:
-            self._loop.add_writer(self._sock_fd_obj, self._write_ready)
+            if unlikely(self._is_debug):
+                _logger.debug("%r: enqueue SendFileRequest(offset=%d,count=%d)",
+                              self, req.offset, req.count)
+
+            self._write_backlog.append(req)
+            self._write_backlog_size += req.count
             self._maybe_pause_protocol()
 
-        return await req.waiter
+            return await req.waiter
+        except BaseException as ex:
+            self._fatal_error(ex, 'Fatal error on TLS transport')
 
     cdef inline _try_sendfile(self, SendFileRequest req):
         while True:
@@ -819,11 +815,9 @@ cdef class TlsTransport(Transport):
                     _logger.debug("%r: SSL_sendfile(..., offset=%d, size=%d) = %d", self,
                                   req.offset, req.count, bytes_written)
 
-                self._want_write = False
                 req.offset += bytes_written
                 req.count -= bytes_written
                 if req.count == 0:
-                    self._drop_writer()
                     req.waiter.set_result(None)
                     return True
                 else:
@@ -836,12 +830,9 @@ cdef class TlsTransport(Transport):
                                   ssl_error_name(ssl_error))
 
                 if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
-                    self._want_write = True
                     self._ensure_writer()
                     return False
                 elif ssl_error == SSLError.SSL_ERROR_WANT_READ:
-                    self._want_write = False
-                    self._drop_writer()
                     return False
 
                 raise self._ssl_object.make_exc_from_ssl_error("SSL_sendfile failed", ssl_error)
@@ -879,6 +870,10 @@ cdef class TlsTransport(Transport):
 
         if items_completed > 0:
             del self._write_backlog[:items_completed]
+
+        if not self._write_backlog:
+            self._drop_writer()
+
         self._maybe_resume_protocol()
 
     cdef inline _write_impl(self, data, char* data_ptr, Py_ssize_t data_len):
@@ -891,9 +886,7 @@ cdef class TlsTransport(Transport):
                 if unlikely(self._is_debug):
                     _logger.debug("%r: SSL_write(..., data_len=%d) = %d", self, data_len, bytes_written)
 
-                self._want_write = False
                 if data_len == <Py_ssize_t>bytes_written:
-                    self._drop_writer()
                     return None
                 data_ptr += bytes_written
                 data_len -= bytes_written
@@ -906,18 +899,13 @@ cdef class TlsTransport(Transport):
                               ssl_error_name(ssl_error))
 
             if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
-                self._want_write = True
                 self._ensure_writer()
                 return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
             if ssl_error == SSLError.SSL_ERROR_WANT_READ:
-                self._want_write = False
-                self._drop_writer()
                 return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
 
             raise self._ssl_object.make_exc_from_ssl_error("SSL_write failed", ssl_error)
 
-        self._want_write = False
-        self._drop_writer()
         return None
 
     cdef inline _call_eof_received(self):
