@@ -37,6 +37,9 @@ cdef class Transport:
     cdef write_c(self, char* ptr, Py_ssize_t sz):
         self.write(PyMemoryView_FromMemory(ptr, sz, PyBUF_READ))
 
+    async def sendfile(self, file, offset, count):
+        raise NotImplementedError()
+
 
 cdef class Protocol:
     cpdef is_buffered_protocol(self):
@@ -690,8 +693,9 @@ cdef class SocketTransport(Transport):
             while req.count:
                 bytes_sent = os.sendfile(self._sock_fd_obj, req.file.fileno(),
                                          req.offset, req.count)
-                _logger.debug("%r: os.sendfile(offset=%d,count=%d)=%d",
-                              self, req.offset, req.count, bytes_sent)
+                if unlikely(self._is_debug):
+                    _logger.debug("%r: os.sendfile(offset=%d,count=%d)=%d",
+                                  self, req.offset, req.count, bytes_sent)
                 req.offset += bytes_sent
                 req.count -= bytes_sent
 

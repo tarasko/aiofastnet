@@ -1,7 +1,8 @@
 import asyncio
 import os
 
-from .transport import Transport, SocketTransport
+from .transport import Transport
+from .wrapped_transport import _WrappedTransport
 
 
 async def sendfile(loop: asyncio.AbstractEventLoop,
@@ -19,13 +20,7 @@ async def sendfile(loop: asyncio.AbstractEventLoop,
     if os.name == "nt":
         raise NotImplementedError()
 
-    if not isinstance(transport, Transport):
-        return await loop.sendfile(transport, file, offset, count, fallback=False)
-
-    if transport.is_closing():
-        raise RuntimeError("Transport is closing")
-
-    if isinstance(transport, SocketTransport):
+    if isinstance(transport, Transport) and not isinstance(transport, _WrappedTransport):
         return await transport.sendfile(file, offset, count)
-
-    raise NotImplementedError()
+    else:
+        return await loop.sendfile(transport, file, offset, count)

@@ -39,7 +39,7 @@ cdef _init_openssl():
                 f"ssl_lib={ssl_lib_name.decode()}, crypto_lib={crypto_lib_name.decode()}")
         raise ImportError("aiofastnet: failed to initialize OpenSSL compatibility layer")
 
-    _logger.info("OpenSSL: SSL_sendfile loaded=%d", SSL_sendfile_available())
+    _logger.info("OpenSSL: SSL_sendfile loaded=%d", <void*>SSL_sendfile != NULL)
 
 
 _init_openssl()
@@ -103,56 +103,61 @@ cdef class SSLObject:
         self.ssl_ctx_py = ssl_context
         self.ssl_ctx = _get_ssl_ctx_ptr(ssl_context)
 
+        self.ssl = NULL
         self.incoming_buf = None
         self.outgoing_buf = None
         self.incoming = NULL
         self.outgoing = NULL
 
-        self.ssl = SSL_new(self.ssl_ctx)
-        if self.ssl == NULL:
-            raise MemoryError("Unable to allocate SSL object")
-
         self.server_hostname = server_hostname
         self.server_side = server_side
 
-        if sock is None:
+        try:
+            self.ssl = SSL_new(self.ssl_ctx)
+            if self.ssl == NULL:
+                raise MemoryError("Unable to allocate SSL object")
+
             self.incoming_buf = PyByteArray_FromStringAndSize(
                 NULL, read_buffer_size)
-            self.outgoing_buf = PyByteArray_FromStringAndSize(
-                NULL, write_buffer_size)
-
             self.incoming = BIO_new_static_mem(
                 PyByteArray_AS_STRING(self.incoming_buf),
-                <size_t>PyByteArray_GET_SIZE(self.incoming_buf)
+                <size_t> PyByteArray_GET_SIZE(self.incoming_buf)
             )
-            self.outgoing = BIO_new_static_mem(
-                PyByteArray_AS_STRING(self.outgoing_buf),
-                <size_t>PyByteArray_GET_SIZE(self.outgoing_buf)
-            )
-
-            if self.incoming == NULL or self.outgoing == NULL or self.ssl == NULL:
-                if self.incoming != NULL:
-                    BIO_free(self.incoming)
-                    self.incoming = NULL
-                if self.outgoing != NULL:
-                    BIO_free(self.outgoing)
-                    self.outgoing = NULL
-                if self.ssl != NULL:
-                    SSL_free(self.ssl)
-                    self.ssl = NULL
+            if self.incoming == NULL:
                 raise MemoryError("Unable to initialize OpenSSL objects")
 
-            SSL_set_bio(self.ssl, self.incoming, self.outgoing)
+            if sock is None:
+                self.outgoing_buf = PyByteArray_FromStringAndSize(
+                    NULL, write_buffer_size)
+
+                self.outgoing = BIO_new_static_mem(
+                    PyByteArray_AS_STRING(self.outgoing_buf),
+                    <size_t> PyByteArray_GET_SIZE(self.outgoing_buf)
+                )
+
+                BIO_set_nbio(self.outgoing, 1)
+                SSL_set0_wbio(self.ssl, self.outgoing)
+            else:
+                if SSL_set_wfd(self.ssl, sock.fileno()) != 1:
+                    raise ssl.SSLError("SSL_set_wfd failed")
+
             BIO_set_nbio(self.incoming, 1)
-            BIO_set_nbio(self.outgoing, 1)
-            SSL_set_mode(self.ssl, SSL_MODE_AUTO_RETRY | SSL_MODE_ENABLE_PARTIAL_WRITE)
-        else:
-            if SSL_set_fd(self.ssl, sock.fileno()) != 1:
+            SSL_set0_rbio(self.ssl, self.incoming)
+
+            SSL_set_mode(self.ssl, SSL_MODE_AUTO_RETRY | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_ENABLE_PARTIAL_WRITE)
+            SSL_set_read_ahead(self.ssl, 1)
+        except:
+            if self.incoming != NULL:
+                BIO_free(self.incoming)
+                self.incoming = NULL
+            if self.outgoing != NULL:
+                BIO_free(self.outgoing)
+                self.outgoing = NULL
+            if self.ssl != NULL:
                 SSL_free(self.ssl)
                 self.ssl = NULL
-                raise ssl.SSLError("SSL_set_fd failed")
-            SSL_set_mode(self.ssl, SSL_MODE_AUTO_RETRY | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER)
-            SSL_set_read_ahead(self.ssl, 1)
+
+            raise
 
         if server_side:
             SSL_set_accept_state(self.ssl)
@@ -248,6 +253,12 @@ cdef class SSLObject:
     cdef int write_ex(self, const void *buf, size_t num, size_t *bytes_written) noexcept:
         return SSL_write_ex(self.ssl, buf, num, bytes_written)
 
+    cdef inline int read(self, void *buf, size_t num) noexcept:
+        return SSL_read(self.ssl, buf, num)
+
+    cdef inline int write(self, const void *buf, size_t num) noexcept:
+        return SSL_write(self.ssl, buf, num)
+
     cdef Py_ssize_t pending(self) noexcept:
         return <Py_ssize_t>SSL_pending(self.ssl)
 
@@ -293,6 +304,12 @@ cdef class SSLObject:
 
     cdef int renegotiate(self) noexcept:
         return SSL_renegotiate(self.ssl)
+
+    cdef int sendfile_available(self) noexcept:
+        return <void*>SSL_sendfile != NULL
+
+    cdef int sendfile(self, int fd, Py_ssize_t offset, Py_ssize_t size) noexcept:
+        return SSL_sendfile(self.ssl, fd, offset, <Py_ssize_t>size, 0)
 
     cdef make_exc_from_ssl_error(self, str descr, int err_code):
         assert err_code != SSL_ERROR_NONE, "check logic"
