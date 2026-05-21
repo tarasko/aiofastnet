@@ -413,21 +413,17 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         self.writelines_nocheck(list_of_data)
 
     cdef inline write_c(self, char* data_ptr, Py_ssize_t data_len):
-        if not self._is_protocol_ready():
-            return
-
-        if data_len == 0:
-            return
-
-        if unlikely(self._write_backlog):
-            self._write_backlog.append(PyBytes_FromStringAndSize(data_ptr, data_len))
+        if not self._is_protocol_ready() or data_len == 0:
             return
 
         try:
-            tail = self._write_impl(None, data_ptr, data_len, True)
-            if unlikely(tail is not None):
-                self._write_backlog.append(tail)
-                return
+            if not self._write_backlog:
+                tail = self._write_impl(None, data_ptr, data_len)
+                self._flush_outgoing_bio()
+                if tail:
+                    self._write_backlog.append(tail)
+            else:
+                self._write_backlog.append(PyBytes_FromStringAndSize(data_ptr, data_len))
         except BaseException as ex:
             self._fatal_error(ex, 'Fatal error on SSL protocol')
 
@@ -449,8 +445,9 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             return
 
         try:
-            tail = self._write_impl(data, data_ptr, data_len, True)
-            if unlikely(tail is not None):
+            tail = self._write_impl(data, data_ptr, data_len)
+            self._flush_outgoing_bio()
+            if tail:
                 self._write_backlog.append(tail)
                 if unlikely(self._is_debug):
                     _logger.debug("%r: appended %d bytes to write_backlog", self, len(tail))
@@ -477,7 +474,6 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             bint add_to_backlog = False
             Py_ssize_t data_cnt = len(list_of_data)
             Py_ssize_t idx
-            bint is_last
 
         try:
             for idx in range(data_cnt):
@@ -491,9 +487,11 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                 if data_len == 0:
                     continue
 
-                is_last = idx == (data_cnt - 1)
-                tail = self._write_impl(data, data_ptr, data_len, is_last)
-                if unlikely(tail is not None):
+                tail = self._write_impl(data, data_ptr, data_len)
+                if idx == (data_cnt - 1):
+                    self._flush_outgoing_bio()
+
+                if tail:
                     self._write_backlog.append(tail)
                     add_to_backlog = True
         except BaseException as ex:
@@ -991,8 +989,9 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                 aiofn_unpack_buffer(data, &data_ptr, &data_len)
                 # Data was validated and cleared from empty objects in write/writelines
 
-                tail = self._write_impl(data, data_ptr, data_len, True)
-                if tail is not None:
+                tail = self._write_impl(data, data_ptr, data_len)
+                self._flush_outgoing_bio()
+                if tail:
                     self._write_backlog[idx] = tail
                     break
                 else:
@@ -1001,7 +1000,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         except Exception as ex:
             self._fatal_error(ex, 'Fatal error on SSL protocol')
 
-    cdef inline _write_impl(self, data, char* data_ptr, Py_ssize_t data_len, bint is_last):
+    cdef inline _write_impl(self, data, char* data_ptr, Py_ssize_t data_len):
         """
         Do SSL_write, if outgoing BIO reach threshold size flush it to the 
         underlying protocol. If is_last=True, flush in the end regardless.
@@ -1009,37 +1008,35 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         remaining unsent part of the buffer. 
         On success return None.
         """
+
+        # SSL_write behave differently from non-blocking write syscall
+        # If outgoing memory bio has some space, but doesn't have enough
+        # space SSL_write_ex returns 0 and SSL_ERROR_WANT_WRITE is set.
+        #
+        # In such case we flush outgoing buffer and restart SSL_write_ex
+        # with exactly same data_ptr, data_len.
+        #
+        # It is very confusing but bytes_written in such case may be > 16K
+        # because SSL_write_ex, despite previously returning error,
+        # has stored some of its processed data from the last step in its
+        # own internal buffer.
+        #
+        # outgoing buffer in such case may receive 2 SSL records with one
+        # SSL_write_ex call.
+
         cdef:
-            size_t bytes_written
-            int rc = 1
+            int bytes_written
             int ssl_error
 
         while data_len != 0:
-            # SSL_write_ex behave differently from non-blocking write syscall
-            # If outgoing memory bio has some space, but doesn't have enough
-            # space SSL_write_ex returns 0 and SSL_ERROR_WANT_WRITE is set.
-            #
-            # In such case we flush outgoing buffer and restart SSL_write_ex
-            # with exactly same data_ptr, data_len.
-            #
-            # It is very confusing but bytes_written in such case may be > 16K
-            # because SSL_write_ex, despite previously returning error,
-            # has stored some of its processed data from the last step in its
-            # own internal buffer.
-            #
-            # outgoing buffer in such case may receive 2 SSL records with one
-            # SSL_write_ex call.
-            rc = self._ssl_object.write_ex(data_ptr, data_len, &bytes_written)
+            bytes_written = self._ssl_object.write(data_ptr, data_len)
 
-            if rc:
+            if bytes_written > 0:
                 if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_write_ex(..., %d, %d) = %d", self,
-                                  data_len, bytes_written, rc)
+                    _logger.debug("%r: SSL_write(..., data_len=%d) = %d", self, data_len, bytes_written)
 
                 # Success path, we wrote all or some data
                 if data_len == <Py_ssize_t>bytes_written:
-                    if is_last:
-                        self._flush_outgoing_bio()
                     return None
 
                 # Not all data was written, this is most likely because outgoing
@@ -1047,34 +1044,32 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                 # (if SSL_ENABLE_PARTIAL_WRITE is set)
                 data_ptr += bytes_written
                 data_len -= bytes_written
-            else:
-                ssl_error = self._ssl_object.get_error(rc)
+                continue
 
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_write_ex(..., %d, %d)=%d, %s",
-                                  self, data_len, bytes_written, rc,
-                                  ssl_error_name(ssl_error))
+            ssl_error = self._ssl_object.get_error(bytes_written)
+            if unlikely(self._is_debug):
+                _logger.debug("%r: SSL_write(..., %d)=%d, %s",
+                              self, data_len, bytes_written,
+                              ssl_error_name(ssl_error))
 
-                # On any error we always need to flush outgoing BIO
+            # Since outgoing BIO is a static memory it may simply run out
+            # of capacity, it is time to flush it and call SSL_write again
+            if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
                 self._flush_outgoing_bio()
+                continue
 
-                # Since outgoing BIO is a static memory it may simply run out
-                # of capacity
-                if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
-                    continue
+            # This is rare but still possible. SSL may refuse to send data
+            # because of re-negotiation. Materialize and return remaining
+            # data. We will proceed when new data arrives and re-negotiation
+            # is complete
+            if ssl_error == SSLError.SSL_ERROR_WANT_READ:
+                return aiofn_maybe_copy_buffer_tail(data, data_ptr,
+                                                    data_len)
 
-                # This is rare but still possible. SSL may refuse to send data
-                # because of re-negotiation. Materialize and return remaining
-                # data. We will proceed when new data arrives and re-negotiation
-                # is complete
-                if ssl_error == SSLError.SSL_ERROR_WANT_READ:
-                    return aiofn_maybe_copy_buffer_tail(data, data_ptr,
-                                                        data_len)
-
-                # Consider any other error as fatal, _write_impl caller will
-                # initiate disconnect.
-                raise self._ssl_object.make_exc_from_ssl_error(
-                    "SSL_write_ex failed", ssl_error)
+            # Consider any other error as fatal, _write_impl caller will
+            # initiate disconnect.
+            raise self._ssl_object.make_exc_from_ssl_error(
+                "SSL_write_ex failed", ssl_error)
 
     cdef inline _flush_outgoing_bio(self):
         # We call _flush_outgoing_bio if there MAY be some data to send,

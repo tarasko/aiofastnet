@@ -876,8 +876,9 @@ cdef class TlsTransport(Transport):
         self._maybe_resume_protocol()
 
     cdef inline _write_impl(self, data, char* data_ptr, Py_ssize_t data_len):
-        cdef int bytes_written
-        cdef int ssl_error
+        cdef:
+            int bytes_written
+            int ssl_error
 
         while data_len != 0:
             bytes_written = self._ssl_object.write(data_ptr, data_len)
@@ -887,6 +888,7 @@ cdef class TlsTransport(Transport):
 
                 if data_len == <Py_ssize_t>bytes_written:
                     return None
+
                 data_ptr += bytes_written
                 data_len -= bytes_written
                 continue
@@ -900,6 +902,7 @@ cdef class TlsTransport(Transport):
             if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
                 self._ensure_writer()
                 return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
+
             if ssl_error == SSLError.SSL_ERROR_WANT_READ:
                 return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
 
