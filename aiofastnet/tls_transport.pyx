@@ -684,6 +684,8 @@ cdef class TlsTransport(Transport):
         if self._conn_lost or self._sock is None:
             return
 
+        self._drop_writer()
+
         try:
             if self._state == SSLProtocolState.DO_HANDSHAKE:
                 self._do_handshake()
@@ -870,9 +872,6 @@ cdef class TlsTransport(Transport):
 
         if items_completed > 0:
             del self._write_backlog[:items_completed]
-
-        if not self._write_backlog:
-            self._drop_writer()
 
         self._maybe_resume_protocol()
 
