@@ -117,19 +117,31 @@ cdef class SSLObject:
             (SSL_CTX_get_options(self.ssl_ctx) & SSL_OP_ENABLE_KTLS) != 0
         )
 
+        cdef bint use_socket_rbio = (
+            sock is not None and
+            (SSL_CTX_get_options(self.ssl_ctx) & SSL_OP_ENABLE_KTLS) != 0
+        )
+
         try:
             self.ssl = SSL_new(self.ssl_ctx)
             if self.ssl == NULL:
                 raise MemoryError("Unable to allocate SSL object")
 
-            self.incoming_buf = PyByteArray_FromStringAndSize(
-                NULL, read_buffer_size)
-            self.incoming = BIO_new_static_mem(
-                PyByteArray_AS_STRING(self.incoming_buf),
-                <size_t> PyByteArray_GET_SIZE(self.incoming_buf)
-            )
-            if self.incoming == NULL:
-                raise MemoryError("Unable to initialize OpenSSL objects")
+            if not use_socket_rbio:
+                self.incoming_buf = PyByteArray_FromStringAndSize(
+                    NULL, read_buffer_size)
+                self.incoming = BIO_new_static_mem(
+                    PyByteArray_AS_STRING(self.incoming_buf),
+                    <size_t> PyByteArray_GET_SIZE(self.incoming_buf)
+                )
+                if self.incoming == NULL:
+                    raise MemoryError("Unable to initialize incoming mem BIO")
+
+                BIO_set_nbio(self.incoming, 1)
+                SSL_set0_rbio(self.ssl, self.incoming)
+            else:
+                if SSL_set_rfd(self.ssl, sock.fileno()) != 1:
+                    raise ssl.SSLError("SSL_set_rfd failed")
 
             if not use_socket_wbio:
                 self.outgoing_buf = PyByteArray_FromStringAndSize(
@@ -140,14 +152,14 @@ cdef class SSLObject:
                     <size_t> PyByteArray_GET_SIZE(self.outgoing_buf)
                 )
 
+                if self.outgoing == NULL:
+                    raise MemoryError("Unable to initialize outgoing mem BIO")
+
                 BIO_set_nbio(self.outgoing, 1)
                 SSL_set0_wbio(self.ssl, self.outgoing)
             else:
                 if SSL_set_wfd(self.ssl, sock.fileno()) != 1:
                     raise ssl.SSLError("SSL_set_wfd failed")
-
-            BIO_set_nbio(self.incoming, 1)
-            SSL_set0_rbio(self.ssl, self.incoming)
 
             SSL_set_mode(self.ssl, SSL_MODE_AUTO_RETRY | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_ENABLE_PARTIAL_WRITE)
             SSL_set_read_ahead(self.ssl, 1)

@@ -39,6 +39,7 @@ void (*aiofn_SSL_set_bio)(SSL *ssl, BIO *rbio, BIO *wbio) = NULL;
 void (*aiofn_SSL_set0_rbio)(SSL *ssl, BIO *rbio) = NULL;
 void (*aiofn_SSL_set0_wbio)(SSL *ssl, BIO *wbio) = NULL;
 int (*aiofn_SSL_set_fd)(SSL *ssl, int fd) = NULL;
+int (*aiofn_SSL_set_rfd)(SSL *ssl, int fd) = NULL;
 int (*aiofn_SSL_set_wfd)(SSL *ssl, int fd) = NULL;
 BIO *(*aiofn_SSL_get_rbio)(const SSL *ssl) = NULL;
 BIO *(*aiofn_SSL_get_wbio)(const SSL *ssl) = NULL;
@@ -244,6 +245,7 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
     LOAD_REQUIRED(aiofn_SSL_set0_rbio, "SSL_set0_rbio");
     LOAD_REQUIRED(aiofn_SSL_set0_wbio, "SSL_set0_wbio");
     LOAD_REQUIRED(aiofn_SSL_set_fd, "SSL_set_fd");
+    LOAD_REQUIRED(aiofn_SSL_set_rfd, "SSL_set_rfd");
     LOAD_REQUIRED(aiofn_SSL_set_wfd, "SSL_set_wfd");
     LOAD_REQUIRED(aiofn_SSL_get_rbio, "SSL_get_rbio");
     LOAD_REQUIRED(aiofn_SSL_get_wbio, "SSL_get_wbio");

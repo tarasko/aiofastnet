@@ -55,6 +55,7 @@ cdef extern from "openssl_compat.h" nogil:
     void SSL_set0_rbio(SSL *ssl, BIO *rbio)
     void SSL_set0_wbio(SSL *ssl, BIO *wbio)
     int SSL_set_fd(SSL *ssl, int fd)
+    int SSL_set_rfd(SSL *ssl, int fd)
     int SSL_set_wfd(SSL *ssl, int fd)
     BIO *SSL_get_rbio(const SSL *ssl)
     BIO *SSL_get_wbio(const SSL *ssl)
