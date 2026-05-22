@@ -357,25 +357,35 @@ cdef class TlsTransport(Transport):
 
     cdef inline bint _flush_outgoing_bio(self) except -1:
         """
-        Writes raw data to socket 
+        Writes raw data to socket for outgoing BIO. 
+        Returns True if write operations can continue.
+        True is also returned if memory bio is not used, is such case _flush_outgoing_bio is no-op. 
         """
+        if self._ssl_object.outgoing == NULL:
+            return True
+
+        if self._write_ready_registered:
+            return False
+
         cdef:
             char* ptr
             long sz
-
-        if self._ssl_object.outgoing == NULL:
-            return False
+            bint had_successful_writes = False
 
         while True:
             sz = self._ssl_object.outgoing_bio_get_data(&ptr)
+            if sz == 0:
+                return True
+
             bytes_sent = aiofn_send(self._sock_fd, ptr, sz)
             if unlikely(self._is_debug):
                 _logger.debug("%r: aiofn_send(...,len=%d)=%d", self, sz, bytes_sent)
 
             if bytes_sent < 0:
                 self._ensure_writer()
-                return False
+                return had_successful_writes
 
+            had_successful_writes = True
             self._ssl_object.outgoing_bio_consume(bytes_sent)
             if bytes_sent == sz:
                 return True
@@ -476,13 +486,13 @@ cdef class TlsTransport(Transport):
         else:
             self._do_read__copied()
 
-        self._flush_outgoing_bio()
-
-        # In case of renegotiation SSL_write may have failed earlier with SSL_WANT_READ_ERROR
-        # The data is then pushed to _write_backlog, but no _write_ready is being waiter for,
-        # because the non-blocking socket can still send more data without EGAIN
-        if not self._write_ready_registered and self._write_backlog:
-            self._flush_write_backlog()
+        if not self._write_ready_registered:
+            # In case of renegotiation SSL_write may have failed earlier with SSL_WANT_READ_ERROR
+            # The data is then pushed to _write_backlog, but no _write_ready is being waiter for,
+            # because the non-blocking socket can still send more data without EGAIN
+            self._flush_outgoing_bio()
+            if self._write_backlog:
+                self._flush_write_backlog()
 
     cdef inline _do_read__buffered(self):
         cdef:
@@ -490,7 +500,7 @@ cdef class TlsTransport(Transport):
             Py_ssize_t buf_len
             int last_bytes_read = 0
             Py_ssize_t total_bytes_read = 0
-            int last_error
+            int last_error = 0
 
         while True:
             if self._app_protocol_aiofn:
@@ -505,14 +515,20 @@ cdef class TlsTransport(Transport):
             while buf_len > 0:
                 last_bytes_read = self._ssl_object.read(buf_ptr, buf_len)
                 if last_bytes_read <= 0:
+                    last_error = self._ssl_object.get_error(last_bytes_read)
+                    if unlikely(self._is_debug):
+                        _logger.debug("%r: SSL_read(buf_len=%d)=%d, %s",
+                                      self, buf_len, last_bytes_read,
+                                      ssl_error_name(last_error))
                     break
+
+                if unlikely(self._is_debug):
+                    _logger.debug("%r: SSL_read(buf_len=%d)=%d",
+                                  self, buf_len, last_bytes_read)
 
                 buf_ptr += last_bytes_read
                 buf_len -= last_bytes_read
                 total_bytes_read += last_bytes_read
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_read(buf_len=%d)=%d",
-                                  self, buf_len, last_bytes_read)
 
             if total_bytes_read > 0:
                 if self._app_protocol_aiofn:
@@ -525,12 +541,6 @@ cdef class TlsTransport(Transport):
                     continue
                 else:
                     return
-
-            last_error = self._ssl_object.get_error(last_bytes_read)
-            if unlikely(self._is_debug):
-                _logger.debug("%r: SSL_read(buf_len=%d)=%d, %s",
-                              self, buf_len, last_bytes_read,
-                              ssl_error_name(last_error))
 
             if not self._should_retry_read(last_error):
                 return
@@ -790,10 +800,14 @@ cdef class TlsTransport(Transport):
                 self._fatal_error(exc, "Error occurred during read")
 
     def _write_ready(self):
+        if unlikely(self._is_debug):
+            _logger.debug("%r: _write_ready event", self)
+
         if self._connection_lost_scheduled:
             return
 
         self._drop_writer()
+        self._flush_outgoing_bio()
 
         try:
             if self._state == SSLProtocolState.DO_HANDSHAKE:
@@ -825,6 +839,7 @@ cdef class TlsTransport(Transport):
         try:
             if not self._write_backlog:
                 tail = self._write_impl(None, data_ptr, data_len)
+                self._flush_outgoing_bio()
                 self._append_to_backlog(tail, True)
             else:
                 self._append_to_backlog(PyBytes_FromStringAndSize(data_ptr, data_len), True)
@@ -853,6 +868,7 @@ cdef class TlsTransport(Transport):
                 return
 
             tail = self._write_impl(data, data_ptr, data_len)
+            self._flush_outgoing_bio()
             self._append_to_backlog(tail, True)
         except BaseException as ex:
             self._fatal_error(ex, 'Fatal error on TLS transport')
@@ -895,6 +911,7 @@ cdef class TlsTransport(Transport):
                     self._write_backlog_size += len(tail)
                     add_to_backlog = True
 
+            self._flush_outgoing_bio()
             self._maybe_pause_protocol()
         except BaseException as ex:
             self._fatal_error(ex, 'Fatal error on TLS transport')
@@ -984,6 +1001,7 @@ cdef class TlsTransport(Transport):
             items_completed += 1
             self._write_backlog_size -= len(data)
 
+        self._flush_outgoing_bio()
         if items_completed > 0:
             del self._write_backlog[:items_completed]
 
@@ -998,13 +1016,14 @@ cdef class TlsTransport(Transport):
             bytes_written = self._ssl_object.write(data_ptr, data_len)
             if bytes_written > 0:
                 if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_write(..., data_len=%d) = %d", self, data_len, bytes_written)
-
-                if data_len == <Py_ssize_t>bytes_written:
-                    return None
+                    _logger.debug("%r: SSL_write(..., data_len=%d)=%d", self, data_len, bytes_written)
 
                 data_ptr += bytes_written
                 data_len -= bytes_written
+
+                if data_len == 0:
+                    return None
+
                 continue
 
             ssl_error = self._ssl_object.get_error(bytes_written)
@@ -1014,8 +1033,10 @@ cdef class TlsTransport(Transport):
                               ssl_error_name(ssl_error))
 
             if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
-                self._ensure_writer()
-                return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
+                if self._should_retry_after_want_write():
+                    continue
+                else:
+                    return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
 
             if ssl_error == SSLError.SSL_ERROR_WANT_READ:
                 return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
@@ -1047,7 +1068,6 @@ cdef class TlsTransport(Transport):
             if self._sock is not None:
                 self._sock.close()
             self._sock = None
-            self._ssl_object = None
             self._app_protocol = None
             self._loop = None
             server = self._server
