@@ -770,6 +770,9 @@ cdef class TlsTransport(Transport):
             self._do_shutdown()
 
     cdef _read_ready(self):
+        if unlikely(self._is_debug):
+            _logger.debug("%r: _read_ready event", self)
+
         if self._connection_lost_scheduled:
             return
 
