@@ -732,9 +732,9 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                 self._flush_outgoing_bio()
                 return
 
-            self._on_handshake_complete(
-                self._ssl_object.make_exc_from_ssl_error(
-                    "ssl handshake failed", ssl_error))
+            exc = self._ssl_object.make_exc_from_ssl_error(
+                "ssl handshake failed", ssl_error)
+            self._on_handshake_complete(exc)
             return
 
     cdef inline _on_handshake_complete(self, handshake_exc):
@@ -899,19 +899,16 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
             while True:
                 rc = self._ssl_object.shutdown()
-                if unlikely(self._is_debug) and rc in (1, 0):
-                    _logger.debug("%r: SSL_shutdown()=%d", self, rc)
+                if rc in (1, 0):
+                    if unlikely(self._is_debug):
+                        _logger.debug("%r: SSL_shutdown()=%d", self, rc)
 
-                self._flush_outgoing_bio()
+                    self._flush_outgoing_bio()
 
-                if rc == 1:
-                    self._on_shutdown_complete(None)
+                    if rc == 1:
+                        self._on_shutdown_complete(None)
                     return
 
-                # From openssl docs
-                # Unlike most other function, returning 0 does not indicate an
-                # error. SSL_get_error(3) should not get called, it may
-                # misleadingly indicate an error even though no error occurred.
                 if rc == 0:
                     return
 
@@ -1127,28 +1124,21 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             raise RuntimeError('get_buffer() returned an empty buffer')
 
         cdef:
-            size_t last_bytes_read
+            size_t last_bytes_read = 0
             Py_ssize_t total_bytes_read = 0
             int rc = 0
 
         while buf_len > 0:
-            rc = self._ssl_object.read_ex(buf_ptr, buf_len, &last_bytes_read)
-
-            if not rc:
+            last_bytes_read = self._ssl_object.read(buf_ptr, buf_len)
+            if last_bytes_read <= 0:
                 break
+
             buf_ptr += last_bytes_read
             buf_len -= last_bytes_read
             total_bytes_read += last_bytes_read
             if unlikely(self._is_debug):
-                _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d",
-                              self, buf_len, last_bytes_read, rc)
-
-
-        cdef int last_error = self._ssl_object.get_error(rc)
-        if unlikely(self._is_debug):
-            _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d, %s",
-                          self, buf_len, last_bytes_read, rc,
-                          ssl_error_name(last_error))
+                _logger.debug("%r: SSL_read(buf_len=%d)=%d",
+                              self, buf_len, last_bytes_read)
 
         if total_bytes_read > 0:
             if self._app_protocol_aiofn:
@@ -1156,11 +1146,12 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             else:
                 self._app_protocol.buffer_updated(total_bytes_read)
 
-        # It could be that buffer_update user handler paused reading
-        # But we do have extra data in the incoming BIO or in SSL object.
-        # We could not read it because user provided buffer was too small.
-        # Schedule _do_read immediately, and check in _do_read that reading is
-        # not paused.
+        cdef int last_error = self._ssl_object.get_error(rc)
+        if unlikely(self._is_debug):
+            _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d, %s",
+                          self, buf_len, last_bytes_read, rc,
+                          ssl_error_name(last_error))
+
         # For resume_reading() check if we have some pending data for reading
         # and
         if buf_len == 0:
