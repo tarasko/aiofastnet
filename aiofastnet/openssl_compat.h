@@ -5,6 +5,11 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#ifdef _WIN32
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
