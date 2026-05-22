@@ -319,24 +319,30 @@ class EchoServerHandle:
 class ConnectionType:
     name: str
     server_ssl_context: Optional[ssl.SSLContext] = None
-    server_ssl_context_with_ktls: Optional[ssl.SSLContext] = None
     client_ssl_context: Optional[ssl.SSLContext] = None
-    client_ssl_context_with_ktls: Optional[ssl.SSLContext] = None
 
 
-@pytest.fixture(params=["tcp", "ssl"])
+@pytest.fixture(params=[
+    "tcp",
+    "ssl",
+    pytest.param("ktls",
+                 marks=pytest.mark.skipif(sys.version_info < (3, 12),
+                                          reason="kTLS tests require Python >= 3.12"
+                                          )
+                 )
+])
 def conn_type(request):
     if request.param == "tcp":
         return ConnectionType(name="tcp")
     else:
-        server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key")
-        server_context_ktls, client_context_ktls = make_test_ssl_contexts("tests/test.crt", "tests/test.key", True)
+        if request.param == "ssl":
+            server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
+        else:
+            server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", True)
         return ConnectionType(
             "ssl",
             server_context,
-            server_context_ktls,
             client_context,
-            client_context_ktls
         )
 
 
