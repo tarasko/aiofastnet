@@ -107,6 +107,7 @@ extern BIO *(*aiofn_SSL_get_wbio)(const SSL *ssl);
 extern void (*aiofn_SSL_set_accept_state)(SSL *ssl);
 extern void (*aiofn_SSL_set_connect_state)(SSL *ssl);
 extern uint64_t (*aiofn_SSL_set_options)(SSL *ssl, uint64_t options);
+extern uint64_t (*aiofn_SSL_CTX_get_options)(const SSL_CTX *ctx);
 extern long (*aiofn_SSL_ctrl)(SSL *ssl, int cmd, long larg, void *parg);
 long aiofn_SSL_set_mode(SSL *ssl, long mode);
 int aiofn_SSL_set_tlsext_host_name(const SSL *s, const char *name);
@@ -205,6 +206,7 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define SSL_set_connect_state aiofn_SSL_set_connect_state
 #define SSL_set_mode aiofn_SSL_set_mode
 #define SSL_set_options aiofn_SSL_set_options
+#define SSL_CTX_get_options aiofn_SSL_CTX_get_options
 #define SSL_set_tlsext_host_name aiofn_SSL_set_tlsext_host_name
 #define SSL_get_error aiofn_SSL_get_error
 #define SSL_is_init_finished aiofn_SSL_is_init_finished
