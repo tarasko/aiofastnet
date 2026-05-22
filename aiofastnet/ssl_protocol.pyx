@@ -1124,11 +1124,12 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         cdef:
             int last_bytes_read = 0
             Py_ssize_t total_bytes_read = 0
-            int rc = 0
+            int last_error = 0
 
         while buf_len > 0:
             last_bytes_read = self._ssl_object.read(buf_ptr, buf_len)
             if last_bytes_read <= 0:
+                last_error = self._ssl_object.get_error(last_bytes_read)
                 break
 
             buf_ptr += last_bytes_read
@@ -1144,19 +1145,18 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             else:
                 self._app_protocol.buffer_updated(total_bytes_read)
 
-        cdef int last_error = self._ssl_object.get_error(rc)
-        if unlikely(self._is_debug):
-            _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d, %s",
-                          self, buf_len, last_bytes_read, rc,
-                          ssl_error_name(last_error))
+        if last_bytes_read <= 0:
+            if unlikely(self._is_debug):
+                _logger.debug("%r: SSL_read(buf_len=%d)=%d, %s",
+                              self, buf_len, last_bytes_read,
+                              ssl_error_name(last_error))
+
+            self._post_read(last_error)
 
         # For resume_reading() check if we have some pending data for reading
         # and
         if buf_len == 0:
             self._loop.call_soon(self.buffer_updated, 0)
-            return
-
-        self._post_read(last_error)
 
     cdef inline _do_read__copied(self):
         cdef:

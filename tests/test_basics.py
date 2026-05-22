@@ -681,8 +681,7 @@ async def test_transport_base(conn_type):
             await client.wait_closed()
 
 
-@pytest.mark.skip("working on TlsTransport now, will re-enable it later")
-async def test_start_tls(loop_debug):
+async def test_start_tls():
     server_ssl_context, client_ssl_context = make_test_ssl_contexts(
         "tests/test.crt", "tests/test.key")
 
