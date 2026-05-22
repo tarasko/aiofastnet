@@ -599,7 +599,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         for data in self._write_backlog:
             total += len(data)
 
-        if self._app_protocol_aiofn:
+        if self._app_protocol_aiofn and self._app_protocol is not None:
             total += (<Protocol> self._app_protocol).get_local_write_buffer_size()
 
         if self._ssl_object is not None:
@@ -832,28 +832,26 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         """
         cdef:
             bytearray buffer = PyByteArray_FromStringAndSize(NULL, 16*1024)
-            size_t bytes_read
-            int rc = 1
+            int bytes_read
             int ssl_error
 
         while True:
-            rc = self._ssl_object.read_ex(
+            bytes_read = self._ssl_object.read(
                 PyByteArray_AS_STRING(buffer),
-                PyByteArray_GET_SIZE(buffer),
-                &bytes_read
+                PyByteArray_GET_SIZE(buffer)
             )
 
-            if rc == 1:
+            if bytes_read > 0:
                 if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d",
-                                  self, PyByteArray_GET_SIZE(buffer), bytes_read, rc)
+                    _logger.debug("%r: SSL_read(..., buf_len=%d)=%d",
+                                  self, PyByteArray_GET_SIZE(buffer), bytes_read)
                 continue
 
-            ssl_error = self._ssl_object.get_error(rc)
+            ssl_error = self._ssl_object.get_error(bytes_read)
             if unlikely(self._is_debug):
-                _logger.debug("%r: SSL_read_ex(buf_len=%d, ...)=%d, %s",
+                _logger.debug("%r: SSL_read(buf_len=%d, ...)=%d, %s",
                               self, PyByteArray_GET_SIZE(buffer),
-                              rc, ssl_error_name(ssl_error))
+                              bytes_read, ssl_error_name(ssl_error))
 
             self._flush_outgoing_bio()
 
@@ -1124,7 +1122,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             raise RuntimeError('get_buffer() returned an empty buffer')
 
         cdef:
-            size_t last_bytes_read = 0
+            int last_bytes_read = 0
             Py_ssize_t total_bytes_read = 0
             int rc = 0
 
@@ -1162,13 +1160,12 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
     cdef inline _do_read__copied(self):
         cdef:
-            size_t bytes_read
+            int bytes_read
             list data = None
             PyObject* bytes_obj
             char* bytes_buffer_ptr
             bytes first_chunk = None, curr_chunk
             Py_ssize_t bytes_estimated
-            int rc
 
         while True:
             bytes_estimated = (self._ssl_object.pending() +
@@ -1177,20 +1174,19 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             bytes_estimated = max(1024, bytes_estimated)
 
             bytes_obj = aiofn_allocate_bytes(bytes_estimated, &bytes_buffer_ptr)
-            rc = self._ssl_object.read_ex(
+            bytes_read = self._ssl_object.read(
                 bytes_buffer_ptr,
-                bytes_estimated,
-                &bytes_read)
+                bytes_estimated)
 
-            if not rc:
+            if bytes_read <= 0:
                 curr_chunk = aiofn_finalize_bytes(bytes_obj, 0)
                 break
             else:
                 curr_chunk = aiofn_finalize_bytes(bytes_obj, bytes_read)
 
             if unlikely(self._is_debug):
-                _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d",
-                              self, bytes_estimated, bytes_read, rc)
+                _logger.debug("%r: SSL_read(..., buf_len=%d)=%d",
+                              self, bytes_estimated, bytes_read)
 
             if first_chunk is None:
                 first_chunk = curr_chunk
@@ -1199,10 +1195,10 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
             else:
                 data.append(curr_chunk)
 
-        cdef int last_error = self._ssl_object.get_error(rc)
+        cdef int last_error = self._ssl_object.get_error(bytes_read)
         if unlikely(self._is_debug):
-            _logger.debug("%r: SSL_read_ex(buf_len=%d, bytes_read=%d)=%d, %s",
-                          self, bytes_estimated, bytes_read, rc,
+            _logger.debug("%r: SSL_read(..., buf_len=%d)=%d, %s",
+                          self, bytes_estimated, bytes_read,
                           ssl_error_name(last_error))
 
         user_data = None
@@ -1230,7 +1226,7 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
                 self._start_shutdown()
                 return
 
-        raise self._ssl_object.make_exc_from_ssl_error("SSL_read_ex failed", last_error)
+        raise self._ssl_object.make_exc_from_ssl_error("SSL_read failed", last_error)
 
     cdef inline _call_eof_received(self):
         if self._app_state == AppProtocolState.STATE_CON_MADE:
