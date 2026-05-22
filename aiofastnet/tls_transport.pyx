@@ -84,7 +84,7 @@ cdef class TlsTransport(Transport):
         object _app_protocol
         bint _app_protocol_is_buffered
         bint _app_protocol_aiofn
-        bint _protocol_connected
+        bint _app_protocol_connected
         dict _extra
         WriteWatermarks _write_watermarks
 
@@ -92,10 +92,10 @@ cdef class TlsTransport(Transport):
         object _sock
         object _sock_fd_obj
         int _sock_fd
+
         bint _closing
-        bint _paused
+        bint _read_paused
         bint _writer_active
-        bint _want_read
         bint _is_debug
 
         SSLObject _ssl_object
@@ -168,9 +168,8 @@ cdef class TlsTransport(Transport):
         self._ssl_layer_num = 0
         self._conn_lost = 0
         self._closing = False
-        self._paused = False
+        self._read_paused = False
         self._writer_active = False
-        self._want_read = False
         self._is_debug = loop.get_debug()
         self._server_side = server_side
         self._server_hostname = None if server_side else server_hostname
@@ -217,7 +216,7 @@ cdef class TlsTransport(Transport):
         self._app_protocol = protocol
         self._app_protocol_is_buffered = aiofn_is_buffered_protocol(protocol)
         self._app_protocol_aiofn = isinstance(protocol, Protocol)
-        self._protocol_connected = True
+        self._app_protocol_connected = True
 
     cpdef set_protocol(self, protocol):
         self._set_protocol(protocol)
@@ -251,18 +250,18 @@ cdef class TlsTransport(Transport):
         return self._closing or self._state in (SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN, SSLProtocolState.UNWRAPPED)
 
     cpdef is_reading(self):
-        return not self.is_closing() and not self._paused
+        return not self.is_closing() and not self._read_paused
 
     cpdef pause_reading(self):
         if not self.is_reading():
             return
-        self._paused = True
+        self._read_paused = True
         self._loop.remove_reader(self._sock_fd_obj)
 
     cpdef resume_reading(self):
-        if self._sock is None or self._closing or not self._paused:
+        if self._sock is None or self._closing or not self._read_paused:
             return
-        self._paused = False
+        self._read_paused = False
         self._loop.add_reader(self._sock_fd_obj, self._read_ready)
         if self._state in (SSLProtocolState.WRAPPED, SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN):
             self._loop.call_soon(self._read_ready)
@@ -390,7 +389,6 @@ cdef class TlsTransport(Transport):
 
             if ssl_error == SSLError.SSL_ERROR_WANT_READ:
                 self._flush_outgoing_bio()
-                self._want_read = True
                 return
 
             exc = self._ssl_object.make_exc_from_ssl_error(
@@ -439,7 +437,7 @@ cdef class TlsTransport(Transport):
         self._loop.call_soon(self._read_ready)
 
     cpdef _do_read(self):
-        if self._paused:
+        if self._read_paused:
             return
 
         if self._app_protocol_is_buffered:
@@ -484,7 +482,7 @@ cdef class TlsTransport(Transport):
                     self._app_protocol.buffer_updated(total_bytes_read)
 
             if buf_len == 0:
-                if not self._paused:
+                if not self._read_paused:
                     continue
                 else:
                     return
@@ -558,7 +556,6 @@ cdef class TlsTransport(Transport):
 
     cdef inline _should_retry_read(self, int last_error):
         if last_error in (SSLError.SSL_ERROR_WANT_READ, SSLError.SSL_ERROR_SYSCALL):
-            self._want_read = True
             return False
 
         if last_error == SSLError.SSL_ERROR_WANT_WRITE:
@@ -662,7 +659,6 @@ cdef class TlsTransport(Transport):
                         return
 
                 if ssl_error == SSLError.SSL_ERROR_WANT_READ:
-                    self._want_read = True
                     return
 
                 raise self._ssl_object.make_exc_from_ssl_error(
@@ -723,8 +719,6 @@ cdef class TlsTransport(Transport):
             self._do_shutdown()
 
     cdef _read_ready(self):
-        self._want_read = False
-
         if self._conn_lost or self._sock is None:
             return
 
@@ -997,7 +991,7 @@ cdef class TlsTransport(Transport):
 
     cpdef _call_connection_lost(self, exc):
         try:
-            if self._protocol_connected and self._app_state in (AppProtocolState.STATE_CON_MADE, AppProtocolState.STATE_EOF):
+            if self._app_protocol_connected and self._app_state in (AppProtocolState.STATE_CON_MADE, AppProtocolState.STATE_EOF):
                 self._app_state = AppProtocolState.STATE_CON_LOST
                 self._app_protocol.connection_lost(exc)
         finally:
