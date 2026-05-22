@@ -26,8 +26,8 @@ from .utils cimport (
     aiofn_set_nodelay,
     unlikely
 )
-from .transport cimport Transport, Protocol, WriteWatermarks
 from .ssl_object cimport (SSLObject, SSLError, ssl_error_name)
+from .transport cimport Transport, Protocol, WriteWatermarks
 from .transport import aiofn_is_buffered_protocol
 
 

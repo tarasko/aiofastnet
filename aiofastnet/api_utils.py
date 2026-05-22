@@ -4,9 +4,9 @@ import ssl
 from logging import getLogger
 from typing import Callable, Union, Optional, Tuple
 
+from .tls_transport import TlsTransport
 from .ssl_protocol import SSLProtocol
 from .transport import SocketTransport, aiofn_is_buffered_protocol
-from .tls_transport import TlsTransport
 from .wrapped_transport import _should_fallback_to_asyncio, \
     _WrappedBufferedProtocol, _WrappedProtocol
 

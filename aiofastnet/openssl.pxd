@@ -1,4 +1,4 @@
-from libc.stdint cimport uint64_t, uint8_t
+from libc.stdint cimport uint64_t
 from posix.types cimport off_t
 
 cdef extern from "openssl_compat.h" nogil:

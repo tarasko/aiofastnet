@@ -25,9 +25,9 @@ from .utils cimport (
     unlikely
 )
 from .utils import SSLProtocolState as py_SSLProtocolState
-from .transport cimport Transport, Protocol
+
+from .transport cimport Transport, Protocol, aiofn_is_buffered_protocol
 from .ssl_object cimport SSLObject, SSLError, ssl_error_name
-from .transport cimport aiofn_is_buffered_protocol
 from .openssl cimport SSL_RECEIVED_SHUTDOWN
 
 
