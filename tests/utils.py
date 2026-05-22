@@ -333,17 +333,14 @@ class ConnectionType:
 ])
 def conn_type(request):
     if request.param == "tcp":
-        return ConnectionType(name="tcp")
+        return ConnectionType(name=request.param)
     else:
         if request.param == "ssl":
             server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
-        else:
+            return ConnectionType(request.param, server_context, client_context)
+        elif request.param == "ktls":
             server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", True)
-        return ConnectionType(
-            "ssl",
-            server_context,
-            client_context,
-        )
+            return ConnectionType(request.param, server_context, client_context)
 
 
 @pytest.fixture
