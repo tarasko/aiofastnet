@@ -275,6 +275,8 @@ cdef class TlsTransport(Transport):
             return
         self._read_paused = True
         self._loop.remove_reader(self._sock_fd_obj)
+        if unlikely(self._is_debug):
+            _logger.debug("%r: reading paused by user", self)
 
     cpdef resume_reading(self):
         self._check_thread("resume_reading")
@@ -282,6 +284,8 @@ cdef class TlsTransport(Transport):
             return
         self._read_paused = False
         self._loop.add_reader(self._sock_fd_obj, self._read_ready)
+        if unlikely(self._is_debug):
+            _logger.debug("%r: reading resumed by user", self)
         if self._state in (SSLProtocolState.WRAPPED, SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN):
             self._loop.call_soon(self._read_ready)
 
@@ -535,6 +539,7 @@ cdef class TlsTransport(Transport):
                     (<Protocol>self._app_protocol).buffer_updated(total_bytes_read)
                 else:
                     self._app_protocol.buffer_updated(total_bytes_read)
+                total_bytes_read = 0
 
             if buf_len == 0:
                 if not self._read_paused:
@@ -566,14 +571,18 @@ cdef class TlsTransport(Transport):
                 bytes_read = self._ssl_object.read(bytes_buffer_ptr, bytes_estimated)
 
                 if bytes_read <= 0:
+                    last_error = self._ssl_object.get_error(bytes_read)
+                    if unlikely(self._is_debug):
+                        _logger.debug("%r: SSL_read(buf_len=%d)=%d, %s",
+                                      self, bytes_estimated, bytes_read,
+                                      ssl_error_name(last_error))
                     curr_chunk = aiofn_finalize_bytes(bytes_obj, 0)
                     break
-                else:
-                    curr_chunk = aiofn_finalize_bytes(bytes_obj, bytes_read)
 
                 if unlikely(self._is_debug):
                     _logger.debug("%r: SSL_read(buf_len=%d)=%d",
                                   self, bytes_estimated, bytes_read)
+                curr_chunk = aiofn_finalize_bytes(bytes_obj, bytes_read)
 
                 if first_chunk is None:
                     first_chunk = curr_chunk
@@ -581,12 +590,6 @@ cdef class TlsTransport(Transport):
                     data = [first_chunk, curr_chunk]
                 else:
                     data.append(curr_chunk)
-
-            last_error = self._ssl_object.get_error(bytes_read)
-            if unlikely(self._is_debug):
-                _logger.debug("%r: SSL_read(buf_len=%d)=%d, %s",
-                              self, bytes_estimated, bytes_read,
-                              ssl_error_name(last_error))
 
             user_data = None
             if data is not None:
@@ -604,7 +607,7 @@ cdef class TlsTransport(Transport):
                 return
 
     cdef inline _should_retry_read(self, int last_error):
-        if last_error in (SSLError.SSL_ERROR_WANT_READ, SSLError.SSL_ERROR_SYSCALL):
+        if last_error == SSLError.SSL_ERROR_WANT_READ:
             return False
 
         if last_error == SSLError.SSL_ERROR_WANT_WRITE:
@@ -782,21 +785,24 @@ cdef class TlsTransport(Transport):
             Py_ssize_t bytes_read
 
         try:
-            while True:
-                self._ssl_object.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
-                bytes_read = aiofn_recv(self._sock_fd, buf_ptr, buf_len)
+            if self._ssl_object.incoming != NULL:
+                while True:
+                    self._ssl_object.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
+                    bytes_read = aiofn_recv(self._sock_fd, buf_ptr, buf_len)
 
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: aiofn_recv(...,len=%d)=%d", self, buf_len, bytes_read)
+                    if unlikely(self._is_debug):
+                        _logger.debug("%r: aiofn_recv(...,len=%d)=%d", self, buf_len, bytes_read)
 
-                if bytes_read == -1:  # without exception this means EGAIN
-                    return
+                    if bytes_read == -1:  # without exception this means EGAIN
+                        return
 
-                if unlikely(bytes_read == 0):
-                    self._process_socket_eof()
-                    return
+                    if unlikely(bytes_read == 0):
+                        self._process_socket_eof()
+                        return
 
-                self._ssl_object.incoming_bio_produce(bytes_read)
+                    self._ssl_object.incoming_bio_produce(bytes_read)
+                    self._incoming_bio_updated()
+            else:
                 self._incoming_bio_updated()
 
         except BaseException as exc:
@@ -1070,6 +1076,8 @@ cdef class TlsTransport(Transport):
         finally:
             if self._sock is not None:
                 self._sock.close()
+                if unlikely(self._is_debug):
+                    _logger.debug("%r: _sock.close() called", self)
             self._sock = None
             self._app_protocol = None
             self._loop = None

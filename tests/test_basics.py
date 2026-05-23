@@ -39,7 +39,7 @@ async def test_echo(loop_debug, msg_size, conn_type, buffered_protocol):
 
 @pytest.mark.parametrize("msg_size", [1, 32, 64, 256 * 1024, 6 * 1024 * 1024, 20 * 1024 * 1024])
 @pytest.mark.parametrize("num_lines", [1, 32, 4000])
-async def test_echo_writelines(msg_size, num_lines, conn_type, buffered_protocol):
+async def test_echo_writelines(loop_debug, msg_size, num_lines, conn_type, buffered_protocol):
     payload = b"x" * msg_size
 
     async with TestServer(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
@@ -223,8 +223,7 @@ async def test_writelines_paused(conn_type):
             await client.readn(total_bytes_written)
 
 
-
-async def test_pause_reading(conn_type):
+async def test_pause_reading(loop_debug, conn_type):
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
         pytest.skip("aiofastnet doesn't work with ProactorEventLoop")
 
