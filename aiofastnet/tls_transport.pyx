@@ -1005,6 +1005,8 @@ cdef class TlsTransport(Transport):
                 if not req.waiter.done():
                     req.waiter.set_exception(exc)
 
+                raise exc
+
     cdef inline _flush_write_backlog(self):
         cdef:
             char* data_ptr
