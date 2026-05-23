@@ -618,7 +618,20 @@ cdef class TlsTransport(Transport):
             self._start_shutdown()
             return False
 
-        raise self._ssl_object.make_exc_from_ssl_error("SSL_read failed", last_error)
+        exc = self._ssl_object.make_exc_from_ssl_error("SSL_read failed", last_error)
+        # this may happen when socket BIO is used for reading and remote peer has
+        # abruptly closed connection.
+        # In such case OpenSSL reports generic error
+        # SSLError:
+        #   library: 'SSL ROUTINES'
+        #   reason: 'UNEXPECTED_EOF_WHILE_READING'
+        #
+        # To be consistent with TLS with memory BIO/TCP use,
+        # we report connection_lost with ConnectionResetError()
+        if exc.reason == 'UNEXPECTED_EOF_WHILE_READING':
+            raise ConnectionResetError() from exc
+        else:
+            raise exc
 
     cdef inline _start_shutdown(self):
         if self._state in (SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN, SSLProtocolState.UNWRAPPED):
@@ -806,7 +819,7 @@ cdef class TlsTransport(Transport):
                 self._incoming_bio_updated()
 
         except BaseException as exc:
-                self._fatal_error(exc, "Error occurred during read")
+            self._fatal_error(exc, "Error occurred during read")
 
     def _write_ready(self):
         if unlikely(self._is_debug):
