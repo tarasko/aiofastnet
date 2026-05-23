@@ -56,6 +56,17 @@ jobs:
         cat /proc/sys/net/ipv4/tcp_available_ulp || true
         cat /proc/net/tls_stat || true
 
+    - name: Print OpenSSL build info
+      if: runner.os == 'Linux' 
+      run: |
+        python - <<'PY'
+        import ssl, sysconfig
+        print("OPENSSL_VERSION:", ssl.OPENSSL_VERSION)
+        print("OPENSSL_DIR:", sysconfig.get_config_var("OPENSSL_INCLUDES"))
+        print("LIBS:", sysconfig.get_config_var("LIBS"))
+        print("LDFLAGS:", sysconfig.get_config_var("LDFLAGS"))
+        PY
+        openssl version -a || true
 
     - name: Install dependencies
       run: |
