@@ -40,7 +40,7 @@ jobs:
 
     - name: Load kTLS kernel module
       if: runner.os == 'Linux'
-      run: sudo modprobe tls || true
+      run: sudo modprobe tls
 
     - name: Install dependencies
       run: |
