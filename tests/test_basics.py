@@ -350,14 +350,7 @@ def TmpFromData(data):
 
 
 async def test_sendfile(loop_debug, conn_type):
-    if os.name == "nt":
-        pytest.skip("sendfile is not supported in Windows")
-
-    if conn_type.name == "ssl":
-        pytest.skip("SSL_sendfile is not supported for non-kernel TLS")
-
-    if conn_type.name == "ktls" and sys.platform != "linux":
-        pytest.skip("SSL_sendfile only works on Linux")
+    conn_type.check_sendfile_supported()
 
     loop = asyncio.get_running_loop()
     header = b"h" * (256*1024)
@@ -389,14 +382,7 @@ async def test_sendfile(loop_debug, conn_type):
 
 @pytest.mark.skip("broken in the branch, will re-enable it later")
 async def test_sendfile_huge_error(loop_debug):
-    if os.name == "nt":
-        pytest.skip("sendfile is not supported in Windows")
-
-    if conn_type.name == "ssl":
-        pytest.skip("SSL_sendfile is not supported for non-kernel TLS")
-
-    if conn_type.name == "ktls" and sys.platform != "linux":
-        pytest.skip("SSL_sendfile only works on Linux")
+    conn_type.check_sendfile_supported()
 
     loop = asyncio.get_running_loop()
     payload = b"p" * (20*1024*1024)

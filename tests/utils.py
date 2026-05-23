@@ -321,6 +321,15 @@ class ConnectionType:
     server_ssl_context: Optional[ssl.SSLContext] = None
     client_ssl_context: Optional[ssl.SSLContext] = None
 
+    def check_sendfile_supported(self):
+        if os.name == "nt":
+            pytest.skip("sendfile is not supported in Windows")
+
+        if self.name == "ssl":
+            pytest.skip("SSL_sendfile is not supported for non-kernel TLS")
+
+        if self.name == "ktls" and sys.platform != "linux":
+            pytest.skip("SSL_sendfile only works on Linux")
 
 @pytest.fixture(params=[
     "tcp",
