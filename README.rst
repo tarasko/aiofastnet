@@ -238,6 +238,11 @@ Building From Source
 
     $ python -m examples.benchmark
 
+6. Run tests::
+
+    $ pytest -s -v
+    $ pytest -s -v -k test_echo[uvloop-tcp-buffered-6291456] --asyncio-debug --log-cli-level DEBUG
+
 Contributing
 ============
 
