@@ -181,7 +181,6 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
     def pause_writing(self):
         _logger.debug("AsyncClient.pause_writing")
         self._is_writing_paused = True
-        self._write_resumed_fut = asyncio.get_running_loop().create_future()
 
     def resume_writing(self):
         _logger.debug("AsyncClient.resume_writing")
@@ -254,8 +253,11 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
             await asyncio.shield(self._closed)
 
     async def wait_write_resumed(self, timeout=1.0):
-        if self._write_resumed_fut is None:
+        if not self._is_writing_paused:
             return
+
+        if self._write_resumed_fut is None:
+            self._write_resumed_fut = asyncio.get_running_loop().create_future()
 
         async with async_timeout.timeout(timeout):
             return await asyncio.shield(self._write_resumed_fut)
@@ -412,6 +414,7 @@ async def TestClient(server_or_host, port=None, ssl_context=None, server_hostnam
             await client.wait_closed(1.0)
         except (TestException, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
             pass
+
 
 def make_test_ssl_contexts(cert_file: Union[str, Path], key_file: Union[str, Path], enable_ktls=False):
     cert_file = str(cert_file)
