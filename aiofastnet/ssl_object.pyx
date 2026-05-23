@@ -127,39 +127,45 @@ cdef class SSLObject:
             if self.ssl == NULL:
                 raise MemoryError("Unable to allocate SSL object")
 
-            if not use_socket_rbio:
-                self.incoming_buf = PyByteArray_FromStringAndSize(
-                    NULL, read_buffer_size)
-                self.incoming = BIO_new_static_mem(
-                    PyByteArray_AS_STRING(self.incoming_buf),
-                    <size_t> PyByteArray_GET_SIZE(self.incoming_buf)
-                )
-                if self.incoming == NULL:
-                    raise MemoryError("Unable to initialize incoming mem BIO")
-
-                BIO_set_nbio(self.incoming, 1)
-                SSL_set0_rbio(self.ssl, self.incoming)
+            if use_socket_rbio and use_socket_wbio:
+                # Before openssl 3.5 setting BIOs separately was an issue
+                # kTLS refused to enable if we use SSL_set_rfd and SSL_set_wfd
+                if SSL_set_fd(self.ssl, sock.fileno()) != 1:
+                    raise ssl.SSLError("SSL_set_fd failed")
             else:
-                if SSL_set_rfd(self.ssl, sock.fileno()) != 1:
-                    raise ssl.SSLError("SSL_set_rfd failed")
+                if not use_socket_rbio:
+                    self.incoming_buf = PyByteArray_FromStringAndSize(
+                        NULL, read_buffer_size)
+                    self.incoming = BIO_new_static_mem(
+                        PyByteArray_AS_STRING(self.incoming_buf),
+                        <size_t> PyByteArray_GET_SIZE(self.incoming_buf)
+                    )
+                    if self.incoming == NULL:
+                        raise MemoryError("Unable to initialize incoming mem BIO")
 
-            if not use_socket_wbio:
-                self.outgoing_buf = PyByteArray_FromStringAndSize(
-                    NULL, write_buffer_size)
+                    BIO_set_nbio(self.incoming, 1)
+                    SSL_set0_rbio(self.ssl, self.incoming)
+                else:
+                    if SSL_set_rfd(self.ssl, sock.fileno()) != 1:
+                        raise ssl.SSLError("SSL_set_rfd failed")
 
-                self.outgoing = BIO_new_static_mem(
-                    PyByteArray_AS_STRING(self.outgoing_buf),
-                    <size_t> PyByteArray_GET_SIZE(self.outgoing_buf)
-                )
+                if not use_socket_wbio:
+                    self.outgoing_buf = PyByteArray_FromStringAndSize(
+                        NULL, write_buffer_size)
 
-                if self.outgoing == NULL:
-                    raise MemoryError("Unable to initialize outgoing mem BIO")
+                    self.outgoing = BIO_new_static_mem(
+                        PyByteArray_AS_STRING(self.outgoing_buf),
+                        <size_t> PyByteArray_GET_SIZE(self.outgoing_buf)
+                    )
 
-                BIO_set_nbio(self.outgoing, 1)
-                SSL_set0_wbio(self.ssl, self.outgoing)
-            else:
-                if SSL_set_wfd(self.ssl, sock.fileno()) != 1:
-                    raise ssl.SSLError("SSL_set_wfd failed")
+                    if self.outgoing == NULL:
+                        raise MemoryError("Unable to initialize outgoing mem BIO")
+
+                    BIO_set_nbio(self.outgoing, 1)
+                    SSL_set0_wbio(self.ssl, self.outgoing)
+                else:
+                    if SSL_set_wfd(self.ssl, sock.fileno()) != 1:
+                        raise ssl.SSLError("SSL_set_wfd failed")
 
             SSL_set_mode(self.ssl, SSL_MODE_AUTO_RETRY | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_ENABLE_PARTIAL_WRITE)
             SSL_set_read_ahead(self.ssl, 1)
