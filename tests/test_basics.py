@@ -83,9 +83,11 @@ async def test_write_huge_close(conn_type):
             # Asyncio simply skip writing if connection is closing
             client.transport.write(payload)
 
+            # Read notes about eof_received flakiness in test_write_huge_abort
+
             assert client.transport.get_write_buffer_size() == 0
-            # TODO: Find out why macos and win fails here
-            # assert client.is_eof_received
+            if conn_type.name != 'tcp':
+                assert client.is_eof_received
 
         async with TestClient(server, ssl_context=conn_type.client_ssl_context) as client:
             client.transport.writelines([payload, payload])
@@ -98,8 +100,8 @@ async def test_write_huge_close(conn_type):
             client.transport.writelines([payload, payload])
 
             assert client.transport.get_write_buffer_size() == 0
-            # TODO: Find out why macos and win fails here
-            # assert client.is_eof_received
+            if conn_type.name != 'tcp':
+                assert client.is_eof_received
 
 
 async def test_write_huge_abort(conn_type):
