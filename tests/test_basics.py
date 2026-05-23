@@ -25,7 +25,7 @@ def buffered_protocol(request):
 
 
 @pytest.mark.parametrize("msg_size", [1, 2, 3, 4, 5, 6, 7, 8, 29, 64, 256 * 1024, 6 * 1024 * 1024])
-async def test_echo(loop_debug, msg_size, conn_type, buffered_protocol):
+async def test_echo(msg_size, conn_type, buffered_protocol):
     payload = b"x" * msg_size
 
     async with TestServer(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
@@ -39,7 +39,7 @@ async def test_echo(loop_debug, msg_size, conn_type, buffered_protocol):
 
 @pytest.mark.parametrize("msg_size", [1, 32, 64, 256 * 1024, 6 * 1024 * 1024, 20 * 1024 * 1024])
 @pytest.mark.parametrize("num_lines", [1, 32, 4000])
-async def test_echo_writelines(loop_debug, msg_size, num_lines, conn_type, buffered_protocol):
+async def test_echo_writelines(msg_size, num_lines, conn_type, buffered_protocol):
     payload = b"x" * msg_size
 
     async with TestServer(ssl_context=conn_type.server_ssl_context, is_buffered=buffered_protocol) as server:
@@ -49,7 +49,7 @@ async def test_echo_writelines(loop_debug, msg_size, num_lines, conn_type, buffe
             assert echoed == payload
 
 
-async def test_write_huge_close(loop_debug, conn_type):
+async def test_write_huge_close(conn_type):
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop) and sys.version_info < (3, 11):
         pytest.skip("ProactorEventLoop in 3.9 and 3.10 had issues with connection closing")
 
@@ -102,7 +102,7 @@ async def test_write_huge_close(loop_debug, conn_type):
             # assert client.is_eof_received
 
 
-async def test_write_huge_abort(loop_debug, conn_type):
+async def test_write_huge_abort(conn_type):
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
         pytest.skip("ProactorEventLoop has different semantics around exceptions from data_received")
 
@@ -223,7 +223,7 @@ async def test_writelines_paused(conn_type):
             await client.readn(total_bytes_written)
 
 
-async def test_pause_reading(loop_debug, conn_type):
+async def test_pause_reading(conn_type):
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
         pytest.skip("aiofastnet doesn't work with ProactorEventLoop")
 
@@ -246,7 +246,7 @@ async def test_pause_reading(loop_debug, conn_type):
             client.transport.resume_reading()
 
 
-async def test_ssl_renegotiate_midstream(loop_debug):
+async def test_ssl_renegotiate_midstream():
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
         pytest.skip("aiofastnet doesn't work with ProactorEventLoop")
 
@@ -349,7 +349,7 @@ def TmpFromData(data):
             pass
 
 
-async def test_sendfile(loop_debug, conn_type):
+async def test_sendfile(conn_type):
     conn_type.check_sendfile_supported()
 
     loop = asyncio.get_running_loop()
@@ -381,7 +381,7 @@ async def test_sendfile(loop_debug, conn_type):
 
 
 @pytest.mark.skip("broken in the branch, will re-enable it later")
-async def test_sendfile_huge_error(loop_debug):
+async def test_sendfile_huge_error():
     conn_type.check_sendfile_supported()
 
     loop = asyncio.get_running_loop()
