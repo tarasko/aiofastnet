@@ -41,6 +41,7 @@ jobs:
     - name: Load kTLS kernel module
       if: runner.os == 'Linux'
       run: sudo modprobe tls
+
     - name: Print kTLS info
       if: runner.os == 'Linux'
       run: |
@@ -57,7 +58,7 @@ jobs:
         cat /proc/net/tls_stat || true
 
     - name: Print OpenSSL build info
-      if: runner.os == 'Linux' 
+      if: runner.os == 'Linux'
       run: |
         python - <<'PY'
         import ssl, sysconfig
@@ -101,6 +102,33 @@ jobs:
 
     - name: Load kTLS kernel module
       run: sudo modprobe tls || true
+
+    - name: Print kTLS info
+      if: runner.os == 'Linux'
+      run: |
+        uname -a
+        python -VV
+        python - <<'PY'
+        import ssl
+        print("OPENSSL_VERSION:", ssl.OPENSSL_VERSION)
+        print("HAS OP_ENABLE_KTLS:", hasattr(ssl, "OP_ENABLE_KTLS"))
+        print("OP_ENABLE_KTLS:", getattr(ssl, "OP_ENABLE_KTLS", None))
+        print("OPENSSL_VERSION_INFO:", ssl.OPENSSL_VERSION_INFO)
+        PY
+        cat /proc/sys/net/ipv4/tcp_available_ulp || true
+        cat /proc/net/tls_stat || true
+
+    - name: Print OpenSSL build info
+      if: runner.os == 'Linux'
+      run: |
+        python - <<'PY'
+        import ssl, sysconfig
+        print("OPENSSL_VERSION:", ssl.OPENSSL_VERSION)
+        print("OPENSSL_DIR:", sysconfig.get_config_var("OPENSSL_INCLUDES"))
+        print("LIBS:", sysconfig.get_config_var("LIBS"))
+        print("LDFLAGS:", sysconfig.get_config_var("LDFLAGS"))
+        PY
+        openssl version -a || true
 
     - name: Run tests on musllinux
       run: |
