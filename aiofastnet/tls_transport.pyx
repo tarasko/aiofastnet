@@ -655,7 +655,7 @@ cdef class TlsTransport(Transport):
 
     cdef inline _do_read_into_void(self):
         cdef:
-            bytearray buffer = bytearray(16 * 1024)
+            bytearray buffer = bytearray(17 * 1024)
             int bytes_read
             int ssl_error
 
@@ -1066,7 +1066,9 @@ cdef class TlsTransport(Transport):
             if ssl_error == SSLError.SSL_ERROR_WANT_READ:
                 return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
 
-            if ssl_error == SSLError.SSL_ERROR_SYSCALL:
+            # When socket BIO is used, SSL_write may fail with any of these.
+            # Treat them as lost connection
+            if ssl_error in (SSLError.SSL_ERROR_SYSCALL, SSLError.SSL_ERROR_ZERO_RETURN):
                 raise ConnectionResetError()
 
             raise self._ssl_object.make_exc_from_ssl_error("SSL_write failed", ssl_error)
