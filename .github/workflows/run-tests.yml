@@ -79,10 +79,10 @@ jobs:
       run: |
         python setup.py build_ext --inplace
 
-#    - uses: actions/checkout@v6
-#    - name: Setup tmate session
-#      if: runner.os == 'macOS'
-#      uses: mxschmitt/action-tmate@v3
+    - uses: actions/checkout@v6
+    - name: Setup tmate session
+      if: runner.os == 'Linux'
+      uses: mxschmitt/action-tmate@v3
 
     - name: Run tests
       run: |
