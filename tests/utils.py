@@ -354,11 +354,6 @@ def conn_type(request):
             return ConnectionType(request.param, server_context, client_context)
 
 
-@pytest.fixture
-async def loop_debug():
-    asyncio.get_running_loop().set_debug(True)
-
-
 @asynccontextmanager
 async def TestServer(protocol_factory=None, host="127.0.0.1", port=0, ssl_context=None, is_buffered=False):
     loop = asyncio.get_running_loop()

@@ -5,7 +5,7 @@ import pytest
 from async_timeout import timeout
 
 from aiofastnet import start_server, open_connection
-from tests.utils import EchoServerHandle, conn_type, _logger, loop_debug
+from tests.utils import EchoServerHandle, conn_type, _logger
 
 
 @asynccontextmanager

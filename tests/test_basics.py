@@ -14,7 +14,7 @@ from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Transport
 from tests.utils import TestClient, TestServer, \
     multiloop_event_loop_policy, make_test_ssl_contexts, ConnectionType, \
-    AsyncClient, TestException, exc_queue, _logger, conn_type, loop_debug
+    AsyncClient, TestException, exc_queue, _logger, conn_type
 
 event_loop_policy = multiloop_event_loop_policy()
 
