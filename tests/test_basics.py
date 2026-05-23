@@ -123,6 +123,13 @@ async def test_write_huge_abort(conn_type):
         def connection_lost(self, exc):
             _logger.debug("FaulyServerProtocol.connection_lost(%s) called", str(exc))
 
+    # Normally we would expect client to not have eof_received event if peer disconnect with abort.
+    # This is definitely true only for TLS where eof_received mean graceful close_notify
+    # However for TCP, eof_received happens when recv syscall returns with 0 bytes read.
+    # When SocketTransport is waiting for both write_ready and read_ready, the behaviour
+    # becomes flaky. If write_ready happens first, then send fails and we call connection_lost
+    # immediately. If read_ready happens first, then we call eof_received.
+
     async with TestServer(FaulyServerProtocol, ssl_context=conn_type.server_ssl_context) as server:
         async with TestClient(server, ssl_context=conn_type.client_ssl_context) as client:
             client.transport.write(payload)
@@ -135,7 +142,8 @@ async def test_write_huge_abort(conn_type):
             client.transport.write(payload)
 
             assert client.transport.get_write_buffer_size() == 0
-            assert not client.is_eof_received
+            if conn_type.name != 'tcp':
+                assert not client.is_eof_received
 
         async with TestClient(server, ssl_context=conn_type.client_ssl_context) as client:
             client.transport.writelines([payload, payload])
@@ -148,7 +156,8 @@ async def test_write_huge_abort(conn_type):
             client.transport.writelines([payload, payload])
 
             assert client.transport.get_write_buffer_size() == 0
-            assert not client.is_eof_received
+            if conn_type.name != 'tcp':
+                assert not client.is_eof_received
 
 
 async def test_write_paused(conn_type):
