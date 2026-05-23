@@ -831,10 +831,10 @@ cdef class TlsTransport(Transport):
         if self._connection_lost_scheduled:
             return
 
-        self._drop_writer()
-        self._flush_outgoing_bio()
-
         try:
+            self._drop_writer()
+            self._flush_outgoing_bio()
+
             if self._state == SSLProtocolState.DO_HANDSHAKE:
                 self._do_handshake()
             elif self._state == SSLProtocolState.WRAPPED:
@@ -946,6 +946,9 @@ cdef class TlsTransport(Transport):
         if not (self._ssl_object.sendfile_available() and self._ssl_object.ktls_send_enabled()):
             raise NotImplementedError()
 
+        if not self._is_protocol_ready():
+            raise RuntimeError("Transport is closing")
+
         cdef SendFileRequest req = _make_send_file_request(file, offset, count)
 
         try:
@@ -964,6 +967,7 @@ cdef class TlsTransport(Transport):
             return await req.waiter
         except BaseException as ex:
             self._fatal_error(ex, 'Fatal error on TLS transport')
+            raise
 
     cdef inline _try_sendfile(self, SendFileRequest req):
         while True:
@@ -976,7 +980,8 @@ cdef class TlsTransport(Transport):
                 req.offset += bytes_written
                 req.count -= bytes_written
                 if req.count == 0:
-                    req.waiter.set_result(None)
+                    if not req.waiter.done():
+                        req.waiter.set_result(None)
                     return True
                 else:
                     continue
@@ -993,7 +998,12 @@ cdef class TlsTransport(Transport):
                 elif ssl_error == SSLError.SSL_ERROR_WANT_READ:
                     return False
 
-                raise self._ssl_object.make_exc_from_ssl_error("SSL_sendfile failed", ssl_error)
+                # When socket BIO is used, SSL_sendfile may fail with SSL_ERROR_SYSCALL went peer close socket.
+                # Treat it as lost connection.
+                exc = ConnectionResetError() if ssl_error == SSLError.SSL_ERROR_SYSCALL else \
+                    self._ssl_object.make_exc_from_ssl_error("SSL_sendfile failed", ssl_error)
+                if not req.waiter.done():
+                    req.waiter.set_exception(exc)
 
     cdef inline _flush_write_backlog(self):
         cdef:
@@ -1104,7 +1114,7 @@ cdef class TlsTransport(Transport):
                 server._detach(self)
                 self._server = None
 
-    def _force_close(self, exc):
+    cdef inline _force_close(self, exc):
         if self._sock is None:
             return
         self._connection_lost_scheduled = True
@@ -1118,6 +1128,7 @@ cdef class TlsTransport(Transport):
         cdef SendFileRequest req
         for data in self._write_backlog:
             if isinstance(data, SendFileRequest):
+                _logger.debug("Found SendFileRequest in write_backlog")
                 req = <SendFileRequest>data
                 if not req.waiter.done():
                     req.waiter.set_exception(exc)

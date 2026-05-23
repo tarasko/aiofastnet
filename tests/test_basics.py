@@ -391,8 +391,7 @@ async def test_sendfile(conn_type):
                 assert reply == tail
 
 
-@pytest.mark.skip("broken in the branch, will re-enable it later")
-async def test_sendfile_huge_error():
+async def test_sendfile_huge_error(conn_type):
     conn_type.check_sendfile_supported()
 
     loop = asyncio.get_running_loop()
@@ -403,7 +402,7 @@ async def test_sendfile_huge_error():
             self.transport = transport
 
         def data_received(self, data):
-            self.transport.close()
+            self.transport.abort()
 
     class Client(AsyncClient):
         def pause_writing(self):
@@ -413,10 +412,21 @@ async def test_sendfile_huge_error():
             pass
 
     with TmpFromData(payload) as tmp:
-        async with TestServer(FaultyServerProtocol) as server:
-            async with TestClient(server, protocol_factory=Client) as client:
-                with pytest.raises((ConnectionResetError, BrokenPipeError)):
-                    await sendfile(loop, client.transport, tmp, offset=0, count=len(payload))
+        async with TestServer(FaultyServerProtocol, ssl_context=conn_type.server_ssl_context) as server:
+            async with TestClient(server, ssl_context=conn_type.client_ssl_context, protocol_factory=Client) as client:
+
+                # SSL_sendfile may return that suddenly all data is successfully sent when peer close connection
+                # So we can't reliably assert exception.
+                # But for a regular sendfile we can
+                if conn_type.name == 'ktls':
+                    try:
+                        await sendfile(loop, client.transport, tmp, offset=0, count=len(payload))
+                        await client.wait_closed()
+                    except (ConnectionResetError, BrokenPipeError):
+                        pass
+                else:
+                    with pytest.raises((ConnectionResetError, BrokenPipeError)):
+                        await sendfile(loop, client.transport, tmp, offset=0, count=len(payload))
 
                 with pytest.raises(RuntimeError, match="is closing"):
                     await sendfile(loop, client.transport, tmp, offset=0, count=len(payload))

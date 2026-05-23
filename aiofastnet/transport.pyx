@@ -679,6 +679,12 @@ cdef class SocketTransport(Transport):
 
     async def sendfile(self, file, offset, count):
         self._check_thread("sendfile")
+        if self._eof:
+            raise RuntimeError('Cannot call sendfile() after write_eof()')
+
+        if self._closing or self._conn_lost:
+            raise RuntimeError("Transport is closing")
+
         cdef SendFileRequest req = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
         req.file = file
         req.offset = offset
