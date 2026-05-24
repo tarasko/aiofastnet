@@ -19,8 +19,8 @@ async def test_wrong_thread_assert(conn_type):
     payload = b"x"
 
     with ThreadPoolExecutor(max_workers=1) as executor:
-        async with TestServer(ssl_context=conn_type.server_ssl_context) as server:
-            async with TestClient(server, ssl_context=conn_type.client_ssl_context) as client:
+        async with TestServer(ct=conn_type) as server:
+            async with TestClient(server, ct=conn_type) as client:
                 with pytest.raises(RuntimeError, match="wrong thread"):
                     executor.submit(client.transport.get_extra_info, "socket").result()
 

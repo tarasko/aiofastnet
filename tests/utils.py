@@ -327,15 +327,21 @@ class ConnectionType:
         if os.name == "nt":
             pytest.skip("sendfile is not supported in Windows")
 
-        if self.name == "ssl":
+        if self.name in ("ssl", "stls"):
             pytest.skip("SSL_sendfile is not supported for non-kernel TLS")
 
         if self.name == "ktls" and sys.platform != "linux":
             pytest.skip("SSL_sendfile only works on Linux")
 
+    @property
+    def use_start_tls(self):
+        return self.name == "stls"
+
+
 @pytest.fixture(params=[
     "tcp",
     "ssl",
+    "stls",     # Use TLSTransport_Transport by using start_tls
     pytest.param("ktls",
                  marks=pytest.mark.skipif(sys.version_info < (3, 12),
                                           reason="kTLS tests require Python >= 3.12"
@@ -346,7 +352,7 @@ def conn_type(request):
     if request.param == "tcp":
         return ConnectionType(name=request.param)
     else:
-        if request.param == "ssl":
+        if request.param in ("ssl", "stls"):
             server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
             return ConnectionType(request.param, server_context, client_context)
         elif request.param == "ktls":
@@ -354,10 +360,29 @@ def conn_type(request):
             return ConnectionType(request.param, server_context, client_context)
 
 
+@pytest.fixture(params=[
+    "ssl",
+    "stls",     # Use TLSTransport_Transport by using start_tls
+    pytest.param("ktls",
+                 marks=pytest.mark.skipif(sys.version_info < (3, 12),
+                                          reason="kTLS tests require Python >= 3.12"
+                                          )
+                 )
+])
+def ssl_conn_type(request):
+    if request.param in ("ssl", "stls"):
+        server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
+        return ConnectionType(request.param, server_context, client_context)
+    elif request.param == "ktls":
+        server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", True)
+        return ConnectionType(request.param, server_context, client_context)
+
+
 @asynccontextmanager
 async def TestServer(protocol_factory=None,
                      host="127.0.0.1", port=0,
-                     ssl_context=None, is_buffered=False):
+                     ct: ConnectionType=ConnectionType("tcp"),
+                     is_buffered=False):
     loop = asyncio.get_running_loop()
     clients = set()
     client_waiters = []
@@ -368,7 +393,7 @@ async def TestServer(protocol_factory=None,
         protocol_factory,
         host=host,
         port=port,
-        ssl=ssl_context,
+        ssl=ct.server_ssl_context,
     )
     try:
         resolved_port = server.sockets[0].getsockname()[1]
@@ -384,7 +409,7 @@ async def TestServer(protocol_factory=None,
 
 @asynccontextmanager
 async def TestClient(server_or_host, port=None,
-                     ssl_context=None,
+                     ct: ConnectionType=ConnectionType("tcp"),
                      server_hostname=None,
                      is_buffered=False, protocol_factory=AsyncClient):
     if isinstance(server_or_host, EchoServerHandle):
@@ -401,7 +426,7 @@ async def TestClient(server_or_host, port=None,
         lambda: protocol_factory(is_buffered),
         host=host,
         port=port,
-        ssl=ssl_context,
+        ssl=ct.client_ssl_context,
         server_hostname=server_hostname,
     )
     try:
