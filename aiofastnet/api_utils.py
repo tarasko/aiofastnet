@@ -4,7 +4,7 @@ import ssl
 from logging import getLogger
 from typing import Callable, Union, Optional, Tuple
 
-from .tls_transport import TlsTransport
+from .tls_transport import TLSTransport_Socket, TLSTransport_Transport
 from .ssl_protocol import SSLProtocol
 from .transport import SocketTransport, aiofn_is_buffered_protocol
 from .wrapped_transport import _should_fallback_to_asyncio, \
@@ -80,7 +80,7 @@ async def _create_connection_transport(
         if ssl:
             sslcontext = None if isinstance(ssl, bool) else ssl
             if ssl_merge_transports:
-                transport = TlsTransport(
+                transport = TLSTransport_Socket(
                     loop, sock, protocol, sslcontext,
                     waiter=waiter,
                     server_side=server_side,
@@ -90,14 +90,16 @@ async def _create_connection_transport(
                     server=server
                 )
             else:
-                ssl_protocol = SSLProtocol(
-                    loop, protocol, sslcontext, waiter,
-                    server_side, server_hostname,
+                ssl_protocol = TLSTransport_Transport(
+                    loop, protocol, sslcontext,
+                    waiter=waiter,
+                    server_side=server_side,
+                    server_hostname=server_hostname,
                     ssl_handshake_timeout=ssl_handshake_timeout,
                     ssl_shutdown_timeout=ssl_shutdown_timeout
                 )
                 SocketTransport(loop, sock, ssl_protocol, server=server)
-                transport = ssl_protocol.get_app_transport()
+                transport = ssl_protocol
         else:
             transport = SocketTransport(loop, sock, protocol,
                                         waiter=waiter, server=server)
