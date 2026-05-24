@@ -960,18 +960,20 @@ cdef class TlsTransport(Transport):
         if not self._is_protocol_ready():
             return
 
-        cdef char* data_ptr
-        cdef Py_ssize_t data_len
-        cdef bint add_to_backlog = False
-        cdef Py_ssize_t idx
+        if unlikely(self._write_backlog):
+            for data in list_of_data:
+                self._append_to_backlog(data, False)
+            self._maybe_pause_protocol()
+            return
+
+        cdef:
+            char* data_ptr
+            Py_ssize_t data_len
+            bint add_to_backlog = False
+            Py_ssize_t data_cnt = len(list_of_data)
+            Py_ssize_t idx
 
         try:
-            if self._write_backlog:
-                for data in list_of_data:
-                    self._append_to_backlog(data, False)
-                self._maybe_pause_protocol()
-                return
-
             for idx in range(len(list_of_data)):
                 data = list_of_data[idx]
                 if add_to_backlog:
