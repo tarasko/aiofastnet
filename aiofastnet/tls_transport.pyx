@@ -1378,7 +1378,7 @@ cdef class TLSTransport_Socket(TLSTransportBase):
                 self._server = None
 
 
-cdef class TLSTransport_Transport(TLSTransportBase):
+cdef class TLSTransport_Transport(TLSTransportBase, asyncio.BufferedProtocol):
     """
     Act as both BufferedProtocol for the downstream layer.
     And as a Transport for upstream

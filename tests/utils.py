@@ -355,7 +355,9 @@ def conn_type(request):
 
 
 @asynccontextmanager
-async def TestServer(protocol_factory=None, host="127.0.0.1", port=0, ssl_context=None, is_buffered=False):
+async def TestServer(protocol_factory=None,
+                     host="127.0.0.1", port=0,
+                     ssl_context=None, is_buffered=False):
     loop = asyncio.get_running_loop()
     clients = set()
     client_waiters = []
@@ -381,7 +383,10 @@ async def TestServer(protocol_factory=None, host="127.0.0.1", port=0, ssl_contex
 
 
 @asynccontextmanager
-async def TestClient(server_or_host, port=None, ssl_context=None, server_hostname=None, is_buffered=False, protocol_factory=AsyncClient):
+async def TestClient(server_or_host, port=None,
+                     ssl_context=None,
+                     server_hostname=None,
+                     is_buffered=False, protocol_factory=AsyncClient):
     if isinstance(server_or_host, EchoServerHandle):
         host = server_or_host.host
         port = server_or_host.port
