@@ -13,10 +13,10 @@ async def StreamEchoServer(host="127.0.0.1", port=0, ssl_context=None):
     loop = asyncio.get_running_loop()
 
     async def client_connection_cb(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        _logger.debug("SERVER: client connected")
+        _logger.debug("SERVER: connected")
         while True:
             data = await reader.read(1024)
-            _logger.debug("SERVER: client got %d bytes", len(data))
+            _logger.debug("SERVER: got %d bytes", len(data))
             if not data:
                 break
             writer.write(data)
