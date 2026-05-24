@@ -27,7 +27,6 @@ async def create_connection(
         ssl_shutdown_timeout=None,
         ssl_incoming_bio_size=None,
         ssl_outgoing_bio_size=None,
-        ssl_merge_transports=False,
         happy_eyeballs_delay=None,
         interleave=None,
         all_errors=False):
@@ -169,7 +168,6 @@ async def create_connection(
         ssl_shutdown_timeout=ssl_shutdown_timeout,
         ssl_incoming_bio_size=ssl_incoming_bio_size,
         ssl_outgoing_bio_size=ssl_outgoing_bio_size,
-        ssl_merge_transports=ssl_merge_transports
     )
     if loop.get_debug():
         # Get the socket from the transport because SSL transport closes

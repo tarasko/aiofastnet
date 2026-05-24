@@ -30,7 +30,6 @@ async def _create_connection_transport(
         ssl_shutdown_timeout: Optional[float]=None,
         ssl_incoming_bio_size: Optional[int]=None,
         ssl_outgoing_bio_size: Optional[int]=None,
-        ssl_merge_transports: bool=False,
         server=None
 ) -> Tuple[asyncio.Transport, asyncio.BaseProtocol]:
     sock.setblocking(False)
@@ -79,27 +78,15 @@ async def _create_connection_transport(
         waiter = loop.create_future()
         if ssl:
             sslcontext = None if isinstance(ssl, bool) else ssl
-            if ssl_merge_transports:
-                transport = TLSTransport_Socket(
-                    loop, sock, protocol, sslcontext,
-                    waiter=waiter,
-                    server_side=server_side,
-                    server_hostname=server_hostname,
-                    ssl_handshake_timeout=ssl_handshake_timeout,
-                    ssl_shutdown_timeout=ssl_shutdown_timeout,
-                    server=server
-                )
-            else:
-                ssl_protocol = TLSTransport_Transport(
-                    loop, protocol, sslcontext,
-                    waiter=waiter,
-                    server_side=server_side,
-                    server_hostname=server_hostname,
-                    ssl_handshake_timeout=ssl_handshake_timeout,
-                    ssl_shutdown_timeout=ssl_shutdown_timeout
-                )
-                SocketTransport(loop, sock, ssl_protocol, server=server)
-                transport = ssl_protocol
+            transport = TLSTransport_Socket(
+                loop, sock, protocol, sslcontext,
+                waiter=waiter,
+                server_side=server_side,
+                server_hostname=server_hostname,
+                ssl_handshake_timeout=ssl_handshake_timeout,
+                ssl_shutdown_timeout=ssl_shutdown_timeout,
+                server=server
+            )
         else:
             transport = SocketTransport(loop, sock, protocol,
                                         waiter=waiter, server=server)

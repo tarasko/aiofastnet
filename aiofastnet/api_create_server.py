@@ -42,7 +42,6 @@ async def create_server(
         ssl_shutdown_timeout=None,
         ssl_incoming_bio_size=None,
         ssl_outgoing_bio_size=None,
-        ssl_merge_transports=False,
         start_serving=True):
     """Create a TCP server.
 
@@ -187,7 +186,6 @@ async def create_server(
         ssl_shutdown_timeout,
         ssl_incoming_bio_size,
         ssl_outgoing_bio_size,
-        ssl_merge_transports
     )
     if start_serving:
         server._start_serving()
@@ -203,8 +201,8 @@ async def create_server(
 class Server(asyncio.AbstractServer):
     def __init__(self, loop, sockets, protocol_factory, ssl_context, backlog,
                  ssl_handshake_timeout, ssl_shutdown_timeout,
-                 ssl_incoming_bio_size, ssl_outgoing_bio_size,
-                 ssl_merge_transports):
+                 ssl_incoming_bio_size, ssl_outgoing_bio_size
+                 ):
         self._loop = loop
         self._sockets = sockets
         # Weak references so we don't break Transport's ability to
@@ -218,7 +216,6 @@ class Server(asyncio.AbstractServer):
         self._ssl_shutdown_timeout = ssl_shutdown_timeout
         self._ssl_incoming_bio_size = ssl_incoming_bio_size
         self._ssl_outgoing_bio_size = ssl_outgoing_bio_size
-        self._ssl_merge_transports = ssl_merge_transports
         self._serving = False
         self._serving_forever_fut = None
 
@@ -254,8 +251,7 @@ class Server(asyncio.AbstractServer):
                 self._ssl_handshake_timeout,
                 self._ssl_shutdown_timeout,
                 self._ssl_incoming_bio_size,
-                self._ssl_outgoing_bio_size,
-                self._ssl_merge_transports)
+                self._ssl_outgoing_bio_size)
 
     def get_loop(self):
         return self._loop
@@ -389,8 +385,7 @@ def _accept_connection(
         ssl_handshake_timeout,
         ssl_shutdown_timeout,
         ssl_incoming_bio_size,
-        ssl_outgoing_bio_size,
-        ssl_merge_transports
+        ssl_outgoing_bio_size
 ):
     # This method is only called once for each event loop tick where the
     # listening socket has triggered an EVENT_READ. There may be multiple
@@ -430,8 +425,7 @@ def _accept_connection(
                                 ssl_handshake_timeout,
                                 ssl_shutdown_timeout,
                                 ssl_incoming_bio_size,
-                                ssl_outgoing_bio_size,
-                                ssl_merge_transports
+                                ssl_outgoing_bio_size
                                 )
             else:
                 raise  # The event loop will catch, log and ignore it.
@@ -439,8 +433,8 @@ def _accept_connection(
             accept = _accept_connection2(
                 loop, protocol_factory, conn, sslcontext, server,
                 ssl_handshake_timeout, ssl_shutdown_timeout,
-                ssl_incoming_bio_size, ssl_outgoing_bio_size,
-                ssl_merge_transports)
+                ssl_incoming_bio_size, ssl_outgoing_bio_size
+            )
             asyncio.create_task(accept)
 
 
@@ -452,8 +446,8 @@ async def _accept_connection2(
         ssl_handshake_timeout,
         ssl_shutdown_timeout,
         ssl_incoming_bio_size,
-        ssl_outgoing_bio_size,
-        ssl_merge_transports):
+        ssl_outgoing_bio_size
+):
     protocol = None
     transport = None
     try:
@@ -464,7 +458,6 @@ async def _accept_connection2(
             ssl_shutdown_timeout=ssl_shutdown_timeout,
             ssl_incoming_bio_size=ssl_incoming_bio_size,
             ssl_outgoing_bio_size=ssl_outgoing_bio_size,
-            ssl_merge_transports=ssl_merge_transports,
             server=server
         )
     except (SystemExit, KeyboardInterrupt):
@@ -489,13 +482,12 @@ def _start_serving(loop, protocol_factory, sock,
                    ssl_shutdown_timeout,
                    ssl_incoming_bio_size,
                    ssl_outgoing_bio_size,
-                   ssl_merge_transports
                    ):
     loop.add_reader(sock.fileno(), _accept_connection, loop,
                     protocol_factory, sock, sslcontext, server, backlog,
                     ssl_handshake_timeout, ssl_shutdown_timeout,
-                    ssl_incoming_bio_size, ssl_outgoing_bio_size,
-                    ssl_merge_transports)
+                    ssl_incoming_bio_size, ssl_outgoing_bio_size
+                    )
 
 
 def _set_reuseport(sock):

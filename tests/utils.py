@@ -367,7 +367,6 @@ async def TestServer(protocol_factory=None, host="127.0.0.1", port=0, ssl_contex
         host=host,
         port=port,
         ssl=ssl_context,
-        ssl_merge_transports=True
     )
     try:
         resolved_port = server.sockets[0].getsockname()[1]
@@ -399,7 +398,6 @@ async def TestClient(server_or_host, port=None, ssl_context=None, server_hostnam
         port=port,
         ssl=ssl_context,
         server_hostname=server_hostname,
-        ssl_merge_transports=True
     )
     try:
         yield client

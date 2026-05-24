@@ -50,8 +50,7 @@ async def EchoServer(use_aiofastnet,
                      sndbuf_size: int | None = None,
                      host: str = "127.0.0.1",
                      port: int = 0,
-                     reuse_port: bool | None = None,
-                     ssl_merge_transports=False):
+                     reuse_port: bool | None = None):
     loop = asyncio.get_running_loop()
 
     if use_aiofastnet:
@@ -62,7 +61,6 @@ async def EchoServer(use_aiofastnet,
             port=port,
             ssl=server_ssl,
             reuse_port=reuse_port,
-            ssl_merge_transports=ssl_merge_transports
         )
     else:
         server = await loop.create_server(
@@ -90,8 +88,8 @@ async def EchoClient(use_aiofastnet,
                      payload: bytes,
                      client_ssl: ssl.SSLContext | None,
                      sndbuf_size: int | None = None,
-                     host: str = "127.0.0.1",
-                     ssl_merge_transports=False) -> ClientProtocol:
+                     host: str = "127.0.0.1"
+                     ) -> ClientProtocol:
     loop = asyncio.get_running_loop()
 
     if use_aiofastnet:
@@ -101,8 +99,7 @@ async def EchoClient(use_aiofastnet,
             host=host,
             port=port,
             ssl=client_ssl,
-            server_hostname=host if client_ssl is not None else None,
-            ssl_merge_transports=ssl_merge_transports
+            server_hostname=host if client_ssl is not None else None
         )
     else:
         transport, client = await loop.create_connection(
@@ -131,10 +128,9 @@ async def run_pair(
     client_ssl: ssl.SSLContext | None,
     barrier: threading.Barrier | asyncio.Barrier | None,
     sndbuf_size: int | None = None,
-    ssl_merge_transports: bool = False
 ) -> int:
-    async with EchoServer(use_aiofastnet, server_ssl, sndbuf_size, ssl_merge_transports=ssl_merge_transports) as server_port:
-        async with EchoClient(use_aiofastnet, server_port, duration, payload, client_ssl, sndbuf_size, ssl_merge_transports=ssl_merge_transports) as client:
+    async with EchoServer(use_aiofastnet, server_ssl, sndbuf_size) as server_port:
+        async with EchoClient(use_aiofastnet, server_port, duration, payload, client_ssl, sndbuf_size) as client:
             if barrier is not None:
                 if isinstance(barrier, asyncio.Barrier):
                     await barrier.wait()

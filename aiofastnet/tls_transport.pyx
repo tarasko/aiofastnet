@@ -344,9 +344,6 @@ cdef class TLSTransportBase(Transport):
         if self._app_protocol_aiofn and self._app_protocol is not None:
             total += (<Protocol> self._app_protocol).get_local_write_buffer_size()
 
-        if self._ssl_object is not None:
-            total += self._ssl_object.outgoing_bio_pending()
-
         return total
 
     cdef inline _check_thread(self, meth):
@@ -390,7 +387,7 @@ cdef class TLSTransportBase(Transport):
 
     cdef _retry_ssl_read(self):
         if unlikely(self._is_debug):
-            _logger.debug("%r: _read_ready event", self)
+            _logger.debug("%r: _retry_ssl_read event", self)
 
         if self._connection_lost_scheduled:
             return
@@ -540,7 +537,7 @@ cdef class TLSTransportBase(Transport):
                 else:
                     return
 
-            if not self._should_retry_read(last_error):
+            if not self._should_retry_read(last_error) or self._read_paused:
                 return
 
     cdef inline Py_ssize_t _pending_estimate(self) noexcept:
@@ -596,7 +593,7 @@ cdef class TLSTransportBase(Transport):
                 else:
                     self._app_protocol.data_received(user_data)
 
-            if not self._should_retry_read(last_error):
+            if not self._should_retry_read(last_error) or self._read_paused:
                 return
 
     cdef inline _should_retry_read(self, int last_error):
@@ -1146,9 +1143,14 @@ cdef class TLSTransport_Socket(TLSTransportBase):
         if self.is_closing() or not self._read_paused:
             return
         self._read_paused = False
-        self._loop.add_reader(self._sock_fd_obj, self._read_ready)
         if unlikely(self._is_debug):
             _logger.debug("%r: reading resumed by user", self)
+        self._loop.add_reader(self._sock_fd_obj, self._read_ready)
+
+        # We need to also manually schedule _read_ready event because there
+        # might be some leftover data in incoming BIO or openssl internal
+        # read buffer. We can't rely only on _loop.add_reader, because if
+        # socket has no data to read then we will get stuck.
         if self._state in (SSLProtocolState.WRAPPED, SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN):
             self._loop.call_soon(self._read_ready)
 
@@ -1313,7 +1315,7 @@ cdef class TLSTransport_Socket(TLSTransportBase):
 
         try:
             if self._ssl_object.incoming != NULL:
-                while True:
+                while not self._read_paused:
                     self._ssl_object.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
                     bytes_read = aiofn_recv(self._sock_fd, buf_ptr, buf_len)
 
