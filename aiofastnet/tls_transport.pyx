@@ -5,6 +5,8 @@ import warnings
 from asyncio.trsock import TransportSocket
 from logging import getLogger
 
+from cpython.memoryview cimport PyMemoryView_FromMemory
+from cpython.buffer cimport PyBUF_READ
 from cpython.bytearray cimport PyByteArray_AS_STRING, PyByteArray_GET_SIZE
 from cpython.bytes cimport PyBytes_FromStringAndSize
 from cpython.object cimport PyObject
@@ -92,9 +94,11 @@ cdef class TlsTransport(Transport):
         WriteWatermarks _write_watermarks
 
         object _server
-        object _sock            #
+        object _sock
         object _sock_fd_obj     # Cache python object for int fd, loop add_reader/add_writer expects it
         int _sock_fd
+
+        object _transport
 
         bint _read_paused               # Is reading paused by the user
         bint _write_ready_registered    # Are we registered for _write_ready in the event loop?
@@ -118,14 +122,18 @@ cdef class TlsTransport(Transport):
         bint _server_side
         str _server_hostname
 
-    def __init__(self, loop, sock, app_protocol, sslcontext,
-                 waiter=None, *,
+    def __init__(self,
+                 loop,
+                 sock,
+                 app_protocol,
+                 sslcontext,
+                 waiter=None,
+                 *,
                  server_side=False,
                  server_hostname=None,
                  ssl_handshake_timeout=None,
                  ssl_shutdown_timeout=None,
                  server=None):
-
         if ssl_handshake_timeout is None:
             ssl_handshake_timeout = constants.SSL_HANDSHAKE_TIMEOUT
         elif ssl_handshake_timeout <= 0:
@@ -149,18 +157,24 @@ cdef class TlsTransport(Transport):
 
         self._server = server
         self._sock = sock
-        self._sock_fd_obj = sock.fileno()
-        self._sock_fd = self._sock_fd_obj
-        self._extra = {'socket': TransportSocket(sock), 'sslcontext': sslcontext}
-        try:
-            self._extra['sockname'] = sock.getsockname()
-        except OSError:
-            self._extra['sockname'] = None
-        try:
-            self._extra['peername'] = sock.getpeername()
-        except OSError:
-            self._extra['peername'] = None
+        if self._sock is not None:
+            self._sock_fd_obj = sock.fileno()
+            self._sock_fd = self._sock_fd_obj
+            self._extra = {'socket': TransportSocket(sock), 'sslcontext': sslcontext}
+            try:
+                self._extra['sockname'] = sock.getsockname()
+            except OSError:
+                self._extra['sockname'] = None
+            try:
+                self._extra['peername'] = sock.getpeername()
+            except OSError:
+                self._extra['peername'] = None
+        else:
+            self._extra = {'sslcontext': sslcontext}
+            self._sock_fd_obj = None
+            self._sock_fd = -1
 
+        self._transport = None
         self._write_watermarks = WriteWatermarks(loop)
 
         self._write_backlog = []
@@ -195,8 +209,10 @@ cdef class TlsTransport(Transport):
         if self._server is not None:
             self._server._attach(self)
 
-        aiofn_set_nodelay(self._sock)
-        self._loop.add_reader(self._sock_fd_obj, self._read_ready)
+        if self._sock is not None:
+            aiofn_set_nodelay(self._sock)
+            self._loop.add_reader(self._sock_fd_obj, self._read_ready)
+
         self._start_handshake()
 
     def __repr__(self):
@@ -214,8 +230,9 @@ cdef class TlsTransport(Transport):
         if self._sock is not None:
             warnings.warn(f"unclosed transport {self!r}", ResourceWarning, source=self)
             self._sock.close()
-            if self._server is not None:
-                self._server._detach(self)
+
+        if self._server is not None:
+            self._server._detach(self)
 
     cdef inline _set_protocol(self, protocol):
         self._app_protocol = protocol
@@ -231,7 +248,15 @@ cdef class TlsTransport(Transport):
             return self
         elif name == 'ssl_layer_num':
             return self._ssl_layer_num
-        return self._extra.get(name, default)
+
+        value = self._extra.get(name, default)
+        if value is not None:
+            return value
+
+        if self._transport is not None:
+            return self._transport.get_extra_info(name, default)
+
+        return value
 
     cpdef set_protocol(self, protocol):
         self._check_thread("set_protocol")
@@ -243,19 +268,29 @@ cdef class TlsTransport(Transport):
 
     cpdef tuple get_write_buffer_limits(self):
         self._check_thread("get_write_buffer_limits")
-        return self._write_watermarks.get_write_buffer_limits()
+        if self._transport is not None:
+            return self._transport.get_write_buffer_limits()
+        else:
+            return self._write_watermarks.get_write_buffer_limits()
 
     cpdef set_write_buffer_limits(self, high=None, low=None):
         self._check_thread("set_write_buffer_limits")
-        self._write_watermarks.set_write_buffer_limits(
-            self, self._app_protocol, self.get_write_buffer_size(), high, low)
+        if self._transport is not None:
+            self._transport.set_write_buffer_limits(high, low)
+        else:
+            self._write_watermarks.set_write_buffer_limits(
+                self, self._app_protocol, self.get_write_buffer_size(), high, low)
 
     cpdef get_write_buffer_size(self):
         self._check_thread("get_write_buffer_size")
-        cdef Py_ssize_t total = self._write_backlog_size
-        if self._app_protocol_aiofn:
-            total += (<Protocol>self._app_protocol).get_local_write_buffer_size()
-        return total
+        cdef Py_ssize_t total
+        if self._transport is not None:
+            return self._transport.get_write_buffer_size()
+        else:
+            total = self._write_backlog_size
+            if self._app_protocol_aiofn:
+                total += (<Protocol>self._app_protocol).get_local_write_buffer_size()
+            return total
 
     cpdef is_closing(self):
         self._check_thread("is_closing")
@@ -267,27 +302,40 @@ cdef class TlsTransport(Transport):
 
     cpdef is_reading(self):
         self._check_thread("is_reading")
-        return not self.is_closing() and not self._read_paused
+        if self._transport is not None:
+            return self._transport.is_reading()
+        else:
+            return not self.is_closing() and not self._read_paused
 
     cpdef pause_reading(self):
         self._check_thread("pause_reading")
-        if not self.is_reading():
-            return
-        self._read_paused = True
-        self._loop.remove_reader(self._sock_fd_obj)
-        if unlikely(self._is_debug):
-            _logger.debug("%r: reading paused by user", self)
+        if self._transport is not None:
+            self._read_paused = True
+            self._transport.pause_reading()
+        else:
+            if not self.is_reading():
+                return
+            self._read_paused = True
+            self._loop.remove_reader(self._sock_fd_obj)
+            if unlikely(self._is_debug):
+                _logger.debug("%r: reading paused by user", self)
 
     cpdef resume_reading(self):
         self._check_thread("resume_reading")
-        if self.is_closing() or not self._read_paused:
-            return
-        self._read_paused = False
-        self._loop.add_reader(self._sock_fd_obj, self._read_ready)
-        if unlikely(self._is_debug):
-            _logger.debug("%r: reading resumed by user", self)
-        if self._state in (SSLProtocolState.WRAPPED, SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN):
-            self._loop.call_soon(self._read_ready)
+        if self._transport is not None:
+            if self._read_paused:
+                self._read_paused = False
+                self._loop.call_soon(self._incoming_bio_updated)
+            self._transport.resume_reading()
+        else:
+            if self.is_closing() or not self._read_paused:
+                return
+            self._read_paused = False
+            self._loop.add_reader(self._sock_fd_obj, self._read_ready)
+            if unlikely(self._is_debug):
+                _logger.debug("%r: reading resumed by user", self)
+            if self._state in (SSLProtocolState.WRAPPED, SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN):
+                self._loop.call_soon(self._read_ready)
 
     cpdef close(self):
         self._check_thread("close")
@@ -379,6 +427,10 @@ cdef class TlsTransport(Transport):
         while True:
             sz = self._ssl_object.outgoing_bio_get_data(&ptr)
             if sz == 0:
+                return True
+
+            if self._transport is not None:
+                self._transport.write(PyMemoryView_FromMemory(ptr, sz, PyBUF_READ))
                 return True
 
             bytes_sent = aiofn_send(self._sock_fd, ptr, sz)
@@ -1130,7 +1182,6 @@ cdef class TlsTransport(Transport):
         cdef SendFileRequest req
         for data in self._write_backlog:
             if isinstance(data, SendFileRequest):
-                _logger.debug("Found SendFileRequest in write_backlog")
                 req = <SendFileRequest>data
                 if not req.waiter.done():
                     req.waiter.set_exception(exc)
@@ -1209,3 +1260,21 @@ cdef class TlsTransport(Transport):
             self._do_handshake()
         except Exception as ex:
             self._fatal_error(ex, "Fatal error on SSL renegotiation")
+#
+#
+# cdef class TlsProtocol:
+#     cdef:
+#         TlsTransport _tls_transport
+#
+#     def __init__(self,
+#                  loop,
+#                  object underlying_transport,
+#                  app_protocol,
+#                  sslcontext,
+#                  waiter=None, *,
+#                  server_side=False,
+#                  server_hostname=None,
+#                  ssl_handshake_timeout=None,
+#                  ssl_shutdown_timeout=None,
+#                  server=None):
+#         _tls_transport = TlsTransport(loop)
