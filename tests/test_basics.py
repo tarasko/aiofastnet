@@ -262,10 +262,6 @@ async def test_ssl_renegotiate_midstream():
         pytest.skip("aiofastnet doesn't work with ProactorEventLoop")
 
     server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key")
-    server_context.minimum_version = ssl.TLSVersion.TLSv1_2
-    server_context.maximum_version = ssl.TLSVersion.TLSv1_2
-    client_context.minimum_version = ssl.TLSVersion.TLSv1_2
-    client_context.maximum_version = ssl.TLSVersion.TLSv1_2
 
     preface = b"A" * (4 * 1024)
     payload = b"B" * (4 * 1024)
