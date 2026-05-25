@@ -1090,6 +1090,9 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         # Are we registered for _write_ready in the event loop?
         bint _write_ready_registered
 
+        # Has any sys write failed with EAGAIN during current _write_ready run
+        bint _write_had_eagain
+
     def __init__(self, loop, sock, app_protocol, sslcontext,
                  *,
                  waiter=None,
@@ -1124,6 +1127,9 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             self._extra['peername'] = None
 
         self._write_watermarks = WriteWatermarks(loop)
+
+        self._write_ready_registered = False
+        self._write_had_eagain = False
 
         self._loop.add_reader(self._sock_fd_obj, self._read_ready)
         self._start_handshake()
@@ -1189,7 +1195,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         if self._ssl_object.outgoing == NULL:
             return True
 
-        if self._write_ready_registered:
+        if self._write_had_eagain:
             return False
 
         cdef:
@@ -1232,12 +1238,19 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         return not self._write_ready_registered
 
     cdef inline _ensure_writer(self):
+        if unlikely(self._is_debug):
+            _logger.debug("%r: _ensure_writer called", self)
+
+        self._write_had_eagain = True
         if self._connection_lost_scheduled or self._write_ready_registered:
             return
         self._write_ready_registered = True
         self._loop.add_writer(self._sock_fd_obj, self._write_ready)
 
     cdef inline _drop_writer(self):
+        if unlikely(self._is_debug):
+            _logger.debug("%r: _drop_writer called", self)
+
         if self._sock is None or not self._write_ready_registered:
             return
         self._write_ready_registered = False
@@ -1250,8 +1263,13 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         if self._connection_lost_scheduled:
             return
 
+        # Reset _write_had_eagain
+        # If any system write fails with EAGAIN it suppose to call _ensure_writer
+        # _ensure_writer will set _write_had_eagain = True
+        # At the end of _write_ready we deregister if nobody has set _write_had_eagain
+        self._write_had_eagain = False
+
         try:
-            self._drop_writer()
             self._flush_outgoing_bio()
 
             if self._state == SSLProtocolState.DO_HANDSHAKE:
@@ -1265,7 +1283,11 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                 self._do_flush()
             elif self._state == SSLProtocolState.SHUTDOWN:
                 self._do_shutdown()
+
+            if not self._write_had_eagain:
+                self._drop_writer()
         except BaseException as exc:
+            # _fatal_error will always _drop_writer()
             self._fatal_error(exc, "Error occurred during write")
 
     cdef _check_sendfile_supported(self):
