@@ -17,29 +17,33 @@ import logging
 
 cdef object _logger = logging.getLogger('aiofastnet.ssl')
 
+SSL_LIB_PATH = None
+CRYPTO_LIB_PATH = None
+
 
 cdef _init_openssl():
     cdef:
-        bytes ssl_lib_name
-        bytes crypto_lib_name
+        bytes ssl_lib_path
+        bytes crypto_lib_path
         const char* ssl_lib_ptr
         const char* crypto_lib_ptr
         const char* missing_lib
 
-    ssl_lib_name, crypto_lib_name = find_openssl_library_paths()
-    _logger.info("Found libssl: %s", ssl_lib_name.decode())
-    _logger.info("Found libcrypto: %s", crypto_lib_name.decode())
+    global SSL_LIB_PATH
+    global CRYPTO_LIB_PATH
 
-    if init_openssl_compat(ssl_lib_name, crypto_lib_name) != 1:
+    ssl_lib_path, crypto_lib_path = find_openssl_library_paths()
+    SSL_LIB_PATH = ssl_lib_path.decode()
+    CRYPTO_LIB_PATH = crypto_lib_path.decode()
+
+    if init_openssl_compat(ssl_lib_path, crypto_lib_path) != 1:
         missing_lib = openssl_compat_last_error()
         if missing_lib != NULL:
             raise ImportError(
                 f"aiofastnet: failed to initialize OpenSSL compatibility layer; "
                 f"missing symbol: {PyUnicode_FromString(missing_lib)}; "
-                f"ssl_lib={ssl_lib_name.decode()}, crypto_lib={crypto_lib_name.decode()}")
+                f"ssl_lib={SSL_LIB_PATH}, crypto_lib={CRYPTO_LIB_PATH}")
         raise ImportError("aiofastnet: failed to initialize OpenSSL compatibility layer")
-
-    _logger.info("OpenSSL: SSL_sendfile loaded=%d", <void*>SSL_sendfile != NULL)
 
 
 _init_openssl()
@@ -167,6 +171,10 @@ cdef class SSLObject:
                     if SSL_set_wfd(self.ssl, sock.fileno()) != 1:
                         raise ssl.SSLError("SSL_set_wfd failed")
 
+            if use_socket_rbio or use_socket_wbio:
+                # This is no-op anyway if memory BIO is used
+                SSL_set_options(self.ssl, SSL_OP_ENABLE_KTLS)
+
             SSL_set_mode(self.ssl, SSL_MODE_AUTO_RETRY | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_ENABLE_PARTIAL_WRITE)
             SSL_set_read_ahead(self.ssl, 1)
         except:
@@ -249,9 +257,6 @@ cdef class SSLObject:
 
         return PyUnicode_FromStringAndSize(<const char*>protocol, protocol_len)
 
-    cpdef uint64_t enable_ktls(self):
-        return SSL_set_options(self.ssl, SSL_OP_ENABLE_KTLS)
-
     cpdef int ktls_send_enabled(self):
         return BIO_get_ktls_send(SSL_get_wbio(self.ssl))
 
@@ -331,8 +336,8 @@ cdef class SSLObject:
     cdef int sendfile_available(self) noexcept:
         return <void*>SSL_sendfile != NULL
 
-    cdef int sendfile(self, int fd, Py_ssize_t offset, Py_ssize_t size) noexcept:
-        return SSL_sendfile(self.ssl, fd, offset, <Py_ssize_t>size, 0)
+    cdef int sendfile(self, int fd, Py_ssize_t offset, size_t size) noexcept:
+        return SSL_sendfile(self.ssl, fd, offset, size, 0)
 
     cdef make_exc_from_ssl_error(self, str descr, int err_code):
         assert err_code != SSL_ERROR_NONE, "check logic"

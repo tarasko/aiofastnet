@@ -36,7 +36,6 @@ cdef class SSLObject:
     cpdef object getpeercert(self, binary_form=*)
     cpdef str compression(self)
     cpdef object selected_alpn_protocol(self)
-    cpdef uint64_t enable_ktls(self)
     cpdef int ktls_send_enabled(self)
     cpdef int ktls_recv_enabled(self)
 
@@ -54,7 +53,7 @@ cdef class SSLObject:
     cdef inline void allow_renegotiation(self) noexcept
     cdef inline int renegotiate(self) noexcept
     cdef inline int sendfile_available(self) noexcept
-    cdef inline int sendfile(self, int fd, Py_ssize_t offset, Py_ssize_t size) noexcept
+    cdef inline int sendfile(self, int fd, Py_ssize_t offset, size_t size) noexcept
 
     # These methods wrape BIO* operations
     cdef inline int outgoing_bio_reset(self) noexcept

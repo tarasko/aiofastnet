@@ -29,11 +29,12 @@ from .utils cimport (
     unlikely
 )
 from .ssl_object cimport (SSLObject, SSLError, ssl_error_name)
+from .ssl_object import SSL_LIB_PATH, CRYPTO_LIB_PATH
 from .transport cimport Transport, Protocol, WriteWatermarks
 from .transport import aiofn_is_buffered_protocol
 
 
-cdef object _logger = getLogger('aiofastnet.tls')
+cdef object _logger = getLogger('aiofastnet.ssl')
 
 
 def _create_transport_context(server_side, server_hostname):
@@ -259,6 +260,12 @@ cdef class SSLTransportBase(Transport):
         if self._server is not None:
             self._server._attach(self)
 
+        if self._is_debug:
+            _logger.debug("%r: libssl: %s", self, SSL_LIB_PATH)
+            _logger.debug("%r: libcrypto: %s", self, CRYPTO_LIB_PATH)
+            _logger.debug("%r: %s", self, ssl.OPENSSL_VERSION)
+            _logger.info("%r: SSL_sendfile loaded=%d", self, self._ssl_object.sendfile_available())
+
     def __repr__(self):
         sock_fd = self._get_sock_fd()
         if sock_fd is not None:
@@ -447,15 +454,10 @@ cdef class SSLTransportBase(Transport):
 
         self._set_state(SSLProtocolState.WRAPPED)
 
-        _logger.debug("%r: %s", self, ssl.OPENSSL_VERSION)
-        _logger.debug("%r: enable_ktls()=%x", self, self._ssl_object.enable_ktls())
-
         _logger.debug("%r: cipher %s", self, self._ssl_object.cipher())
-
-        _logger.debug("%r: BIO_get_ktls_send(wbio)=%d",
+        _logger.debug("%r: KTLS SEND enabled: %d",
                       self, self._ssl_object.ktls_send_enabled())
-
-        _logger.debug("%r: BIO_get_ktls_recv(rbio)=%d",
+        _logger.debug("%r: KTLS RECV enabled: %d",
                       self, self._ssl_object.ktls_recv_enabled())
 
         self._extra.update(
@@ -1272,8 +1274,10 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             raise NotImplementedError()
 
     cdef bint _try_sendfile(self, SendFileRequest req) except -1:
+        cdef Py_ssize_t bytes_written
+
         while True:
-            bytes_written = self._ssl_object.sendfile(req.fd, req.offset, req.count)
+            bytes_written = self._ssl_object.sendfile(req.fd, req.offset, <size_t>req.count)
             if bytes_written >= 0:
                 if unlikely(self._is_debug):
                     _logger.debug("%r: SSL_sendfile(..., offset=%d, size=%d) = %d", self,
