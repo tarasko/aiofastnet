@@ -8,7 +8,9 @@ aiofastnet Release History
 0.6.0
 ------------------
 
-* Add unlikely for debug statement and a few rare branches
+* Reimplement SSL layer to work directly with a socket instead of through transport by default.
+* Add Kernel TLS support.
+* Add unlikely for debug branches and other rare branches
 
 0.5.0
 ------------------
