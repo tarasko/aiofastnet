@@ -158,10 +158,17 @@ compatibility wrapper preserves the documented `write()` /
 ## Kernel TLS Support on Linux
 
 On Linux, `aiofastnet` can use OpenSSL's Kernel TLS support for TLS
-connections. Kernel TLS can be beneficial for workloads that send large amounts
-of data over established TLS connections, especially when using `sendfile()`.
-In that case the kernel can move file data directly through the TLS socket path
-instead of forcing the application to copy file contents through userspace.
+connections. Kernel TLS is beneficial if any of the following is true:
+
+* Static files need to be sent over TLS connection and `sendfile()` can be used.
+In that case the kernel can read data directly instead of forcing the application to 
+copy file contents through userspace.
+* Some high-end NICs support TLS offload. This leads to huge CPU savings.
+
+If you only sent regular data (not static files) and do not have high-end NIC with TLS offload, 
+enabling Kernel TLS will only slightly decrease performance. CPU cost-wise it doesn't matter where encryption/decryption
+happens, but the kernel `tls` module has to do extra bookkeeping. Also, aiofastnet can batch data and reduce amount of 
+syscalls when Kernel TLS is not used. 
 
 Kernel TLS requires support from all of these layers:
 
@@ -205,6 +212,8 @@ option is to locate the bundled `libssl` and `libcrypto` files and replace them
 with symbolic links to a newer system OpenSSL build that supports KTLS. This is
 often useful with Conda Python, which commonly ships its own OpenSSL libraries
 inside the environment.
+
+KTLS support by kernel version is outline [here.](https://delthas.fr/blog/2023/kernel-tls/)
 
 ## Free-Threaded Python
 
