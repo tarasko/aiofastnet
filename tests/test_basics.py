@@ -399,6 +399,9 @@ async def test_sendfile_huge_error(conn_type):
                     try:
                         await sendfile(loop, client.transport, tmp, offset=0, count=len(payload))
                         await client.wait_closed()
+                        # OpenSSL 3.0 may report peer-abort KTLS SSL_sendfile() syscall failures as
+                        # [SSL: UNINITIALIZED], fixed/changed in later OpenSSL, so the test accepts it only for
+                        # that failure case.
                     except (ConnectionResetError, BrokenPipeError, ssl.SSLError):
                         pass
                 else:
