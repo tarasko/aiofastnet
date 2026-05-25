@@ -1,7 +1,7 @@
 import asyncio
 import ssl
 
-from .tls_transport import TLSTransport_Transport
+from .ssl_transport import SSLTransport_Transport
 from .wrapped_transport import _WrappedTransport
 
 
@@ -31,7 +31,7 @@ async def start_tls(loop: asyncio.AbstractEventLoop,
             f'got {sslcontext!r}')
 
     waiter = loop.create_future()
-    ssl_transport = TLSTransport_Transport(
+    ssl_transport = SSLTransport_Transport(
         loop, protocol, sslcontext,
         waiter=waiter,
         server_side=server_side,

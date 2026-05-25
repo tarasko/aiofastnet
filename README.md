@@ -163,7 +163,7 @@ connections. Kernel TLS is beneficial if any of the following is true:
 * Static files need to be sent over TLS connection and `sendfile()` can be used.
 In that case the kernel can read data directly instead of forcing the application to 
 copy file contents through userspace.
-* Some high-end NICs support TLS offload. This leads to huge CPU savings.
+* Some high-end NICs support hardware TLS offload. This leads to huge CPU savings.
 
 If you only sent regular data (not static files) and do not have high-end NIC with TLS offload, 
 enabling Kernel TLS will only slightly decrease performance. CPU cost-wise it doesn't matter where encryption/decryption

@@ -80,7 +80,7 @@ cdef SendFileRequest _make_send_file_request(file, offset, count):
     return self
 
 
-cdef class TLSTransportBase(Transport):
+cdef class SSLTransportBase(Transport):
     cdef:
         object __weakref__
         object _loop
@@ -1072,7 +1072,12 @@ cdef class TLSTransportBase(Transport):
             self._fatal_error(ex, "Fatal error on SSL renegotiation")
 
 
-cdef class TLSTransport_Socket(TLSTransportBase):
+cdef class SSLTransport_Socket(SSLTransportBase):
+    """
+    Use socket send and receive data. Supports kTLS
+    """
+
+
     cdef:
         object _sock            #
         object _sock_fd_obj     # Cache python object for int fd, loop add_reader/add_writer expects it
@@ -1098,7 +1103,7 @@ cdef class TLSTransport_Socket(TLSTransportBase):
         self._sock_fd = self._sock_fd_obj
         aiofn_set_nodelay(self._sock)
 
-        TLSTransportBase.__init__(self, loop, app_protocol, sslcontext, waiter,
+        SSLTransportBase.__init__(self, loop, app_protocol, sslcontext, waiter,
                                   server_side, server_hostname,
                                   ssl_handshake_timeout,
                                   ssl_shutdown_timeout,
@@ -1381,53 +1386,51 @@ cdef class TLSTransport_Socket(TLSTransportBase):
                 self._server = None
 
 
-cdef class TLSProtocol(Protocol, asyncio.BufferedProtocol):
+cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
     cdef:
-        TLSTransport_Transport _tls_transport
+        SSLTransport_Transport _ssl_transport
 
-    def __init__(self, TLSTransport_Transport tls_transport):
-        self._tls_transport = tls_transport
+    def __init__(self, SSLTransport_Transport ssl_transport):
+        self._ssl_transport = ssl_transport
 
     cpdef is_buffered_protocol(self):
         return True
 
     cpdef connection_made(self, transport):
-        return self._tls_transport.connection_made(transport)
+        return self._ssl_transport.connection_made(transport)
 
     cpdef connection_lost(self, exc):
         # Break cyclic dependency
-        tls_transport = self._tls_transport
-        self._tls_transport = None
-        return tls_transport.connection_lost(exc)
+        ssl_transport = self._ssl_transport
+        self._ssl_transport = None
+        return ssl_transport.connection_lost(exc)
 
     cdef get_buffer_c(self, Py_ssize_t n, char** buf_ptr, Py_ssize_t* buf_len):
-        return self._tls_transport.get_buffer_c(n, buf_ptr, buf_len)
+        return self._ssl_transport.get_buffer_c(n, buf_ptr, buf_len)
 
     cpdef get_buffer(self, Py_ssize_t n):
-        return self._tls_transport.get_buffer(n)
+        return self._ssl_transport.get_buffer(n)
 
     cpdef buffer_updated(self, Py_ssize_t nbytes):
-        self._tls_transport.buffer_updated(nbytes)
+        self._ssl_transport.buffer_updated(nbytes)
 
     cpdef eof_received(self):
-        self._tls_transport.eof_received()
+        self._ssl_transport.eof_received()
 
     cpdef pause_writing(self):
-        self._tls_transport.pause_writing()
+        self._ssl_transport.pause_writing()
 
     cpdef resume_writing(self):
-        self._tls_transport.resume_writing()
+        self._ssl_transport.resume_writing()
 
     cpdef Py_ssize_t get_local_write_buffer_size(self) except -1:
-        return self._tls_transport.get_local_write_buffer_size()
+        return self._ssl_transport.get_local_write_buffer_size()
 
 
-cdef class TLSTransport_Transport(TLSTransportBase):
+cdef class SSLTransport_Transport(SSLTransportBase):
     """
-    Act as both BufferedProtocol for the downstream layer.
-    And as a Transport for upstream
+    Use downstream Transport to send and receive data
     """
-
     cdef:
         object _transport
         object _sock_fd_obj
@@ -1455,7 +1458,7 @@ cdef class TLSTransport_Transport(TLSTransportBase):
         # completes.
         self._extra = dict(sslcontext=sslcontext)
 
-        TLSTransportBase.__init__(self, loop, app_protocol, sslcontext, waiter,
+        SSLTransportBase.__init__(self, loop, app_protocol, sslcontext, waiter,
                                   server_side, server_hostname,
                                   ssl_handshake_timeout,
                                   ssl_shutdown_timeout,
@@ -1469,7 +1472,7 @@ cdef class TLSTransport_Transport(TLSTransportBase):
             self._app_state = AppProtocolState.STATE_CON_MADE
 
     cpdef get_tls_protocol(self):
-        return TLSProtocol(self)
+        return SSLProtocol(self)
 
     cdef inline connection_made(self, transport):
         """Called when the low-level connection is made.
@@ -1562,7 +1565,7 @@ cdef class TLSTransport_Transport(TLSTransportBase):
         self._app_protocol.resume_writing()
 
     cpdef get_extra_info(self, name, default=None):
-        value = TLSTransportBase.get_extra_info(self, name)
+        value = SSLTransportBase.get_extra_info(self, name)
         if value is not None:
             return value
 

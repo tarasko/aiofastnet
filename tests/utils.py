@@ -341,7 +341,7 @@ class ConnectionType:
 @pytest.fixture(params=[
     "tcp",
     "ssl",
-    "stls",     # Use TLSTransport_Transport by using start_tls
+    "stls",     # Use SSLTransport_Transport by using start_tls
     pytest.param("ktls",
                  marks=pytest.mark.skipif(sys.version_info < (3, 12),
                                           reason="kTLS tests require Python >= 3.12"
@@ -362,7 +362,7 @@ def conn_type(request):
 
 @pytest.fixture(params=[
     "ssl",
-    "stls",     # Use TLSTransport_Transport by using start_tls
+    "stls",     # Use SSLTransport_Transport by using start_tls
     pytest.param("ktls",
                  marks=pytest.mark.skipif(sys.version_info < (3, 12),
                                           reason="kTLS tests require Python >= 3.12"

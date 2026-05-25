@@ -16,7 +16,7 @@ import weakref
 from . import constants
 from .api_utils import _is_asyncio_loop, _create_connection_transport, \
     _check_ssl_socket, _logger, _HAS_IPv6, _ensure_resolved
-from .tls_transport import TLSTransport_Transport
+from .ssl_transport import SSLTransport_Transport
 from .transport import (aiofn_is_buffered_protocol)
 from .wrapped_transport import (
     _WrappedProtocol, _WrappedBufferedProtocol,
@@ -359,7 +359,7 @@ async def _create_server_fallback(loop,
 
         def ssl_protocol_factory():
             protocol = protocol_factory()
-            tls_transport = TLSTransport_Transport(
+            tls_transport = SSLTransport_Transport(
                 loop, protocol, sslcontext,
                 server_side=True,
                 ssl_handshake_timeout=ssl_handshake_timeout,
