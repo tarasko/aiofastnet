@@ -5,7 +5,6 @@ from logging import getLogger
 from typing import Callable, Union, Optional, Tuple
 
 from .tls_transport import TLSTransport_Socket, TLSTransport_Transport
-from .ssl_protocol import SSLProtocol
 from .transport import SocketTransport, aiofn_is_buffered_protocol
 from .wrapped_transport import _should_fallback_to_asyncio, \
     _WrappedBufferedProtocol, _WrappedProtocol
@@ -43,7 +42,7 @@ async def _create_connection_transport(
             waiter = loop.create_future()
             sslcontext = None if isinstance(ssl, bool) else ssl
 
-            ssl_protocol_factory = lambda: SSLProtocol(
+            ssl_transport = TLSTransport_Transport(
                 loop, protocol, sslcontext, waiter,
                 server_side, server_hostname,
                 ssl_handshake_timeout=ssl_handshake_timeout,
@@ -51,9 +50,12 @@ async def _create_connection_transport(
                 ssl_incoming_bio_size=ssl_incoming_bio_size,
                 ssl_outgoing_bio_size=ssl_outgoing_bio_size
             )
+
+            ssl_protocol_factory = lambda: ssl_transport.get_tls_protocol()
+
             loop_transport, ssl_protocol = await loop.create_connection(
                 ssl_protocol_factory, None, None, sock=sock)
-            transport = ssl_protocol.get_app_transport()
+            transport = ssl_transport
         else:
             def wrapped_protocol_factory():
                 user_protocol = protocol_factory()
