@@ -21,21 +21,6 @@ cdef object _logger = getLogger('aiofastnet')
 cdef object _DATA_RECEIVED_MAX_SIZE = 256 * 1024
 
 
-cdef _set_result_unless_cancelled(fut, result):
-    """Helper setting the result only if the future was not cancelled."""
-    if fut.cancelled():
-        return
-    fut.set_result(result)
-
-
-cdef _set_nodelay(sock):
-    if hasattr(socket, 'TCP_NODELAY'):
-        if (sock.family in {socket.AF_INET, socket.AF_INET6} and
-                sock.type == socket.SOCK_STREAM and
-                sock.proto == socket.IPPROTO_TCP):
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-
-
 cdef class Transport:
     cpdef write(self, data):
         raise NotImplementedError()
@@ -51,6 +36,9 @@ cdef class Transport:
 
     cdef write_c(self, char* ptr, Py_ssize_t sz):
         self.write(PyMemoryView_FromMemory(ptr, sz, PyBUF_READ))
+
+    async def sendfile(self, file, offset, count):
+        raise NotImplementedError()
 
 
 cdef class Protocol:
@@ -96,6 +84,67 @@ cdef class SendFileRequest:
         return self.count
 
 
+cdef class WriteWatermarks:
+    def __init__(self, loop):
+        self._loop = loop
+        self._set_write_buffer_limits(None, None)
+        self._paused = False
+
+    cpdef tuple get_write_buffer_limits(self):
+        return (self._low_water, self._high_water)
+
+    cpdef set_write_buffer_limits(self, transport, app_protocol, Py_ssize_t write_buffer_size, high=None, low=None):
+        self._set_write_buffer_limits(high, low)
+        self.maybe_pause_protocol(transport, app_protocol, write_buffer_size)
+        self.maybe_resume_protocol(transport, app_protocol, write_buffer_size)
+
+    cpdef maybe_pause_protocol(self, transport, app_protocol, Py_ssize_t write_buffer_size):
+        if write_buffer_size <= self._high_water:
+            return
+        if not self._paused:
+            self._paused = True
+            try:
+                app_protocol.pause_writing()
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as exc:
+                self._loop.call_exception_handler({
+                    'message': 'protocol.pause_writing() failed',
+                    'exception': exc,
+                    'transport': transport,
+                    'protocol': app_protocol,
+                })
+
+    cpdef maybe_resume_protocol(self, transport, app_protocol, Py_ssize_t write_buffer_size):
+        if self._paused and write_buffer_size <= self._low_water:
+            self._paused = False
+            try:
+                app_protocol.resume_writing()
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as exc:
+                self._loop.call_exception_handler({
+                    'message': 'protocol.resume_writing() failed',
+                    'exception': exc,
+                    'transport': self,
+                    'protocol': app_protocol,
+                })
+
+    cdef inline _set_write_buffer_limits(self, high, low):
+        if high is None:
+            if low is None:
+                high = 64 * 1024
+            else:
+                high = 4 * low
+        if low is None:
+            low = high // 4
+
+        if not high >= low >= 0:
+            raise ValueError(f'high ({high!r}) must be >= low ({low!r}) must be >= 0')
+        self._high_water = high
+        self._low_water = low
+
+
 cdef class SocketTransport(Transport):
     cdef:
         object __weakref__
@@ -105,16 +154,15 @@ cdef class SocketTransport(Transport):
         bint _protocol_buffered
         bint _protocol_aiofn
         bint _protocol_connected
-        bint _protocol_paused
-        Py_ssize_t _high_water
-        Py_ssize_t _low_water
         dict _extra
+        WriteWatermarks _write_watermarks
 
-        object _sock
         object _server
-        object _write_backlog
+        object _sock
         object _sock_fd_obj
         int _sock_fd
+
+        object _write_backlog
         int _conn_lost
         bint _closing
         bint _paused
@@ -129,7 +177,7 @@ cdef class SocketTransport(Transport):
         self._loop = loop
         self._thread_id = PyThread_get_thread_ident()
         self.set_protocol(protocol)
-        self._set_write_buffer_limits()
+        self._write_watermarks = WriteWatermarks(loop)
         self._extra = {} if extra is None else extra
         self._extra['socket'] = TransportSocket(sock)
         try:
@@ -141,11 +189,11 @@ cdef class SocketTransport(Transport):
                 self._extra['peername'] = sock.getpeername()
             except socket.error:
                 self._extra['peername'] = None
-        self._sock = sock
         self._server = server
-        self._write_backlog = collections.deque()
+        self._sock = sock
         self._sock_fd_obj = sock.fileno()
         self._sock_fd = self._sock_fd_obj
+        self._write_backlog = collections.deque()
         self._conn_lost = 0  # Set when call to connection_lost scheduled.
         self._closing = False  # Set when close() called.
         self._paused = False  # Set when pause_reading() called
@@ -156,7 +204,7 @@ cdef class SocketTransport(Transport):
         self._eof = False
         self._is_debug = loop.get_debug()
 
-        _set_nodelay(self._sock)
+        aiofn_set_nodelay(self._sock)
 
         self._loop.call_soon(self._protocol.connection_made, self)
         # only start reading when connection_made() has been called
@@ -164,7 +212,7 @@ cdef class SocketTransport(Transport):
                              self._sock_fd_obj, self._read_ready)
         if waiter is not None:
             # only wake up the waiter when connection_made() has been called
-            self._loop.call_soon(_set_result_unless_cancelled, waiter, None)
+            self._loop.call_soon(aiofn_set_result_unless_cancelled, waiter, None)
 
     def __repr__(self):
         info = [f'fd={self._sock_fd_obj}', 'SocketTransport']
@@ -211,13 +259,12 @@ cdef class SocketTransport(Transport):
 
     cpdef tuple get_write_buffer_limits(self):
         self._check_thread("get_write_buffer_limits")
-        return (self._low_water, self._high_water)
+        return self._write_watermarks.get_write_buffer_limits()
 
     cpdef set_write_buffer_limits(self, high=None, low=None):
         self._check_thread("set_write_buffer_limits")
-        self._set_write_buffer_limits(high=high, low=low)
-        self._maybe_pause_protocol()
-        self._maybe_resume_protocol()
+        self._write_watermarks.set_write_buffer_limits(
+            self, self._protocol, self.get_write_buffer_size(), high, low)
 
     cpdef abort(self):
         self._check_thread("abort")
@@ -625,57 +672,19 @@ cdef class SocketTransport(Transport):
                 self._server = None
 
     cdef inline _maybe_pause_protocol(self):
-        cdef Py_ssize_t size = self.get_write_buffer_size()
-        if size <= self._high_water:
-            return
-        if not self._protocol_paused:
-            self._protocol_paused = True
-            try:
-                self._protocol.pause_writing()
-            except (SystemExit, KeyboardInterrupt):
-                raise
-            except BaseException as exc:
-                self._loop.call_exception_handler({
-                    'message': 'protocol.pause_writing() failed',
-                    'exception': exc,
-                    'transport': self,
-                    'protocol': self._protocol,
-                })
+        self._write_watermarks.maybe_pause_protocol(self, self._protocol, self.get_write_buffer_size())
 
     cdef inline _maybe_resume_protocol(self):
-        if (self._protocol_paused and
-                self.get_write_buffer_size() <= self._low_water):
-            self._protocol_paused = False
-            try:
-                self._protocol.resume_writing()
-            except (SystemExit, KeyboardInterrupt):
-                raise
-            except BaseException as exc:
-                self._loop.call_exception_handler({
-                    'message': 'protocol.resume_writing() failed',
-                    'exception': exc,
-                    'transport': self,
-                    'protocol': self._protocol,
-                })
-
-    cdef inline _set_write_buffer_limits(self, high=None, low=None):
-        if high is None:
-            if low is None:
-                high = 64 * 1024
-            else:
-                high = 4 * low
-        if low is None:
-            low = high // 4
-
-        if not high >= low >= 0:
-            raise ValueError(
-                f'high ({high!r}) must be >= low ({low!r}) must be >= 0')
-
-        self._high_water = high
-        self._low_water = low
+        self._write_watermarks.maybe_resume_protocol(self, self._protocol, self.get_write_buffer_size())
 
     async def sendfile(self, file, offset, count):
         self._check_thread("sendfile")
+        if self._eof:
+            raise RuntimeError('Cannot call sendfile() after write_eof()')
+
+        if self._closing or self._conn_lost:
+            raise RuntimeError("Transport is closing")
+
         cdef SendFileRequest req = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
         req.file = file
         req.offset = offset
@@ -705,8 +714,9 @@ cdef class SocketTransport(Transport):
             while req.count:
                 bytes_sent = os.sendfile(self._sock_fd_obj, req.file.fileno(),
                                          req.offset, req.count)
-                _logger.debug("%r: os.sendfile(offset=%d,count=%d)=%d",
-                              self, req.offset, req.count, bytes_sent)
+                if unlikely(self._is_debug):
+                    _logger.debug("%r: os.sendfile(offset=%d,count=%d)=%d",
+                                  self, req.offset, req.count, bytes_sent)
                 req.offset += bytes_sent
                 req.count -= bytes_sent
 

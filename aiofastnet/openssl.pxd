@@ -1,3 +1,6 @@
+from libc.stdint cimport uint64_t
+from posix.types cimport off_t
+
 cdef extern from "openssl_compat.h" nogil:
     ctypedef struct SSL_CTX:
         pass
@@ -30,24 +33,36 @@ cdef extern from "openssl_compat.h" nogil:
         SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER
         SSL_MODE_ENABLE_PARTIAL_WRITE
         SSL_MODE_AUTO_RETRY
+        SSL_OP_ENABLE_KTLS
 
     int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path)
     const char* openssl_compat_last_error()
 
     BIO *BIO_new(const BIO_METHOD *type)
     int BIO_free(BIO *a)
+    int BIO_socket_nbio(int fd, int mode)
     int BIO_pending(BIO *b)
     long BIO_set_nbio(BIO *b, long n)
     long BIO_get_mem_data(BIO *b, char** pp)
     int BIO_reset(BIO *b)
     int BIO_get_ktls_send(BIO *b)
+    int BIO_get_ktls_recv(BIO *b)
+    ssize_t SSL_sendfile(SSL *ssl, int fd, off_t offset, size_t size, int flags)
 
     SSL *SSL_new(SSL_CTX *ctx)
     void SSL_free(SSL *ssl)
     void SSL_set_bio(SSL *ssl, BIO *rbio, BIO *wbio)
+    void SSL_set0_rbio(SSL *ssl, BIO *rbio)
+    void SSL_set0_wbio(SSL *ssl, BIO *wbio)
+    int SSL_set_fd(SSL *ssl, int fd)
+    int SSL_set_rfd(SSL *ssl, int fd)
+    int SSL_set_wfd(SSL *ssl, int fd)
+    BIO *SSL_get_rbio(const SSL *ssl)
+    BIO *SSL_get_wbio(const SSL *ssl)
     void SSL_set_accept_state(SSL *ssl)
     void SSL_set_connect_state(SSL *ssl)
-    unsigned long long SSL_set_options(SSL *ssl, unsigned long long op)
+    uint64_t SSL_set_options(SSL *ssl, uint64_t op)
+    uint64_t SSL_CTX_get_options(const SSL_CTX *ctx)
     long SSL_set_mode(SSL *ssl, long mode)
     int SSL_set_tlsext_host_name(const SSL *s, const char *name)
     int SSL_get_error(const SSL *ssl, int ret)
@@ -55,12 +70,15 @@ cdef extern from "openssl_compat.h" nogil:
     int SSL_pending(const SSL *ssl)
     int SSL_renegotiate(SSL *ssl)
     int SSL_do_handshake(SSL *ssl)
+    int SSL_read(SSL *ssl, void *buf, int num)
+    int SSL_write(SSL *ssl, const void *buf, int num)
     int SSL_read_ex(SSL *ssl, void *buf, size_t num, size_t *readbytes)
     int SSL_write_ex(SSL *s, const void *buf, size_t num, size_t *written)
     int SSL_shutdown(SSL *ssl)
     int SSL_get_shutdown(const SSL *ssl)
     long SSL_get_verify_result(const SSL *ssl)
     void SSL_get0_alpn_selected(const SSL *ssl, const unsigned char **data, unsigned int *len)
+    void SSL_set_read_ahead(SSL *s, int yes)
 
     const SSL_CIPHER *SSL_get_current_cipher(const SSL *ssl)
     const char *SSL_CIPHER_get_name(const SSL_CIPHER *cipher)

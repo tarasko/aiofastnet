@@ -3,6 +3,12 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
+
+#ifdef _WIN32
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -39,9 +45,12 @@ typedef int (*err_print_errors_cb_fn)(const char *str, size_t len, void *u);
 #define SSL_SENT_SHUTDOWN 1
 #define SSL_RECEIVED_SHUTDOWN 2
 
+#define SSL_OP_BIT(n)  ((uint64_t)1 << (uint64_t)n)
+
 #define SSL_MODE_ENABLE_PARTIAL_WRITE 0x00000001U
 #define SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER 0x00000002U
 #define SSL_MODE_AUTO_RETRY 0x00000004U
+#define SSL_OP_ENABLE_KTLS SSL_OP_BIT(3)
 
 #define BIO_TYPE_SOURCE_SINK 0x0400
 #define BIO_CTRL_RESET 1
@@ -52,6 +61,7 @@ typedef int (*err_print_errors_cb_fn)(const char *str, size_t len, void *u);
 #define BIO_CTRL_DUP 12
 #define BIO_CTRL_WPENDING 13
 #define BIO_CTRL_GET_KTLS_SEND 73
+#define BIO_CTRL_GET_KTLS_RECV 76
 
 #define BIO_C_SET_NBIO 102
 #define BIO_C_FILE_SEEK 128
@@ -70,6 +80,7 @@ const char *openssl_compat_last_error(void);
 
 extern BIO *(*aiofn_BIO_new)(const BIO_METHOD *type);
 extern int (*aiofn_BIO_free)(BIO *a);
+extern int (*aiofn_BIO_socket_nbio)(int fd, int mode);
 extern long (*aiofn_BIO_ctrl)(BIO *bp, int cmd, long larg, void *parg);
 extern void (*aiofn_BIO_set_flags)(BIO *b, int flags);
 extern void (*aiofn_BIO_clear_flags)(BIO *b, int flags);
@@ -92,9 +103,17 @@ extern void (*aiofn_BIO_meth_free)(BIO_METHOD *biom);
 extern SSL *(*aiofn_SSL_new)(SSL_CTX *ctx);
 extern void (*aiofn_SSL_free)(SSL *ssl);
 extern void (*aiofn_SSL_set_bio)(SSL *ssl, BIO *rbio, BIO *wbio);
+extern void (*aiofn_SSL_set0_rbio)(SSL *ssl, BIO *rbio);
+extern void (*aiofn_SSL_set0_wbio)(SSL *ssl, BIO *wbio);
+extern int (*aiofn_SSL_set_fd)(SSL *ssl, int fd);
+extern int (*aiofn_SSL_set_rfd)(SSL *ssl, int fd);
+extern int (*aiofn_SSL_set_wfd)(SSL *ssl, int fd);
+extern BIO *(*aiofn_SSL_get_rbio)(const SSL *ssl);
+extern BIO *(*aiofn_SSL_get_wbio)(const SSL *ssl);
 extern void (*aiofn_SSL_set_accept_state)(SSL *ssl);
 extern void (*aiofn_SSL_set_connect_state)(SSL *ssl);
 extern uint64_t (*aiofn_SSL_set_options)(SSL *ssl, uint64_t options);
+extern uint64_t (*aiofn_SSL_CTX_get_options)(const SSL_CTX *ctx);
 extern long (*aiofn_SSL_ctrl)(SSL *ssl, int cmd, long larg, void *parg);
 long aiofn_SSL_set_mode(SSL *ssl, long mode);
 int aiofn_SSL_set_tlsext_host_name(const SSL *s, const char *name);
@@ -103,14 +122,18 @@ extern int (*aiofn_SSL_is_init_finished)(const SSL *s);
 extern int (*aiofn_SSL_pending)(const SSL *ssl);
 extern int (*aiofn_SSL_renegotiate)(SSL *ssl);
 extern int (*aiofn_SSL_do_handshake)(SSL *ssl);
+extern int (*aiofn_SSL_read)(SSL *ssl, void *buf, int num);
+extern int (*aiofn_SSL_write)(SSL *ssl, const void *buf, int num);
 extern int (*aiofn_SSL_read_ex)(SSL *ssl, void *buf, size_t num, size_t *readbytes);
 extern int (*aiofn_SSL_write_ex)(SSL *ssl, const void *buf, size_t num, size_t *written);
+extern ssize_t (*aiofn_SSL_sendfile)(SSL *ssl, int fd, off_t offset, size_t size, int flags);
 extern int (*aiofn_SSL_shutdown)(SSL *ssl);
 extern int (*aiofn_SSL_get_shutdown)(const SSL *ssl);
 extern long (*aiofn_SSL_get_verify_result)(const SSL *ssl);
 extern X509 *(*aiofn_SSL_get_peer_certificate)(const SSL *ssl);
 extern void (*aiofn_SSL_get0_alpn_selected)(const SSL *ssl, const unsigned char **data,
                                             unsigned int *len);
+extern void (*aiofn_SSL_set_read_ahead)(SSL *s, int yes);
 
 extern const SSL_CIPHER *(*aiofn_SSL_get_current_cipher)(const SSL *ssl);
 extern const char *(*aiofn_SSL_CIPHER_get_name)(const SSL_CIPHER *cipher);
@@ -145,10 +168,12 @@ long aiofn_BIO_get_mem_data(BIO *b, char **pp);
 long aiofn_BIO_set_nbio(BIO *b, long n);
 int aiofn_BIO_reset(BIO *b);
 int aiofn_BIO_get_ktls_send(BIO *b);
+int aiofn_BIO_get_ktls_recv(BIO *b);
 int aiofn_ERR_GET_LIB(unsigned long e);
 
 #define BIO_new aiofn_BIO_new
 #define BIO_free aiofn_BIO_free
+#define BIO_socket_nbio aiofn_BIO_socket_nbio
 #define BIO_ctrl aiofn_BIO_ctrl
 #define BIO_set_flags aiofn_BIO_set_flags
 #define BIO_clear_flags aiofn_BIO_clear_flags
@@ -171,20 +196,32 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define BIO_set_nbio aiofn_BIO_set_nbio
 #define BIO_reset aiofn_BIO_reset
 #define BIO_get_ktls_send aiofn_BIO_get_ktls_send
+#define BIO_get_ktls_recv aiofn_BIO_get_ktls_recv
+#define SSL_sendfile aiofn_SSL_sendfile
 
 #define SSL_new aiofn_SSL_new
 #define SSL_free aiofn_SSL_free
 #define SSL_set_bio aiofn_SSL_set_bio
+#define SSL_set0_rbio aiofn_SSL_set0_rbio
+#define SSL_set0_wbio aiofn_SSL_set0_wbio
+#define SSL_set_fd aiofn_SSL_set_fd
+#define SSL_set_rfd aiofn_SSL_set_rfd
+#define SSL_set_wfd aiofn_SSL_set_wfd
+#define SSL_get_rbio aiofn_SSL_get_rbio
+#define SSL_get_wbio aiofn_SSL_get_wbio
 #define SSL_set_accept_state aiofn_SSL_set_accept_state
 #define SSL_set_connect_state aiofn_SSL_set_connect_state
 #define SSL_set_mode aiofn_SSL_set_mode
 #define SSL_set_options aiofn_SSL_set_options
+#define SSL_CTX_get_options aiofn_SSL_CTX_get_options
 #define SSL_set_tlsext_host_name aiofn_SSL_set_tlsext_host_name
 #define SSL_get_error aiofn_SSL_get_error
 #define SSL_is_init_finished aiofn_SSL_is_init_finished
 #define SSL_pending aiofn_SSL_pending
 #define SSL_renegotiate aiofn_SSL_renegotiate
 #define SSL_do_handshake aiofn_SSL_do_handshake
+#define SSL_read aiofn_SSL_read
+#define SSL_write aiofn_SSL_write
 #define SSL_read_ex aiofn_SSL_read_ex
 #define SSL_write_ex aiofn_SSL_write_ex
 #define SSL_shutdown aiofn_SSL_shutdown
@@ -198,6 +235,7 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define SSL_CIPHER_get_bits aiofn_SSL_CIPHER_get_bits
 #define SSL_get0_param aiofn_SSL_get0_param
 #define SSL_CTX_get0_param aiofn_SSL_CTX_get0_param
+#define SSL_set_read_ahead aiofn_SSL_set_read_ahead
 
 #define X509_VERIFY_PARAM_get_hostflags aiofn_X509_VERIFY_PARAM_get_hostflags
 #define X509_VERIFY_PARAM_set_hostflags aiofn_X509_VERIFY_PARAM_set_hostflags

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import logging
 import socket
 import sys
+from functools import partial
+from logging import basicConfig
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -18,7 +21,7 @@ except ImportError:
 async def run_benchmark(args, loop_kind: str, use_aiofastnet: bool, transport_kind: str, msg_size: int):
     payload = b"x" * msg_size
 
-    server_ssl_ctx, client_ssl_ctx = build_ssl_contexts() \
+    server_ssl_ctx, client_ssl_ctx = build_ssl_contexts(enable_ktls=False) \
         if transport_kind == "ssl" else (None, None)
 
     requests = await run_pair(use_aiofastnet, args.duration, payload, server_ssl_ctx, client_ssl_ctx, None, args.sndbuf_size)
@@ -152,4 +155,5 @@ def main():
 
 
 if __name__ == "__main__":
+#    basicConfig(level=logging.DEBUG)
     main()

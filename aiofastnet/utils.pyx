@@ -1,6 +1,7 @@
 from cpython.bytes cimport PyBytes_FromObject, PyBytes_FromStringAndSize, PyBytes_GET_SIZE
 from cpython.buffer cimport PyObject_GetBuffer, PyBuffer_Release, PyBUF_SIMPLE
 from libc cimport errno
+import socket
 
 
 cdef extern from "Python.h":
@@ -147,3 +148,17 @@ cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* iov, Py_ssize_t iovcnt) ex
             # May be len is 0?
             with gil:
                 raise RuntimeError(f"writev syscall has sent 0 bytes and did not indicate any error")
+
+
+cdef aiofn_set_result_unless_cancelled(fut, result):
+    if fut.cancelled():
+        return
+    fut.set_result(result)
+
+
+cdef aiofn_set_nodelay(sock):
+    if hasattr(socket, 'TCP_NODELAY'):
+        if (sock.family in {socket.AF_INET, socket.AF_INET6} and
+                sock.type == socket.SOCK_STREAM and
+                sock.proto == socket.IPPROTO_TCP):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)

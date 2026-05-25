@@ -38,19 +38,51 @@ jobs:
     - name: Show Python build OPT flags (they are automatically added when building extensions)
       run: python -c "import sysconfig; print(sysconfig.get_config_var('OPT'))"
 
+    - name: Load kTLS kernel module
+      if: runner.os == 'Linux'
+      run: sudo modprobe tls
+
+    - name: Print kTLS info
+      if: runner.os == 'Linux'
+      run: |
+        uname -a
+        python -VV
+        python - <<'PY'
+        import ssl
+        print("OPENSSL_VERSION:", ssl.OPENSSL_VERSION)
+        print("HAS OP_ENABLE_KTLS:", hasattr(ssl, "OP_ENABLE_KTLS"))
+        print("OP_ENABLE_KTLS:", getattr(ssl, "OP_ENABLE_KTLS", None))
+        print("OPENSSL_VERSION_INFO:", ssl.OPENSSL_VERSION_INFO)
+        PY
+        cat /proc/sys/net/ipv4/tcp_available_ulp || true
+        cat /proc/net/tls_stat || true
+
+    - name: Print OpenSSL build info
+      if: runner.os == 'Linux'
+      run: |
+        python - <<'PY'
+        import ssl, sysconfig
+        print("OPENSSL_VERSION:", ssl.OPENSSL_VERSION)
+        print("OPENSSL_DIR:", sysconfig.get_config_var("OPENSSL_INCLUDES"))
+        print("LIBS:", sysconfig.get_config_var("LIBS"))
+        print("LDFLAGS:", sysconfig.get_config_var("LDFLAGS"))
+        PY
+        openssl version -a || true
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install -r requirements-test.txt
 
-#    - uses: actions/checkout@v6
-#    - name: Setup tmate session
-#      uses: mxschmitt/action-tmate@v3
-
     - name: Compile Cython extensions
       run: |
         python setup.py build_ext --inplace
+
+#    - uses: actions/checkout@v6
+#    - name: Setup tmate session
+#      if: runner.os == 'Linux'
+#      uses: mxschmitt/action-tmate@v3
 
     - name: Run tests
       run: |
@@ -68,6 +100,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+
+    - name: Load kTLS kernel module
+      run: sudo modprobe tls || true
 
     - name: Run tests on musllinux
       run: |

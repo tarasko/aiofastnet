@@ -23,20 +23,23 @@ def build_ssl_contexts(enable_ktls=False) -> tuple[ssl.SSLContext, ssl.SSLContex
 
     server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     server_ctx.load_cert_chain(certfile=str(cert_file), keyfile=str(key_file))
-    if enable_ktls:
-        server_ctx.options |= ssl.OP_ENABLE_KTLS
-        server_ctx.set_ciphers("ECDHE-RSA-AES128-GCM-SHA256")
-        server_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-        server_ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+
+    tls_version = ssl.TLSVersion.TLSv1_2
+    cipher = "ECDHE-RSA-AES128-GCM-SHA256"
+    server_ctx.set_ciphers(cipher)
+    server_ctx.minimum_version = tls_version
+    server_ctx.maximum_version = tls_version
 
     client_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     client_ctx.check_hostname = False
     client_ctx.verify_mode = ssl.CERT_NONE
+    client_ctx.set_ciphers(cipher)
+    client_ctx.minimum_version = tls_version
+    client_ctx.maximum_version = tls_version
+
     if enable_ktls:
+        server_ctx.options |= ssl.OP_ENABLE_KTLS
         client_ctx.options |= ssl.OP_ENABLE_KTLS
-        client_ctx.set_ciphers("ECDHE-RSA-AES128-GCM-SHA256")
-        client_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-        client_ctx.maximum_version = ssl.TLSVersion.TLSv1_2
 
     return server_ctx, client_ctx
 
@@ -49,16 +52,25 @@ async def EchoServer(use_aiofastnet,
                      port: int = 0,
                      reuse_port: bool | None = None):
     loop = asyncio.get_running_loop()
-    create_server = partial(aiofastnet.create_server, loop) \
-        if use_aiofastnet else loop.create_server
 
-    server = await create_server(
-        ServerProtocol,
-        host=host,
-        port=port,
-        ssl=server_ssl,
-        reuse_port=reuse_port,
-    )
+    if use_aiofastnet:
+        server = await aiofastnet.create_server(
+            loop,
+            ServerProtocol,
+            host=host,
+            port=port,
+            ssl=server_ssl,
+            reuse_port=reuse_port,
+        )
+    else:
+        server = await loop.create_server(
+            ServerProtocol,
+            host=host,
+            port=port,
+            ssl=server_ssl,
+            reuse_port=reuse_port,
+        )
+
     if sndbuf_size is not None:
         for server_sock in server.sockets:
             set_socket_sndbuf(server_sock, sndbuf_size)
@@ -76,18 +88,28 @@ async def EchoClient(use_aiofastnet,
                      payload: bytes,
                      client_ssl: ssl.SSLContext | None,
                      sndbuf_size: int | None = None,
-                     host: str = "127.0.0.1") -> ClientProtocol:
+                     host: str = "127.0.0.1"
+                     ) -> ClientProtocol:
     loop = asyncio.get_running_loop()
-    create_connection = partial(aiofastnet.create_connection, loop) \
-        if use_aiofastnet else loop.create_connection
 
-    transport, client = await create_connection(
-        lambda: ClientProtocol(payload, duration, 0),
-        host=host,
-        port=port,
-        ssl=client_ssl,
-        server_hostname=host if client_ssl is not None else None,
-    )
+    if use_aiofastnet:
+        transport, client = await aiofastnet.create_connection(
+            loop,
+            lambda: ClientProtocol(payload, duration, 0),
+            host=host,
+            port=port,
+            ssl=client_ssl,
+            server_hostname=host if client_ssl is not None else None
+        )
+    else:
+        transport, client = await loop.create_connection(
+            lambda: ClientProtocol(payload, duration, 0),
+            host=host,
+            port=port,
+            ssl=client_ssl,
+            server_hostname=host if client_ssl is not None else None,
+        )
+
     client_sock = transport.get_extra_info("socket")
     if client_sock is not None:
         if sndbuf_size is not None:
@@ -105,7 +127,7 @@ async def run_pair(
     server_ssl: ssl.SSLContext | None,
     client_ssl: ssl.SSLContext | None,
     barrier: threading.Barrier | asyncio.Barrier | None,
-    sndbuf_size: int | None = None
+    sndbuf_size: int | None = None,
 ) -> int:
     async with EchoServer(use_aiofastnet, server_ssl, sndbuf_size) as server_port:
         async with EchoClient(use_aiofastnet, server_port, duration, payload, client_ssl, sndbuf_size) as client:

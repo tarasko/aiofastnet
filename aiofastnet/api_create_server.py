@@ -16,7 +16,7 @@ import weakref
 from . import constants
 from .api_utils import _is_asyncio_loop, _create_connection_transport, \
     _check_ssl_socket, _logger, _HAS_IPv6, _ensure_resolved
-from .ssl_protocol import SSLProtocol
+from .ssl_transport import SSLTransport_Transport
 from .transport import (aiofn_is_buffered_protocol)
 from .wrapped_transport import (
     _WrappedProtocol, _WrappedBufferedProtocol,
@@ -185,7 +185,7 @@ async def create_server(
         ssl_handshake_timeout,
         ssl_shutdown_timeout,
         ssl_incoming_bio_size,
-        ssl_outgoing_bio_size
+        ssl_outgoing_bio_size,
     )
     if start_serving:
         server._start_serving()
@@ -201,7 +201,8 @@ async def create_server(
 class Server(asyncio.AbstractServer):
     def __init__(self, loop, sockets, protocol_factory, ssl_context, backlog,
                  ssl_handshake_timeout, ssl_shutdown_timeout,
-                 ssl_incoming_bio_size, ssl_outgoing_bio_size):
+                 ssl_incoming_bio_size, ssl_outgoing_bio_size
+                 ):
         self._loop = loop
         self._sockets = sockets
         # Weak references so we don't break Transport's ability to
@@ -358,12 +359,13 @@ async def _create_server_fallback(loop,
 
         def ssl_protocol_factory():
             protocol = protocol_factory()
-            return SSLProtocol(
+            tls_transport = SSLTransport_Transport(
                 loop, protocol, sslcontext,
                 server_side=True,
                 ssl_handshake_timeout=ssl_handshake_timeout,
                 ssl_shutdown_timeout=ssl_shutdown_timeout
             )
+            return tls_transport.get_tls_protocol()
 
         return await loop.create_server(ssl_protocol_factory, **kwargs)
     else:
@@ -384,7 +386,7 @@ def _accept_connection(
         ssl_handshake_timeout,
         ssl_shutdown_timeout,
         ssl_incoming_bio_size,
-        ssl_outgoing_bio_size,
+        ssl_outgoing_bio_size
 ):
     # This method is only called once for each event loop tick where the
     # listening socket has triggered an EVENT_READ. There may be multiple
@@ -424,7 +426,7 @@ def _accept_connection(
                                 ssl_handshake_timeout,
                                 ssl_shutdown_timeout,
                                 ssl_incoming_bio_size,
-                                ssl_outgoing_bio_size,
+                                ssl_outgoing_bio_size
                                 )
             else:
                 raise  # The event loop will catch, log and ignore it.
@@ -432,7 +434,8 @@ def _accept_connection(
             accept = _accept_connection2(
                 loop, protocol_factory, conn, sslcontext, server,
                 ssl_handshake_timeout, ssl_shutdown_timeout,
-                ssl_incoming_bio_size, ssl_outgoing_bio_size)
+                ssl_incoming_bio_size, ssl_outgoing_bio_size
+            )
             asyncio.create_task(accept)
 
 
@@ -444,7 +447,8 @@ async def _accept_connection2(
         ssl_handshake_timeout,
         ssl_shutdown_timeout,
         ssl_incoming_bio_size,
-        ssl_outgoing_bio_size):
+        ssl_outgoing_bio_size
+):
     protocol = None
     transport = None
     try:
@@ -478,12 +482,13 @@ def _start_serving(loop, protocol_factory, sock,
                    ssl_handshake_timeout,
                    ssl_shutdown_timeout,
                    ssl_incoming_bio_size,
-                   ssl_outgoing_bio_size
+                   ssl_outgoing_bio_size,
                    ):
     loop.add_reader(sock.fileno(), _accept_connection, loop,
                     protocol_factory, sock, sslcontext, server, backlog,
                     ssl_handshake_timeout, ssl_shutdown_timeout,
-                    ssl_incoming_bio_size, ssl_outgoing_bio_size)
+                    ssl_incoming_bio_size, ssl_outgoing_bio_size
+                    )
 
 
 def _set_reuseport(sock):
