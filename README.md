@@ -214,6 +214,10 @@ often useful with Conda Python, which commonly ships its own OpenSSL libraries
 inside the environment.
 
 KTLS support by kernel version is outline [here.](https://delthas.fr/blog/2023/kernel-tls/)
+Some other useful links:
+
+https://dev.to/ozkanpakdil/kernel-tls-nic-offload-and-socket-sharding-whats-new-and-who-uses-it-4e1f
+https://www.kernel.org/doc/html/latest/networking/tls.html
 
 ## Free-Threaded Python
 
