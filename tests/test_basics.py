@@ -399,7 +399,7 @@ async def test_sendfile_huge_error(conn_type):
                     try:
                         await sendfile(loop, client.transport, tmp, offset=0, count=len(payload))
                         await client.wait_closed()
-                    except (ConnectionResetError, BrokenPipeError):
+                    except (ConnectionResetError, BrokenPipeError, ssl.SSLError):
                         pass
                 else:
                     with pytest.raises((ConnectionResetError, BrokenPipeError)):
