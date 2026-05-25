@@ -444,7 +444,7 @@ async def TestClient(server_or_host, port=None,
         transport.abort()
         try:
             await client.wait_closed(1.0)
-        except (TestException, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+        except (TestException, ConnectionResetError, ConnectionAbortedError, BrokenPipeError, ssl.SSLError):
             pass
 
 
