@@ -172,7 +172,6 @@ syscalls when Kernel TLS is not used.
 
 Kernel TLS requires support from all of these layers:
 
-- A Linux kernel with KTLS support enabled.
 - The `tls` kernel module loaded.
 - OpenSSL built with KTLS support on a machine with suitable kernel headers.
 - An `ssl.SSLContext` with `ssl.OP_ENABLE_KTLS` enabled.
@@ -302,4 +301,4 @@ one thread.
 
 ## Contributing
 
-Contributions are welcome.
+Contributions are welcome!
