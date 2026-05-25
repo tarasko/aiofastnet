@@ -184,7 +184,7 @@ To load the kernel module:
 $ sudo modprobe tls
 ```
 
-To enable KTLS on Python SSL contexts:
+To enable KTLS on Python SSL contexts (available in Python 3.12+):
 
 ```python
 import ssl
