@@ -1,4 +1,3 @@
 ## Description
 
-Read README.rst for project description.
-
+Read README.md for project description.

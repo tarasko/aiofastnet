@@ -21,7 +21,7 @@ except ImportError:
 async def run_benchmark(args, loop_kind: str, use_aiofastnet: bool, transport_kind: str, msg_size: int):
     payload = b"x" * msg_size
 
-    server_ssl_ctx, client_ssl_ctx = build_ssl_contexts(enable_ktls=True) \
+    server_ssl_ctx, client_ssl_ctx = build_ssl_contexts(enable_ktls=False) \
         if transport_kind == "ssl" else (None, None)
 
     requests = await run_pair(use_aiofastnet, args.duration, payload, server_ssl_ctx, client_ssl_ctx, None, args.sndbuf_size)
@@ -155,5 +155,5 @@ def main():
 
 
 if __name__ == "__main__":
-    basicConfig(level=logging.DEBUG)
+#    basicConfig(level=logging.DEBUG)
     main()
