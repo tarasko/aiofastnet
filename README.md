@@ -47,6 +47,7 @@ Source: [examples/benchmark_threaded.py](https://github.com/tarasko/aiofastnet/b
   stock `asyncio` loops, `uvloop`, and `winloop`.
 - **Particularly strong for SSL-heavy workloads**. `aiofastnet` uses OpenSSL
   more directly and avoids extra copies in the data path.
+- **Kernel TLS support on Linux**. Native `sendfile` for TLS connections through `SSL_sendfile`. 
 - **Safer transport write() / writelines() behavior**. If the socket cannot accept
   everything immediately, only `bytes` and `memoryview` objects backed by
   `bytes` are retained without copying. Other objects, including
@@ -153,6 +154,57 @@ server implementation, because the proactor loop does not provide the
 transport implementation. For transports created through `aiofastnet`, a
 compatibility wrapper preserves the documented `write()` /
 `writelines()` buffer-safety behavior.
+
+## Kernel TLS Support on Linux
+
+On Linux, `aiofastnet` can use OpenSSL's Kernel TLS support for TLS
+connections. Kernel TLS can be beneficial for workloads that send large amounts
+of data over established TLS connections, especially when using `sendfile()`.
+In that case the kernel can move file data directly through the TLS socket path
+instead of forcing the application to copy file contents through userspace.
+
+Kernel TLS requires support from all of these layers:
+
+- A Linux kernel with KTLS support enabled.
+- The `tls` kernel module loaded.
+- OpenSSL built with KTLS support on a machine with suitable kernel headers.
+- An `ssl.SSLContext` with `ssl.OP_ENABLE_KTLS` enabled.
+- A TLS version and cipher suite supported by the kernel TLS implementation.
+
+To load the kernel module:
+
+```console
+$ sudo modprobe tls
+```
+
+To enable KTLS on Python SSL contexts:
+
+```python
+import ssl
+
+server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+server_context.options |= ssl.OP_ENABLE_KTLS
+
+client_context = ssl.create_default_context()
+client_context.options |= ssl.OP_ENABLE_KTLS
+```
+
+The OpenSSL library used by Python must itself have KTLS support. Python
+distributions often ship their own `libssl` and `libcrypto`, and those
+libraries may have been built on older systems where KTLS was not available.
+That can be true even when the host running your program has a newer kernel.
+
+Check which OpenSSL Python is using:
+
+```console
+$ python -c "import ssl; print(ssl.OPENSSL_VERSION); print(ssl._ssl.__file__)"
+```
+
+If your Python distribution bundles an older or non-KTLS OpenSSL, one practical
+option is to locate the bundled `libssl` and `libcrypto` files and replace them
+with symbolic links to a newer system OpenSSL build that supports KTLS. This is
+often useful with Conda Python, which commonly ships its own OpenSSL libraries
+inside the environment.
 
 ## Free-Threaded Python
 
