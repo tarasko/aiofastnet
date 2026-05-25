@@ -31,7 +31,7 @@ async def start_tls(loop: asyncio.AbstractEventLoop,
             f'got {sslcontext!r}')
 
     waiter = loop.create_future()
-    ssl_protocol = TLSTransport_Transport(
+    ssl_transport = TLSTransport_Transport(
         loop, protocol, sslcontext,
         waiter=waiter,
         server_side=server_side,
@@ -42,6 +42,7 @@ async def start_tls(loop: asyncio.AbstractEventLoop,
         ssl_incoming_bio_size=ssl_incoming_bio_size,
         ssl_outgoing_bio_size=ssl_outgoing_bio_size
         )
+    ssl_protocol = ssl_transport.get_tls_protocol()
 
     # Pause early so that "ssl_protocol.data_received()" doesn't
     # have a chance to get called before "ssl_protocol.connection_made()".
@@ -59,4 +60,4 @@ async def start_tls(loop: asyncio.AbstractEventLoop,
         resume_cb.cancel()
         raise
 
-    return ssl_protocol
+    return ssl_transport

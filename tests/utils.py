@@ -421,14 +421,23 @@ async def TestClient(server_or_host, port=None,
             raise ValueError("port must be provided when host is passed directly")
 
     loop = asyncio.get_running_loop()
-    transport, client = await create_connection(
-        loop,
-        lambda: protocol_factory(is_buffered),
-        host=host,
-        port=port,
-        ssl=ct.client_ssl_context,
-        server_hostname=server_hostname,
-    )
+    if ct.use_start_tls:
+        transport, client = await create_connection(
+            loop,
+            lambda: protocol_factory(is_buffered),
+            host=host,
+            port=port
+        )
+        await client.start_tls(ct.client_ssl_context)
+    else:
+        transport, client = await create_connection(
+            loop,
+            lambda: protocol_factory(is_buffered),
+            host=host,
+            port=port,
+            ssl=ct.client_ssl_context,
+            server_hostname=server_hostname,
+        )
     try:
         yield client
     finally:

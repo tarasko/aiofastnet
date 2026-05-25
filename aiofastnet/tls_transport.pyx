@@ -344,6 +344,9 @@ cdef class TLSTransportBase(Transport):
         if self._app_protocol_aiofn and self._app_protocol is not None:
             total += (<Protocol> self._app_protocol).get_local_write_buffer_size()
 
+        if self._ssl_object is not None and self._ssl_object.outgoing != NULL:
+            total += self._ssl_object.outgoing_bio_pending()
+
         return total
 
     cdef inline _check_thread(self, meth):
@@ -679,7 +682,7 @@ cdef class TLSTransportBase(Transport):
             if self._write_backlog_size:
                 self._flush_write_backlog()
 
-            if self.get_write_buffer_size() == 0:
+            if self.get_local_write_buffer_size() == 0:
                 self._set_state(SSLProtocolState.SHUTDOWN)
                 self._do_shutdown()
 
@@ -1378,7 +1381,48 @@ cdef class TLSTransport_Socket(TLSTransportBase):
                 self._server = None
 
 
-cdef class TLSTransport_Transport(TLSTransportBase, asyncio.BufferedProtocol):
+cdef class TLSProtocol(Protocol, asyncio.BufferedProtocol):
+    cdef:
+        TLSTransport_Transport _tls_transport
+
+    def __init__(self, TLSTransport_Transport tls_transport):
+        self._tls_transport = tls_transport
+
+    cpdef is_buffered_protocol(self):
+        return True
+
+    cpdef connection_made(self, transport):
+        return self._tls_transport.connection_made(transport)
+
+    cpdef connection_lost(self, exc):
+        # Break cyclic dependency
+        tls_transport = self._tls_transport
+        self._tls_transport = None
+        return tls_transport.connection_lost(exc)
+
+    cdef get_buffer_c(self, Py_ssize_t n, char** buf_ptr, Py_ssize_t* buf_len):
+        return self._tls_transport.get_buffer_c(n, buf_ptr, buf_len)
+
+    cpdef get_buffer(self, Py_ssize_t n):
+        return self._tls_transport.get_buffer(n)
+
+    cpdef buffer_updated(self, Py_ssize_t nbytes):
+        self._tls_transport.buffer_updated(nbytes)
+
+    cpdef eof_received(self):
+        self._tls_transport.eof_received()
+
+    cpdef pause_writing(self):
+        self._tls_transport.pause_writing()
+
+    cpdef resume_writing(self):
+        self._tls_transport.resume_writing()
+
+    cpdef Py_ssize_t get_local_write_buffer_size(self) except -1:
+        return self._tls_transport.get_local_write_buffer_size()
+
+
+cdef class TLSTransport_Transport(TLSTransportBase):
     """
     Act as both BufferedProtocol for the downstream layer.
     And as a Transport for upstream
@@ -1424,10 +1468,10 @@ cdef class TLSTransport_Transport(TLSTransportBase, asyncio.BufferedProtocol):
         else:
             self._app_state = AppProtocolState.STATE_CON_MADE
 
-    def is_buffered_protocol(self):
-        return True
+    cpdef get_tls_protocol(self):
+        return TLSProtocol(self)
 
-    def connection_made(self, transport):
+    cdef inline connection_made(self, transport):
         """Called when the low-level connection is made.
 
         Start the SSL handshake.
@@ -1440,7 +1484,7 @@ cdef class TLSTransport_Transport(TLSTransportBase, asyncio.BufferedProtocol):
             self._ssl_layer_num = underlying_ssl_layer_num + 1
         self._start_handshake()
 
-    def connection_lost(self, exc):
+    cdef inline connection_lost(self, exc):
         """Called when the low-level connection is lost or closed.
 
         The argument is an exception object or None (the latter
@@ -1474,10 +1518,10 @@ cdef class TLSTransport_Transport(TLSTransportBase, asyncio.BufferedProtocol):
             self._handshake_timeout_handle.cancel()
             self._handshake_timeout_handle = None
 
-    cdef get_buffer_c(self, Py_ssize_t n, char** buf_ptr, Py_ssize_t* buf_len):
+    cdef inline get_buffer_c(self, Py_ssize_t n, char** buf_ptr, Py_ssize_t* buf_len):
         self._ssl_object.incoming_bio_get_write_buf(buf_ptr, buf_len)
 
-    cpdef get_buffer(self, Py_ssize_t n):
+    cdef inline get_buffer(self, Py_ssize_t n):
         cdef:
             char* buf_ptr
             Py_ssize_t buf_len
@@ -1485,21 +1529,14 @@ cdef class TLSTransport_Transport(TLSTransportBase, asyncio.BufferedProtocol):
         self._ssl_object.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
         return PyMemoryView_FromMemory(buf_ptr, buf_len, PyBUF_WRITE)
 
-    cpdef buffer_updated(self, Py_ssize_t nbytes):
+    cdef inline buffer_updated(self, Py_ssize_t nbytes):
         if unlikely(self._is_debug):
             _logger.debug("%r: buffer_updated(%d)", self, nbytes)
 
         self._ssl_object.incoming_bio_produce(nbytes)
         self._incoming_bio_updated()
 
-    def eof_received(self):
-        """Called when the other end of the low-level stream
-        is half-closed.
-
-        If this returns a false value (including None), the transport
-        will close itself.  If it returns a true value, closing the
-        transport is up to the protocol.
-        """
+    cdef inline eof_received(self):
         if unlikely(self._is_debug):
             _logger.debug("%r: received EOF", self)
 
@@ -1517,6 +1554,12 @@ cdef class TLSTransport_Transport(TLSTransportBase, asyncio.BufferedProtocol):
 
         elif self._state == SSLProtocolState.SHUTDOWN:
             self._on_shutdown_complete(None)
+
+    cdef inline pause_writing(self):
+        self._app_protocol.pause_writing()
+
+    cdef inline resume_writing(self):
+        self._app_protocol.resume_writing()
 
     cpdef get_extra_info(self, name, default=None):
         value = TLSTransportBase.get_extra_info(self, name)
