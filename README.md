@@ -97,7 +97,7 @@ async def main():
         9000,
     )
 
-    await asyncio.sleep(0.1)
+    ...
 
 asyncio.run(main())
 ```

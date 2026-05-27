@@ -20,7 +20,7 @@ from .ssl_transport import SSLTransport_Transport
 from .transport import (aiofn_is_buffered_protocol)
 from .wrapped_transport import (
     _WrappedProtocol, _WrappedBufferedProtocol,
-    _should_fallback_to_asyncio
+    _should_fallback_to_asyncio, _get_original_loop_method
 )
 
 from asyncio.trsock import TransportSocket
@@ -367,7 +367,8 @@ async def _create_server_fallback(loop,
             )
             return tls_transport.get_tls_protocol()
 
-        return await loop.create_server(ssl_protocol_factory, **kwargs)
+        create_server = _get_original_loop_method(loop, "create_server")
+        return await create_server(ssl_protocol_factory, **kwargs)
     else:
         def wrapped_protocol_factory():
             user_protocol = protocol_factory()
@@ -376,7 +377,8 @@ async def _create_server_fallback(loop,
             else:
                 return _WrappedProtocol(user_protocol)
 
-        return await loop.create_server(wrapped_protocol_factory, **kwargs)
+        create_server = _get_original_loop_method(loop, "create_server")
+        return await create_server(wrapped_protocol_factory, **kwargs)
 
 
 def _accept_connection(

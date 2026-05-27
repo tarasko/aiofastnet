@@ -5,6 +5,17 @@ from .transport import Transport, aiofn_is_buffered_protocol
 from .utils import aiofn_validate_and_maybe_copy_buffer
 
 
+_AIOFASTNET_PATCHED_ATTR = "_aiofastnet_patched_methods"
+_AIOFASTNET_ORIGINAL_ATTR = "_aiofastnet_original_methods"
+
+
+def _get_original_loop_method(loop: asyncio.AbstractEventLoop, name: str):
+    originals = getattr(loop, _AIOFASTNET_ORIGINAL_ATTR, None)
+    if originals is not None and name in originals:
+        return originals[name]
+    return getattr(loop, name)
+
+
 def _should_fallback_to_asyncio(loop: asyncio.AbstractEventLoop) -> bool:
     if os.name != "nt":
         return False
@@ -119,4 +130,3 @@ class _WrappedBufferedProtocol(_WrappedProtocolBase, asyncio.BufferedProtocol):
 
     def buffer_updated(self, nbytes):
         return self._protocol.buffer_updated(nbytes)
-

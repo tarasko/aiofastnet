@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.7.0
+------------------
+
+* Add loop monkey-patching via install_policy, loop_factory, patch_loop
+
 0.6.0
 ------------------
 

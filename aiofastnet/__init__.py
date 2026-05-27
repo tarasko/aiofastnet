@@ -3,6 +3,7 @@ from .api_create_server import create_server
 from .api_create_connection import create_connection
 from .api_start_tls import start_tls
 from .api_sendfile import sendfile
+from .api_patch import loop_factory, patch_loop, install_policy
 
 from .transport import (
     Transport,
@@ -17,10 +18,13 @@ __all__ = [
     'create_connection',
     'start_tls',
     'sendfile',
+    'loop_factory',
+    'patch_loop',
+    'install_policy',
     'Transport',
     'Protocol',
     'aiofn_is_buffered_protocol'
 ]
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 __author__ = "Taras Kozlov"
