@@ -23,6 +23,8 @@ do any dirty tricks like calling sync `recv`/`send` syscalls from a different th
 Essentially it is just the same internal implementation that you would find in asyncio and uvloop, but done 
 much more efficiently.
 
+`aiofastnet` supports [Kernel TLS](https://www.kernel.org/doc/html/latest/networking/tls.html) out-of-the box on Linux. 
+
 ## Benchmark
 
 The benchmark below compares echo round-trips over loopback for TCP and SSL.
