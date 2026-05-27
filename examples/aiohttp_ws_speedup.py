@@ -1,3 +1,6 @@
+# This example measures aiohttp websocket RPS when run against the server in the
+# same event loop through a loopback. You can enable/disable aiofastnet usage and uvloop
+
 import argparse
 import asyncio
 import platform
@@ -10,7 +13,7 @@ import aiofastnet
 from examples.utils import build_ssl_contexts
 
 
-async def websocket_handler(request):
+async def server_websocket_handler(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
 
@@ -59,19 +62,19 @@ async def run_client(url: str, data: bytes, duration: float, ssl_context):
 
 
 async def main(args):
-    if args.ssl:
-        server_ctx, client_ctx = build_ssl_contexts()
-    else:
+    if args.plain:
         server_ctx, client_ctx = None, None
+    else:
+        server_ctx, client_ctx = build_ssl_contexts()
 
-    server = web.Server(websocket_handler)
+    server = web.Server(server_websocket_handler)
     runner = web.ServerRunner(server)
     await runner.setup()
     site = web.TCPSite(runner, 'localhost', args.port, ssl_context=server_ctx)
     await site.start()
 
-    print(f"{'SSL' if args.ssl else 'TCP'} server started on port {args.port}")
-    rps = await run_client(f"{'wss' if args.ssl else 'ws'}://localhost:{args.port}/", b"x"*args.msg_size, args.duration, client_ctx)
+    print(f"{'TCP' if args.plain else 'SSL'} server started on port {args.port}")
+    rps = await run_client(f"{'ws' if args.plain else 'wss'}://localhost:{args.port}/", b"x"*args.msg_size, args.duration, client_ctx)
     print(f"RPS: {rps}")
 
 
@@ -80,7 +83,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Echo round-trip benchmark over loopback for aiohttp websockets")
     parser.add_argument("--uvloop", action="store_true", help="Turn on uvloop")
     parser.add_argument("--aiofastnet", action="store_true", help="Turn on aiofastnet")
-    parser.add_argument("--ssl", action="store_true", help="Use ssl")
+    parser.add_argument("--plain", action="store_true", help="Use plain tcp socket instead of ssl")
     parser.add_argument("--port", default=8080, type=int, help="Server port")
     parser.add_argument("--msg-size", type=int, default=256, help="Comma-separated message sizes in bytes")
     parser.add_argument("--duration", type=float, default=5.0, help="Benchmark duration in seconds" )
