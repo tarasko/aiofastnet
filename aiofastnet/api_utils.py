@@ -7,7 +7,7 @@ from typing import Callable, Union, Optional, Tuple
 from .ssl_transport import SSLTransport_Socket, SSLTransport_Transport
 from .transport import SocketTransport, aiofn_is_buffered_protocol
 from .wrapped_transport import _should_fallback_to_asyncio, \
-    _WrappedBufferedProtocol, _WrappedProtocol
+    _WrappedBufferedProtocol, _WrappedProtocol, _get_original_loop_method
 
 
 _HAS_IPv6 = hasattr(socket, 'AF_INET6')
@@ -55,7 +55,8 @@ async def _create_connection_transport(
 
             ssl_protocol_factory = lambda: ssl_transport.get_tls_protocol()
 
-            loop_transport, ssl_protocol = await loop.create_connection(
+            create_connection = _get_original_loop_method(loop, "create_connection")
+            loop_transport, ssl_protocol = await create_connection(
                 ssl_protocol_factory, None, None, sock=sock)
             transport = ssl_transport
         else:
@@ -66,7 +67,8 @@ async def _create_connection_transport(
                 else:
                     return _WrappedProtocol(user_protocol)
 
-            loop_transport, wrapped_protocol = await loop.create_connection(
+            create_connection = _get_original_loop_method(loop, "create_connection")
+            loop_transport, wrapped_protocol = await create_connection(
                 wrapped_protocol_factory, None, None, sock=sock)
             transport = wrapped_protocol._wrapped_transport
             protocol = wrapped_protocol._protocol

@@ -1,9 +1,12 @@
 import asyncio
 import os
+import platform
+import re
 import ssl
 import warnings
 from asyncio.trsock import TransportSocket
 from logging import getLogger
+from pathlib import Path
 
 from cpython.bytearray cimport PyByteArray_AS_STRING, PyByteArray_GET_SIZE
 from cpython.bytes cimport PyBytes_FromStringAndSize
@@ -42,6 +45,18 @@ def _create_transport_context(server_side, server_hostname):
     if not server_hostname:
         sslcontext.check_hostname = False
     return sslcontext
+
+
+def _linux_kernel_at_least(major: int, minor: int) -> bool:
+    if platform.system() != "Linux":
+        return False
+
+    match = re.match(r"^(\d+)\.(\d+)", platform.release())
+    if match is None:
+        return False
+
+    current = tuple(map(int, match.groups()))
+    return current >= (major, minor)
 
 
 cdef class SendFileRequest:
@@ -455,10 +470,29 @@ cdef class SSLTransportBase(Transport):
         self._set_state(SSLProtocolState.WRAPPED)
 
         _logger.debug("%r: cipher %s", self, self._ssl_object.cipher())
-        _logger.debug("%r: KTLS SEND enabled: %d",
-                      self, self._ssl_object.ktls_send_enabled())
-        _logger.debug("%r: KTLS RECV enabled: %d",
-                      self, self._ssl_object.ktls_recv_enabled())
+        _logger.debug("%r: KTLS SEND: %s",
+                      self, 'enabled' if self._ssl_object.ktls_send_enabled() else 'disabled')
+        _logger.debug("%r: KTLS RECV: %s",
+                      self, 'enabled' if self._ssl_object.ktls_recv_enabled() else 'disabled')
+
+        if (self._ssl_object.incoming == NULL and not self._ssl_object.ktls_recv_enabled()) or \
+            (self._ssl_object.outgoing == NULL and not self._ssl_object.ktls_recv_enabled()):
+            if platform.system() == "Linux":
+                # Let's give a user some clue about how to troubleshoot KTLS not switching on
+                if not Path("/sys/module/tls").exists():
+                    _logger.warning("%r: Kernel TLS was not enabled because kernel module 'tls' is not loaded, load module with 'sudo modprobe tls'", self)
+                elif not _linux_kernel_at_least(5, 19):
+                    _logger.warning(
+                        "%r: Kernel TLS was not enabled because linux kernel version is < 5.19",
+                        self)
+                elif ssl.OPENSSL_VERSION_INFO[:3] < (3, 0, 0):
+                    _logger.warning("%r: Kernel TLS was not enabled because OpenSSL version is too old, you need OpenSSL >= 3.0", self)
+                    _logger.warning("%r: Loaded libssl: %s", self, SSL_LIB_PATH)
+                    _logger.warning("%r: Loaded libcrypto: %s", self, CRYPTO_LIB_PATH)
+                else:
+                    _logger.warning("%r: Kernel TLS was not enabled PROBABLY because OpenSSL was built on a machine with an old linux kernel (<5.19)", self)
+                    _logger.warning("%r: Loaded libssl: %s", self, SSL_LIB_PATH)
+                    _logger.warning("%r: Loaded libcrypto: %s", self, CRYPTO_LIB_PATH)
 
         self._extra.update(
             peercert=self._ssl_object.getpeercert(),
