@@ -1,4 +1,6 @@
+import argparse
 import asyncio
+import platform
 
 import uvloop
 from aiohttp import ClientSession, WSMsgType, web
@@ -25,20 +27,6 @@ async def websocket_handler(request):
     print('websocket connection closed')
 
     return ws
-
-
-async def main():
-    server_ctx, client_ctx = build_ssl_contexts()
-
-    server = web.Server(websocket_handler)
-    runner = web.ServerRunner(server)
-    await runner.setup()
-    site = web.TCPSite(runner, 'localhost', 8080, ssl_context=server_ctx)
-    await site.start()
-
-    print("Server started")
-    rps = await run_client("wss://localhost:8080/", b"x"*256, 5, client_ctx)
-    print(f"RPS: {rps}")
 
 
 async def run_client(url: str, data: bytes, duration: float, ssl_context):
@@ -70,7 +58,43 @@ async def run_client(url: str, data: bytes, duration: float, ssl_context):
                     break
 
 
+async def main(args):
+    if args.ssl:
+        server_ctx, client_ctx = build_ssl_contexts()
+    else:
+        server_ctx, client_ctx = None, None
+
+    server = web.Server(websocket_handler)
+    runner = web.ServerRunner(server)
+    await runner.setup()
+    site = web.TCPSite(runner, 'localhost', args.port, ssl_context=server_ctx)
+    await site.start()
+
+    print(f"{'SSL' if args.ssl else 'TCP'} server started on port {args.port}")
+    rps = await run_client(f"{'wss' if args.ssl else 'ws'}://localhost:{args.port}/", b"x"*args.msg_size, args.duration, client_ctx)
+    print(f"RPS: {rps}")
+
+
+
 if __name__ == "__main__":
-    uvloop.install()
-    aiofastnet.install_policy()
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="Echo round-trip benchmark over loopback for aiohttp websockets")
+    parser.add_argument("--uvloop", action="store_true", help="Turn on uvloop")
+    parser.add_argument("--aiofastnet", action="store_true", help="Turn on aiofastnet")
+    parser.add_argument("--ssl", action="store_true", help="Use ssl")
+    parser.add_argument("--port", default=8080, type=int, help="Server port")
+    parser.add_argument("--msg-size", type=int, default=256, help="Comma-separated message sizes in bytes")
+    parser.add_argument("--duration", type=float, default=5.0, help="Benchmark duration in seconds" )
+    args = parser.parse_args()
+
+    if args.uvloop:
+        uvloop.install()
+
+    if args.aiofastnet:
+        pyver = platform.python_version_tuple()
+        if (int(pyver[0]), int(pyver[1])) >= (3, 14):
+            asyncio.run(main(args), loop_factory=aiofastnet.loop_factory())
+        else:
+            aiofastnet.install_policy()
+            asyncio.run(main(args))
+    else:
+        asyncio.run(main(args))
