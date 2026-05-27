@@ -1,10 +1,20 @@
+# This example shows how you can enable aiohttp to send static files over secure connection using Kernel TLS on Linux.
+# All you need is:
+# * enable aiofastnet with aiofastnet.install_policy()
+# * add ssl.OP_ENABLE_KTLS to ssl_context.options
+# * load kernel tls module with 'sudo modprobe tls' if not loaded yet.
+
+# Make sure you have a relatively new Linux kernel (>5.19) and proper OpenSSL build (>3.0).
+# OpenSSL should have been build on a machine with Linux kernel >5.19.
+# Check README.md for details
+
+
 import argparse
 import asyncio
-import os
 import pathlib
 import ssl
 import tempfile
-from logging import basicConfig, getLogger
+from logging import basicConfig
 import uvloop
 
 from aiohttp import web
