@@ -6,6 +6,7 @@ from aiofastnet.wrapped_transport import (
     _AIOFASTNET_ORIGINAL_ATTR,
     _AIOFASTNET_PATCHED_ATTR,
 )
+from tests.utils import TestClient, TestServer, conn_type
 
 
 async def test_patch_loop_is_idempotent():
@@ -57,3 +58,16 @@ async def test_patched_loop_connection_methods_use_aiofastnet_transport():
     finally:
         server.close()
         await server.wait_closed()
+
+
+async def test_transport_methods_mockable(conn_type):
+    async with TestServer(ct=conn_type) as server:
+        async with TestClient(server, ct=conn_type) as client:
+            orig_write = client.transport.write
+            orig_writelines = client.transport.writelines
+
+            setattr(client.transport, "write", 123)
+            setattr(client.transport, "writelines", 123)
+
+            client.transport.write = orig_write
+            client.transport.writelines = orig_writelines

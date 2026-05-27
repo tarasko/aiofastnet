@@ -2,6 +2,10 @@ cdef class Transport:
     """
     Base class for aiofastnet transports.
     """
+
+    # To allow mocking of write, writelines and other methods.
+    cdef dict __dict__
+
     # aiofastnet extension,
     # skip checks for thread-safety and data types
     cpdef write_nocheck(self, data)
