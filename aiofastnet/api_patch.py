@@ -62,16 +62,12 @@ _BINDERS = {
 
 def patch_loop(
         loop: Optional[asyncio.AbstractEventLoop] = None,
-        *,
-        strict: bool = True,
 ) -> asyncio.AbstractEventLoop:
     """Patch an event loop so its networking methods use aiofastnet.
 
     Parameters:
         loop: Event loop to patch. If omitted, the currently running loop is
             patched.
-        strict: If true, raise an exception when a method cannot be patched. If
-            false, leave unpatchable methods unchanged.
 
     The loop's ``create_connection``, ``create_server``, ``start_tls``, and
     ``sendfile`` methods are replaced.
@@ -90,9 +86,7 @@ def patch_loop(
         try:
             setattr(loop, _AIOFASTNET_ORIGINAL_ATTR, originals)
         except (AttributeError, TypeError) as exc:
-            if strict:
-                raise TypeError(f"cannot store aiofastnet patch state on {loop!r}") from exc
-            return loop
+            raise TypeError(f"cannot store aiofastnet patch state on {loop!r}") from exc
 
     patched = getattr(loop, _AIOFASTNET_PATCHED_ATTR, None)
     if patched is None:
@@ -100,9 +94,7 @@ def patch_loop(
         try:
             setattr(loop, _AIOFASTNET_PATCHED_ATTR, patched)
         except (AttributeError, TypeError) as exc:
-            if strict:
-                raise TypeError(f"cannot store aiofastnet patch state on {loop!r}") from exc
-            return loop
+            raise TypeError(f"cannot store aiofastnet patch state on {loop!r}") from exc
 
     for name in _PATCHED_METHODS:
         if name in patched:
@@ -112,9 +104,7 @@ def patch_loop(
         try:
             setattr(loop, name, _BINDERS[name](loop))
         except (AttributeError, TypeError) as exc:
-            if strict:
-                raise TypeError(f"cannot patch {name} on {loop!r}") from exc
-            continue
+            raise TypeError(f"cannot patch {name} on {loop!r}") from exc
         patched.add(name)
 
     return loop
@@ -122,8 +112,6 @@ def patch_loop(
 
 def loop_factory(
         base_factory: Optional[Callable[[], asyncio.AbstractEventLoop]] = None,
-        *,
-        strict: bool = True,
 ) -> Callable[[], asyncio.AbstractEventLoop]:
     """Return a loop factory that creates loops patched with aiofastnet.
 
@@ -131,8 +119,6 @@ def loop_factory(
         base_factory: Callable used to create the underlying event loop. If
             omitted, ``asyncio.new_event_loop`` is used. Pass a third-party loop
             factory such as ``uvloop.new_event_loop`` to patch that loop type.
-        strict: Forwarded to ``patch_loop``. If true, loop creation fails when
-            the loop cannot be patched.
 
     The returned callable is intended for ``asyncio.run(..., loop_factory=...)``
     and ``asyncio.Runner(loop_factory=...)``. It sets the newly created loop as
@@ -141,22 +127,19 @@ def loop_factory(
     def factory():
         loop = base_factory() if base_factory is not None else asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        return patch_loop(loop, strict=strict)
+        return patch_loop(loop)
 
     return factory
 
 
 def install_policy(
         base_policy: Optional[asyncio.AbstractEventLoopPolicy] = None,
-        *,
-        strict: bool = True,
 ) -> asyncio.AbstractEventLoopPolicy:
     """Install a legacy event loop policy that patches newly created loops.
 
     Parameters:
         base_policy: Policy to delegate to for actual loop creation and current
             loop storage. If omitted, the current policy is used.
-        strict: Forwarded to ``patch_loop`` for each newly created loop.
 
     This is a compatibility API for applications that still configure asyncio
     through event loop policies. Policies are deprecated in Python 3.14 and are
@@ -195,9 +178,8 @@ def install_policy(
             )
 
         class _PatchedEventLoopPolicy(base_policy_cls):
-            def __init__(self, base_policy, strict):
+            def __init__(self, base_policy):
                 self._base_policy = base_policy
-                self._strict = strict
 
             def get_event_loop(self):
                 return self._base_policy.get_event_loop()
@@ -207,9 +189,9 @@ def install_policy(
 
             def new_event_loop(self):
                 loop = self._base_policy.new_event_loop()
-                return patch_loop(loop, strict=self._strict)
+                return patch_loop(loop)
 
-    policy = _PatchedEventLoopPolicy(base_policy, strict)
+    policy = _PatchedEventLoopPolicy(base_policy)
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",

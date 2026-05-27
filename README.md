@@ -71,8 +71,63 @@ $ pip install aiofastnet
 
 `aiofastnet` requires Python 3.9 or greater.
 
-The API mirrors stdlib `asyncio`. Pass the running loop and use your existing
-protocol factory:
+For applications, the easiest way to enable `aiofastnet` is to use an event
+loop factory. This patches the loop's `create_connection()`, `create_server()`,
+`start_tls()`, and `sendfile()` methods while keeping the rest of the loop
+unchanged:
+
+```python
+import asyncio
+import aiofastnet
+
+async def main():
+    ...
+
+asyncio.run(main(), loop_factory=aiofastnet.loop_factory())
+```
+
+If you use another event loop implementation, pass its loop factory:
+
+```python
+import asyncio
+import uvloop
+import aiofastnet
+
+asyncio.run(main(), loop_factory=aiofastnet.loop_factory(uvloop.new_event_loop))
+```
+
+For older applications that still configure asyncio through event loop
+policies, install the aiofastnet policy wrapper before creating loops:
+
+```python
+import asyncio
+import aiofastnet
+
+aiofastnet.install_policy()
+asyncio.run(main())
+```
+
+Event loop policies are deprecated in Python 3.14 and are scheduled for removal
+in Python 3.16, so prefer `loop_factory()` for new code.
+
+If the event loop already exists, patch it directly:
+
+```python
+import asyncio
+import aiofastnet
+
+async def main():
+    aiofastnet.patch_loop()
+    ...
+
+asyncio.run(main())
+```
+
+Library authors should call `aiofastnet` APIs directly
+instead of patching a loop owned by their users. The API mirrors stdlib
+`asyncio`: pass the running loop and use your existing protocol factory.
+
+
 
 ```python
 import asyncio
@@ -117,7 +172,7 @@ transport = await aiofastnet.start_tls(
     server_hostname="example.com",
 )
 
-await aiofastnet.sendfile(transport, fileobj)
+await aiofastnet.sendfile(loop, transport, fileobj)
 ```
 
 ## When aiofastnet Is a Good Fit
