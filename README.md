@@ -4,7 +4,7 @@
 [![Latest PyPI package version](https://badge.fury.io/py/aiofastnet.svg)](https://pypi.org/project/aiofastnet)
 [![Downloads count](https://img.shields.io/pypi/dm/aiofastnet.svg)](https://pypistats.org/packages/aiofastnet)
 
-`aiofastnet` provides drop-in, written in C/Cython, very efficient replacements for asyncio's:
+`aiofastnet` provides drop-in, highly efficient C/Cython replacements for asyncio's:
 
 - [`loop.create_connection()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_connection)
 - [`loop.open_connection()`](https://docs.python.org/3/library/asyncio-stream.html#asyncio.open_connection)
@@ -17,13 +17,14 @@ If your library or application already uses the `asyncio` streams or transport/p
 model, `aiofastnet` lets you keep the same architecture while replacing one of
 the most expensive layers underneath it.
 
-`aiofastnet` is not a different event loop, it works on top of stock asyncio loops or uvloop 
-by using low-level primitives like `add_reader` and `add_writer`. It has no background threads, it does not 
-do any dirty tricks like calling sync `recv`/`send` syscalls from a different thread.
-Essentially it is just the same internal implementation that you would find in asyncio and uvloop, but done 
-much more efficiently.
+`aiofastnet` is not a different event loop. It works on top of stock `asyncio`
+loops or `uvloop` by using low-level primitives such as `add_reader` and
+`add_writer`. It has no background threads and does not use unscalable tricks such as
+calling synchronous `recv`/`send` syscalls from another thread. Essentially, it
+provides the same kind of internal implementation you would find in `asyncio`
+and `uvloop`, but implemented much more efficiently.
 
-`aiofastnet` supports [Kernel TLS](https://www.kernel.org/doc/html/latest/networking/tls.html) out-of-the box on Linux. 
+`aiofastnet` supports [Kernel TLS](https://www.kernel.org/doc/html/latest/networking/tls.html) out of the box on Linux.
 
 ## Benchmark
 
@@ -277,9 +278,14 @@ inside the environment.
 
 KTLS support by kernel version is outline [here.](https://delthas.fr/blog/2023/kernel-tls/)
 
+Check out [aiohttp_ktls_fileresponse.py](https://github.com/tarasko/aiofastnet/blob/master/examples/aiohttp_ktls_fileresponse.py) and [aiohttp_ws_speedup.py](https://github.com/tarasko/aiofastnet/blob/master/examples/aiohttp_ws_speedup.py)  
+examples showing how you can speed up aiohttp (or any other asyncio application).
+
 Some other useful links:
 * https://dev.to/ozkanpakdil/kernel-tls-nic-offload-and-socket-sharding-whats-new-and-who-uses-it-4e1f
 * https://www.kernel.org/doc/html/latest/networking/tls.html
+
+
 
 ## Free-Threaded Python
 

@@ -9,6 +9,7 @@ aiofastnet Release History
 ------------------
 
 * Add loop monkey-patching via install_policy, loop_factory, patch_loop
+* Allow mocking transport.write and writelines methods
 
 0.6.0
 ------------------

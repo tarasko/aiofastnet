@@ -2,9 +2,6 @@ cdef class Transport:
     """
     Base class for aiofastnet transports.
     """
-    cpdef write(self, data)
-    cpdef writelines(self, list_of_data)
-
     # aiofastnet extension,
     # skip checks for thread-safety and data types
     cpdef write_nocheck(self, data)

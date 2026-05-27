@@ -866,7 +866,7 @@ cdef class SSLTransportBase(Transport):
         except BaseException as ex:
             self._fatal_error(ex, 'Fatal error on TLS transport')
 
-    cpdef write(self, data):
+    def write(self, data):
         self._check_thread("write")
         aiofn_validate_buffer(data)
         self.write_nocheck(data)
@@ -893,7 +893,7 @@ cdef class SSLTransportBase(Transport):
         except BaseException as ex:
             self._fatal_error(ex, 'Fatal error on TLS transport')
 
-    cpdef writelines(self, list_of_data):
+    def writelines(self, list_of_data):
         self._check_thread("writelines")
         for data in list_of_data:
             aiofn_validate_buffer(data)

@@ -22,10 +22,10 @@ cdef object _DATA_RECEIVED_MAX_SIZE = 256 * 1024
 
 
 cdef class Transport:
-    cpdef write(self, data):
+    def write(self, data):
         raise NotImplementedError()
 
-    cpdef writelines(self, list_of_data):
+    def writelines(self, list_of_data):
         raise NotImplementedError()
 
     cpdef write_nocheck(self, data):
@@ -435,12 +435,12 @@ cdef class SocketTransport(Transport):
         else:
             self.close()
 
-    cpdef write(self, data):
+    def write(self, data):
         self._check_thread("write")
         aiofn_validate_buffer(data)
         self.write_nocheck(data)
 
-    cpdef writelines(self, list_of_data):
+    def writelines(self, list_of_data):
         self._check_thread("writelines")
         if list_of_data:
             for data in list_of_data:
