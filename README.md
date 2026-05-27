@@ -4,7 +4,7 @@
 [![Latest PyPI package version](https://badge.fury.io/py/aiofastnet.svg)](https://pypi.org/project/aiofastnet)
 [![Downloads count](https://img.shields.io/pypi/dm/aiofastnet.svg)](https://pypistats.org/packages/aiofastnet)
 
-`aiofastnet` provides drop-in optimized replacements for asyncio's:
+`aiofastnet` provides drop-in, written in C/Cython, very efficient replacements for asyncio's:
 
 - [`loop.create_connection()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_connection)
 - [`loop.open_connection()`](https://docs.python.org/3/library/asyncio-stream.html#asyncio.open_connection)
@@ -16,6 +16,12 @@
 If your library or application already uses the `asyncio` streams or transport/protocol
 model, `aiofastnet` lets you keep the same architecture while replacing one of
 the most expensive layers underneath it.
+
+`aiofastnet` is not a different event loop, it works on top of stock asyncio loops or uvloop 
+by using low-level primitives like `add_reader` and `add_writer`. It has no background threads, it does not 
+do any dirty tricks like calling sync `recv`/`send` syscalls from a different thread.
+Essentially it is just the same internal implementation that you would find in asyncio and uvloop, but done 
+much more efficiently.
 
 ## Benchmark
 
