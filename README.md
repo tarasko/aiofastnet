@@ -15,8 +15,8 @@ import aiofastnet
 aiofastnet.install_policy()
 ```
 
-Are you using aiohttp, asyncpg, websockets, uvicorn, or Starlette, all of which
-rely on asyncio networking? They will become faster when you enable aiofastnet.
+Are you using aiohttp, asyncpg, websockets, uvicorn, starlette, or any other library that 
+relies on asyncio networking? They will become faster when you enable aiofastnet.
 
 ## How is this possible?
 
