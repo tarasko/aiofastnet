@@ -4,6 +4,22 @@
 [![Latest PyPI package version](https://badge.fury.io/py/aiofastnet.svg)](https://pypi.org/project/aiofastnet)
 [![Downloads count](https://img.shields.io/pypi/dm/aiofastnet.svg)](https://pypistats.org/packages/aiofastnet)
 
+`aiofastnet` gives your asyncio networking app an instant performance boost,
+lower latency, higher throughput, and lower CPU usage by adding just two lines:
+
+```python
+import aiofastnet
+
+...
+# Call this before asyncio.run(...)
+aiofastnet.install_policy()
+```
+
+Are you using aiohttp, asyncpg, websockets, uvicorn, or Starlette, all of which
+rely on asyncio networking? They will become faster when you enable aiofastnet.
+
+## How is this possible?
+
 `aiofastnet` provides drop-in, highly efficient C/Cython replacements for asyncio's:
 
 - [`loop.create_connection()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_connection)
@@ -13,18 +29,23 @@
 - [`loop.start_tls()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.start_tls)
 - [`loop.sendfile()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sendfile)
 
-If your library or application already uses the `asyncio` streams or transport/protocol
-model, `aiofastnet` lets you keep the same architecture while replacing one of
-the most expensive layers underneath it.
+asyncio libraries use these loop primitives to establish communication channels.
+The current implementations in both `asyncio` and `uvloop` are far from optimal,
+especially for SSL/TLS connections.
+
+Calling `aiofastnet.install_policy()` replaces these primitives with
+`aiofastnet`'s efficient implementations. From that moment on, any library that
+uses asyncio networking will use aiofastnet.
 
 `aiofastnet` is not a different event loop. It works on top of stock `asyncio`
 loops or `uvloop` by using low-level primitives such as `add_reader` and
-`add_writer`. It has no background threads and does not use unscalable tricks such as
-calling synchronous `recv`/`send` syscalls from another thread. Essentially, it
+`add_writer`. It has no background threads and does not use unscalable tricks
+such as calling synchronous `recv`/`send` syscalls from another thread. Essentially, it
 provides the same kind of internal implementation you would find in `asyncio`
-and `uvloop`, but implemented much more efficiently.
+and `uvloop`, but with much better optimization.
 
-`aiofastnet` supports [Kernel TLS](https://www.kernel.org/doc/html/latest/networking/tls.html) out of the box on Linux.
+As a cherry on top, `aiofastnet` supports [Kernel TLS](https://www.kernel.org/doc/html/latest/networking/tls.html)
+out of the box on Linux.
 
 ## Benchmark
 
@@ -81,9 +102,7 @@ $ pip install aiofastnet
 `aiofastnet` requires Python 3.9 or greater.
 
 For applications, the easiest way to enable `aiofastnet` is to use an event
-loop factory. This patches the loop's `create_connection()`, `create_server()`,
-`start_tls()`, and `sendfile()` methods while keeping the rest of the loop
-unchanged:
+loop factory. 
 
 ```python
 import asyncio
@@ -203,7 +222,7 @@ transport/protocol APIs and one or more of these are true:
 `aiofastnet` is not the right default for every networking project:
 
 - If your workload is dominated by very short-lived connections, you should
-  expect little or no gain. `aiofastnet` focuses on optimizing the data path
+  expect little or no gain. Currently, `aiofastnet` focuses on optimizing the data path
   after connection establishment.
 
 ## Platform Compatibility
@@ -230,8 +249,8 @@ copy file contents through userspace.
 * Some high-end NICs support hardware TLS offload. This leads to huge CPU savings.
 
 If you only sent regular data (not static files) and do not have high-end NIC with TLS offload, 
-enabling Kernel TLS will only slightly decrease performance. CPU cost-wise it doesn't matter where encryption/decryption
-happens, but the kernel `tls` module has to do extra bookkeeping. Also, aiofastnet can batch data and reduce amount of 
+enabling Kernel TLS may actually lead to a slight performance degradation. CPU cost-wise it doesn't matter where encryption/decryption
+happens in kernel or in userspace, but the kernel `tls` module has to do extra bookkeeping. Also, aiofastnet can batch data and reduce amount of 
 syscalls when Kernel TLS is not used. 
 
 Kernel TLS requires support from all of these layers:
