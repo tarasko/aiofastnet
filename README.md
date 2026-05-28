@@ -78,6 +78,7 @@ Source: [examples/benchmark_threaded.py](https://github.com/tarasko/aiofastnet/b
 - **Particularly strong for SSL-heavy workloads**. `aiofastnet` uses OpenSSL
   more directly and avoids extra copies in the data path.
 - **Kernel TLS support on Linux**. Native `sendfile` for TLS connections through `SSL_sendfile`. 
+   `aiohttp` will be able to send FileResponse more efficiently over TLS connections.
 - **Safer transport write() / writelines() behavior**. If the socket cannot accept
   everything immediately, only `bytes` and `memoryview` objects backed by
   `bytes` are retained without copying. Other objects, including
