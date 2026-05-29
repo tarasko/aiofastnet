@@ -15,8 +15,9 @@ import aiofastnet
 aiofastnet.install_policy()
 ```
 
-Are you using aiohttp, asyncpg, websockets, uvicorn, starlette, or any other library that 
-relies on asyncio networking? They will become faster when you enable aiofastnet.
+Are you using aiohttp, asyncpg, websockets, uvicorn, or any other library that 
+relies on asyncio networking? They become faster if you enable aiofastnet.
+The difference is especially noticible when SSL is used.
 
 ## How is this possible?
 
@@ -207,7 +208,7 @@ await aiofastnet.sendfile(loop, transport, fileobj)
 ## When aiofastnet Is a Good Fit
 
 `aiofastnet` is most attractive when you already rely on `asyncio`'s
-transport/protocol APIs and one or more of these are true:
+transport/protocol APIs directly or indirectly and one or more of these are true:
 
 - You have long-lived TCP or TLS connections.
 - You run protocol-heavy services where transport overhead is visible in CPU
