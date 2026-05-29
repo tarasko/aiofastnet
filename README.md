@@ -17,7 +17,7 @@ aiofastnet.install_policy()
 
 Are you using aiohttp, asyncpg, websockets, uvicorn, or any other library that 
 relies on asyncio networking? They become faster if you enable aiofastnet.
-The difference is especially noticeble when SSL is used.
+The difference is especially noticeable when SSL is used.
 
 ## How is this possible?
 
