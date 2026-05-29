@@ -5,7 +5,7 @@
 [![Downloads count](https://img.shields.io/pypi/dm/aiofastnet.svg)](https://pypistats.org/packages/aiofastnet)
 
 `aiofastnet` gives your asyncio networking application an instant performance boost,
-lower latency, higher throughput, by just adding two lines:
+lower latency and higher throughput by just adding two lines:
 
 ```python
 import aiofastnet
