@@ -240,10 +240,10 @@ transport implementation. For transports created through `aiofastnet`, a
 compatibility wrapper preserves the documented `write()` /
 `writelines()` buffer-safety behavior.
 
-## Kernel TLS Support on Linux
+## Kernel TLS (KTLS) support on Linux
 
-On Linux, `aiofastnet` can use OpenSSL's Kernel TLS support for TLS
-connections. Kernel TLS is beneficial if any of the following is true:
+On Linux, `aiofastnet` can use OpenSSL's KTLS support for TLS
+connections. KTLS is beneficial if any of the following is true:
 
 * Static files need to be sent over TLS connection and `sendfile()` can be used.
 In that case the kernel can read data directly instead of forcing the application to 
@@ -251,11 +251,11 @@ copy file contents through userspace.
 * Some high-end NICs support hardware TLS offload. This leads to huge CPU savings.
 
 If you only sent regular data (not static files) and do not have high-end NIC with TLS offload, 
-enabling Kernel TLS may actually lead to a slight performance degradation. CPU cost-wise it doesn't matter where encryption/decryption
-happens in kernel or in userspace, but the kernel `tls` module has to do extra bookkeeping. Also, aiofastnet can batch data and reduce amount of 
-syscalls when Kernel TLS is not used. 
+enabling KTLS may actually cause a slight performance degradation. CPU cost-wise it doesn't matter where encryption/decryption
+happens in kernel or in userspace, but the kernel `tls` module has to do extra bookkeeping. 
+Also, aiofastnet can batch data and reduce amount of syscalls when KTLS is not used. 
 
-Kernel TLS requires support from all of these layers:
+KTLS requires support from all of these layers:
 
 - The `tls` kernel module loaded.
 - OpenSSL built with KTLS support on a machine with suitable kernel headers.
