@@ -9,6 +9,7 @@ aiofastnet Release History
 ------------------
 
 * Fixed Protocol.get_buffer not requiring PyBUF_WRITABLE from user buffer
+* Cleaned up nogil usage, harden logic against multithreading misuse by user code.
 
 0.7.0
 ------------------
