@@ -51,6 +51,7 @@ else:
 def make_extension(name: str, sources: List[str]) -> Extension:
     return Extension(name, sources,
                      libraries=libs,
+                     define_macros=macros,
                      extra_compile_args=extra_compile_args,
                      extra_link_args=extra_link_args)
 
