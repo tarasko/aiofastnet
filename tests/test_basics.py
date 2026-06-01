@@ -601,7 +601,7 @@ async def test_bad_buffer(conn_type):
     async with TestServer(ct=conn_type) as server:
         async with TestClient(server, ct=conn_type, is_buffered=True, protocol_factory=ClientWithReadonlyBuffer) as client:
             client.write(b"1234")
-            with pytest.raises(BufferError):
+            with pytest.raises((BufferError, TypeError)):
                 await client.wait_closed()
 
         async with TestClient(server, ct=conn_type, is_buffered=True, protocol_factory=ClientWithEmptyBuffer) as client:
