@@ -27,7 +27,7 @@ classifiers = [
 ]
 
 [build-system]
-requires = ["setuptools >= 78.0", "wheel", "Cython >= 3.0"]
+requires = ["setuptools >= 78.0", "wheel", "Cython >= 3.2"]
 build-backend = "setuptools.build_meta"
 
 [project.urls]
@@ -46,3 +46,19 @@ version = {attr = "aiofastnet.__version__"}
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.run]
+source = ["aiofastnet"]
+branch = true
+plugins = ["Cython.Coverage"]
+core = "ctrace"
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "raise MemoryError",
+    "assert False"
+]

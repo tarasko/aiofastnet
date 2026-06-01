@@ -4,6 +4,7 @@
 [![Latest PyPI package version](https://badge.fury.io/py/aiofastnet.svg)](https://pypi.org/project/aiofastnet)
 [![Downloads count](https://img.shields.io/pypi/dm/aiofastnet.svg)](https://pypistats.org/packages/aiofastnet)
 
+
 `aiofastnet` gives your asyncio networking application an instant performance boost,
 lower latency and higher throughput by just adding two lines:
 
@@ -372,7 +373,7 @@ one thread.
 4. Build extensions in place and run tests:
 
    ```console
-   $ python setup.py build_ext --inplace
+   $ python setup.py build_ext --dev --inplace
    $ pytest -s -v
    ```
 
@@ -388,6 +389,18 @@ one thread.
    $ pytest -s -v
    $ pytest -s -v -k test_echo[uvloop-tcp-buffered-6291456] --asyncio-debug --log-cli-level DEBUG
    ```
+
+7. Build coverage report:
+
+Building for coverage testing requires enabling line tracing in cython, which 
+significantly slows down extension modules. It is disabled by default. You
+would need to rebuild specifically with coverage support.
+
+```bash
+python setup.py build_ext --inplace --dev --with-coverage
+pytest -s -v --cov=aiofastnet --cov-report=html
+```
+
 
 ## Contributing
 

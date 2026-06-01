@@ -4,6 +4,7 @@ import socket
 import sys
 import warnings
 import asyncio
+import cython
 from asyncio.trsock import TransportSocket
 from logging import getLogger
 
