@@ -15,14 +15,21 @@ cpdef aiofn_validate_buffer(buffer):
                         f"got {type(buffer).__name__}")
 
 
-cdef aiofn_unpack_buffer(object bytes_like_obj, char** ptr_out, Py_ssize_t* size_out):
+cdef aiofn_unpack_simple_buffer(object buffer, char** ptr_out, Py_ssize_t* size_out, int flags):
     cdef Py_buffer pybuf
 
-    if bytes_like_obj is not None:
-        PyObject_GetBuffer(bytes_like_obj, &pybuf, PyBUF_SIMPLE)
+    if buffer is not None:
+        PyObject_GetBuffer(buffer, &pybuf, PyBUF_SIMPLE | flags)
         ptr_out[0] = <char *> pybuf.buf
         size_out[0] = pybuf.len
-        # We can already release because we still keep the reference to the message
+        # This is generally a bad practice to release before data has been consumed.
+        # But in case of aiofastnet this simplifies the code a lot.
+
+        # The caller is expected:
+        # * Hold object buffer until data is consumed
+        # * Consume everything synchronously, asap
+        # * NOT use async functions,
+        # * Preferably not to use nogil functions, because other threads may try to modify buffer content.
         PyBuffer_Release(&pybuf)
     else:
         ptr_out[0] = NULL

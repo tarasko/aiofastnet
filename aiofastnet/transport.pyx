@@ -8,7 +8,7 @@ from asyncio.trsock import TransportSocket
 from logging import getLogger
 
 from cpython.memoryview cimport PyMemoryView_FromMemory
-from cpython.buffer cimport PyBUF_READ
+from cpython.buffer cimport PyBUF_READ, PyBUF_WRITABLE
 from cpython.bytes cimport *
 from cpython.pythread cimport PyThread_get_thread_ident
 
@@ -53,7 +53,7 @@ cdef class Protocol:
 
     cdef get_buffer_c(self, Py_ssize_t hint, char** buf_ptr, Py_ssize_t* buf_len):
         buffer = self.get_buffer(hint)
-        aiofn_unpack_buffer(buffer, buf_ptr, buf_len)
+        aiofn_unpack_simple_buffer(buffer, buf_ptr, buf_len, PyBUF_WRITABLE)
 
     cpdef buffer_updated(self, Py_ssize_t bytes_read):
         raise NotImplementedError()
@@ -347,7 +347,7 @@ cdef class SocketTransport(Transport):
                     buf = (<Protocol>self._protocol).get_buffer_c(-1, &buf_ptr, &buf_len)
                 else:
                     buf = self._protocol.get_buffer(-1)
-                    aiofn_unpack_buffer(buf, &buf_ptr, &buf_len)
+                    aiofn_unpack_simple_buffer(buf, &buf_ptr, &buf_len, PyBUF_WRITABLE)
 
                 if buf_len == 0:
                     raise RuntimeError('get_buffer() returned an empty buffer')
@@ -468,7 +468,7 @@ cdef class SocketTransport(Transport):
             Py_ssize_t bytes_sent
 
         if not self._write_backlog:
-            aiofn_unpack_buffer(data, &data_ptr, &data_len)
+            aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
             data = self._write_one(data, data_ptr, data_len)
             if data is None:
                 return
@@ -577,7 +577,7 @@ cdef class SocketTransport(Transport):
 
         if list_of_data is not self._write_backlog:
             for data in list_of_data:
-                aiofn_unpack_buffer(data, &data_ptr, &data_len)
+                aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
                 if data_len <= bytes_sent:
                     bytes_sent -= data_len
                     continue
@@ -614,7 +614,7 @@ cdef class SocketTransport(Transport):
             if isinstance(data, SendFileRequest):
                 sendfile_req = data
                 break
-            aiofn_unpack_buffer(data, &data_ptr, &data_len)
+            aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
             if data_len == 0:
                 continue
             self._iovecs[idx].iov_base = data_ptr

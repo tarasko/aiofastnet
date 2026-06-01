@@ -11,7 +11,7 @@ from pathlib import Path
 from cpython.bytearray cimport PyByteArray_AS_STRING, PyByteArray_GET_SIZE
 from cpython.bytes cimport PyBytes_FromStringAndSize
 from cpython.object cimport PyObject
-from cpython.buffer cimport PyBUF_WRITE
+from cpython.buffer cimport PyBUF_WRITE, PyBUF_WRITABLE
 from cpython.memoryview cimport PyMemoryView_FromMemory
 from cpython.pythread cimport PyThread_get_thread_ident
 from posix.types cimport off_t
@@ -20,7 +20,7 @@ from . import constants
 from .utils cimport (
     SSLProtocolState,
     AppProtocolState,
-    aiofn_unpack_buffer,
+    aiofn_unpack_simple_buffer,
     aiofn_validate_buffer,
     aiofn_maybe_copy_buffer,
     aiofn_maybe_copy_buffer_tail,
@@ -540,7 +540,7 @@ cdef class SSLTransportBase(Transport):
                 app_buffer = (<Protocol>self._app_protocol).get_buffer_c(-1, &buf_ptr, &buf_len)
             else:
                 app_buffer = self._app_protocol.get_buffer(-1)
-                aiofn_unpack_buffer(app_buffer, &buf_ptr, &buf_len)
+                aiofn_unpack_simple_buffer(app_buffer, &buf_ptr, &buf_len, PyBUF_WRITABLE)
 
             if buf_len == 0:
                 raise RuntimeError('get_buffer() returned an empty buffer')
@@ -883,7 +883,7 @@ cdef class SSLTransportBase(Transport):
                 self._append_to_backlog(data, True)
                 return
 
-            aiofn_unpack_buffer(data, &data_ptr, &data_len)
+            aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
             if data_len == 0:
                 return
 
@@ -923,7 +923,7 @@ cdef class SSLTransportBase(Transport):
                     self._append_to_backlog(data, False)
                     continue
 
-                aiofn_unpack_buffer(data, &data_ptr, &data_len)
+                aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
                 if data_len == 0:
                     continue
 
@@ -959,7 +959,7 @@ cdef class SSLTransportBase(Transport):
                 if not sendfile_completed:
                     break
             else:
-                aiofn_unpack_buffer(data, &data_ptr, &data_len)
+                aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
                 tail = self._write_impl(data, data_ptr, data_len)
                 if tail is not None:
                     self._write_backlog_size -= len(data)

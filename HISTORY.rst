@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.8.0
+------------------
+
+* Fixed Protocol.get_buffer not requiring PyBUF_WRITABLE from user buffer
+
 0.7.0
 ------------------
 

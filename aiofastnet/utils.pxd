@@ -27,7 +27,7 @@ cdef enum AppProtocolState:
 cdef aiofn_set_result_unless_cancelled(fut, result)
 cdef aiofn_set_nodelay(sock)
 cpdef aiofn_validate_buffer(object buffer)
-cdef aiofn_unpack_buffer(object buffer, char** ptr_out, Py_ssize_t* size_out)
+cdef aiofn_unpack_simple_buffer(object buffer, char** ptr_out, Py_ssize_t* size_out, int flags)
 cpdef object aiofn_maybe_copy_buffer(object buffer)
 cpdef object aiofn_validate_and_maybe_copy_buffer(object buffer)
 cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz)
