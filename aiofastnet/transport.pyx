@@ -4,6 +4,7 @@ import socket
 import sys
 import warnings
 import asyncio
+import cython
 from asyncio.trsock import TransportSocket
 from logging import getLogger
 
@@ -693,7 +694,8 @@ cdef class SocketTransport(Transport):
 
         if not self._write_backlog:
             if self._try_sendfile(req):
-                return await req.waiter
+                with cython.linetrace(False):
+                    return await req.waiter
 
         if unlikely(self._is_debug):
             _logger.debug("%r: enqueue SendFileRequest(offset=%d,count=%d)",
@@ -706,7 +708,8 @@ cdef class SocketTransport(Transport):
             self._loop.add_writer(self._sock_fd_obj, self._write_ready)
             self._maybe_pause_protocol()
 
-        return await req.waiter
+        with cython.linetrace(False):
+            return await req.waiter
 
     cdef inline _try_sendfile(self, SendFileRequest req):
         """Return True if finished, False if must wait for write ready event"""

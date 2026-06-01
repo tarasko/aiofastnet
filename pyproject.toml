@@ -52,3 +52,13 @@ source = ["aiofastnet"]
 branch = true
 plugins = ["Cython.Coverage"]
 core = "ctrace"
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "raise MemoryError",
+    "assert False"
+]
