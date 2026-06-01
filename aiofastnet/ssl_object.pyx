@@ -73,11 +73,10 @@ cdef SSL_CTX* _get_ssl_ctx_ptr(object py_ctx) except NULL:
     return (<PySSLContextHack*> <PyObject*> py_ctx).ctx
 
 
-cdef int _print_error_cb(const char* str, size_t len, void* u) noexcept nogil:
-    with gil:
-        logger = <object><PyObject*>u
-        err_str = PyUnicode_FromStringAndSize(str, len)
-        logger.error(err_str)
+cdef int _print_error_cb(const char* str, size_t len, void* u) noexcept:
+    logger = <object><PyObject*>u
+    err_str = PyUnicode_FromStringAndSize(str, len)
+    logger.error(err_str)
 
 
 cdef _log_error_queue():

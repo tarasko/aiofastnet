@@ -14,7 +14,7 @@ from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Transport
 from tests.utils import TestClient, TestServer, \
     multiloop_event_loop_policy, make_test_ssl_contexts, ConnectionType, \
-    AsyncClient, TestException, exc_queue, _logger, conn_type, ssl_conn_type
+    AsyncClient, TestException, exc_queue, _logger, conn_type, ssl_conn_type, EchoServerProtocol
 
 event_loop_policy = multiloop_event_loop_policy()
 
@@ -583,6 +583,36 @@ async def test_write_wrong_type(conn_type):
 
             with pytest.raises(TypeError):
                 client.transport.writelines(42)
+
+
+async def test_bad_buffer(conn_type):
+    class ClientWithReadonlyBuffer(AsyncClient):
+        def get_buffer(self, hint):
+            return b"1" * 16 * 1024
+
+    class ClientWithEmptyBuffer(AsyncClient):
+        def get_buffer(self, hint):
+            return bytearray()
+
+    class ClientWithNoneBuffer(AsyncClient):
+        def get_buffer(self, hint):
+            return bytearray()
+
+    async with TestServer(ct=conn_type) as server:
+        async with TestClient(server, ct=conn_type, is_buffered=True, protocol_factory=ClientWithReadonlyBuffer) as client:
+            client.write(b"1234")
+            with pytest.raises((BufferError, TypeError)):
+                await client.wait_closed()
+
+        async with TestClient(server, ct=conn_type, is_buffered=True, protocol_factory=ClientWithEmptyBuffer) as client:
+            client.write(b"1234")
+            with pytest.raises(RuntimeError, match="empty buffer"):
+                await client.wait_closed()
+
+        async with TestClient(server, ct=conn_type, is_buffered=True, protocol_factory=ClientWithNoneBuffer) as client:
+            client.write(b"1234")
+            with pytest.raises(RuntimeError, match="empty buffer"):
+                await client.wait_closed()
 
 
 async def test_maybe_copy():

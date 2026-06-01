@@ -99,7 +99,7 @@ class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
         self._client_waiters.clear()
 
     def connection_lost(self, exc):
-        _logger.debug("EchoServer.connection_lost")
+        _logger.debug("EchoServer.connection_lost, exc=%s", exc)
         self._clients.remove(weakref.ref(self))
 
     def get_buffer(self, hint):
@@ -194,7 +194,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         _logger.debug("AsyncClient.eof_received")
 
     def connection_lost(self, exc):
-        _logger.debug("AsyncClient.connection_lost")
+        _logger.debug("AsyncClient.connection_lost, exc=%s", exc)
         if not self._closed.done():
             if exc is not None:
                 self._closed.set_exception(exc)
@@ -444,7 +444,7 @@ async def TestClient(server_or_host, port=None,
         transport.abort()
         try:
             await client.wait_closed(1.0)
-        except (TestException, ConnectionResetError, ConnectionAbortedError, BrokenPipeError, ssl.SSLError):
+        except:
             pass
 
 

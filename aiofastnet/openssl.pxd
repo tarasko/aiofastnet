@@ -1,7 +1,19 @@
 from libc.stdint cimport uint64_t
 from posix.types cimport off_t
 
-cdef extern from "openssl_compat.h" nogil:
+# All OpenSSL and static mem bio functions are intentionally do not ask nogil.
+#
+# First, there is not much gain by letting OS to switch threads for such short-lived operation when GIL is present.
+# More likely it will only hurt performance
+
+# Second, users should not have a chance to modify supplied buffers (write, writelines, get_buffer)
+# from another thread when GIL is enabled.
+# Currently, aiofn_unpack_simple_buffer does PyBuffer_Release immediately to simplify call-site.
+
+# For freethreaded python, it is UB, if another thread tries to modify transport buffers, people should not do it under
+# any circumstances.
+
+cdef extern from "openssl_compat.h":
     ctypedef struct SSL_CTX:
         pass
 
@@ -110,7 +122,8 @@ cdef extern from "openssl_compat.h" nogil:
     int ASN1_STRING_length(ASN1_OCTET_STRING *x)
     ASN1_OCTET_STRING* a2i_IPADDRESS(const char *ipasc)
 
-cdef extern from "static_mem_bio.h" nogil:
+
+cdef extern from "static_mem_bio.h":
     BIO *BIO_new_static_mem(void *buf, size_t cap)
     int BIO_static_mem_get_write_buf(BIO *bio, char **pp, size_t *space)
     int BIO_static_mem_produce(BIO *bio, size_t nbytes)
