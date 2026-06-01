@@ -46,3 +46,9 @@ version = {attr = "aiofastnet.__version__"}
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.run]
+source = ["aiofastnet"]
+branch = true
+plugins = ["Cython.Coverage"]
+core = "ctrace"
