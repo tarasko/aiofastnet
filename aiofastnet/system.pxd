@@ -5,7 +5,10 @@ from cpython.object cimport (
 cdef extern from "pythread.h":
     unsigned long PyThread_get_thread_ident()
 
-cdef extern from * nogil:
+# We only use syscall for non-blocking sockets
+# By not requiring nogil we minimize damage from misuse of multithreading by user code.
+
+cdef extern from *:
     """
 #include <errno.h>
 
