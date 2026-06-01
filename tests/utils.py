@@ -13,10 +13,12 @@ from typing import Tuple, Optional, Union, Any, List
 
 import async_timeout
 import pytest
-from aiofastnet import create_connection, create_server, \
-    Transport as aiofn_Transport, start_tls
+
+import aiofastnet
 
 _logger = getLogger("tests.utils")
+# This is useful to verify tests against stdlib implementations
+NO_AIOFN = os.environ.get('NO_AIOFN')
 
 
 class TestException(Exception):
@@ -27,6 +29,34 @@ def _set_socket_sndbuf(transport: asyncio.Transport, size: int) -> int:
     sock = transport.get_extra_info('socket')
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, max(1, size // 2))
     return sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
+
+
+async def sendfile(loop, *args, **kwargs):
+    if NO_AIOFN:
+        return await loop.sendfile(*args, **kwargs)
+    else:
+        return await aiofastnet.sendfile(loop, *args, **kwargs)
+
+
+async def start_tls(loop, *args, **kwargs):
+    if NO_AIOFN:
+        return await loop.start_tls(*args, **kwargs)
+    else:
+        return await aiofastnet.start_tls(loop, *args, **kwargs)
+
+
+async def create_connection(loop, *args, **kwargs):
+    if NO_AIOFN:
+        return await loop.create_connection(*args, **kwargs)
+    else:
+        return await aiofastnet.create_connection(loop, *args, **kwargs)
+
+
+async def create_server(loop, *args, **kwargs):
+    if NO_AIOFN:
+        return await loop.create_server(*args, **kwargs)
+    else:
+        return await aiofastnet.create_server(loop, *args, **kwargs)
 
 
 def multiloop_event_loop_policy():
@@ -158,7 +188,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
             ssl_protocol._allow_renegotiation()
 
     def data_received(self, data):
-        if isinstance(self.transport, aiofn_Transport):
+        if isinstance(self.transport, aiofastnet.Transport):
             assert not self._is_buffered
         self._data.extend(data)
         _logger.debug("AsyncClient.data_received: received=%d, total=%d", len(data), len(self._data))
@@ -170,7 +200,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         return memoryview(self._read_buffer)
 
     def buffer_updated(self, bytes_read):
-        if isinstance(self.transport, aiofn_Transport):
+        if isinstance(self.transport, aiofastnet.Transport):
             assert self._is_buffered
         self._data += self._read_buffer[:bytes_read]
         _logger.debug("AsyncClient.buffer_updated: received=%d, total=%d", bytes_read, len(self._data))
@@ -266,13 +296,14 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         async with async_timeout.timeout(timeout):
             return await asyncio.shield(self._new_data_ev.wait())
 
-    async def start_tls(self, ssl_context):
+    async def start_tls(self, ssl_context, server_hostname="127.0.0.1"):
         self.transport = await start_tls(
             asyncio.get_running_loop(),
             self.transport,
             self,
             ssl_context,
-            server_side=False, server_hostname="127.0.0.1"
+            server_side=False,
+            server_hostname=server_hostname
         )
         _logger.debug("Client start_tls #%d completed", self._ssl_layer)
         self._ssl_layer += 1
@@ -426,9 +457,8 @@ async def TestClient(server_or_host, port=None,
             loop,
             lambda: protocol_factory(is_buffered),
             host=host,
-            port=port
+            port=port,
         )
-        await client.start_tls(ct.client_ssl_context)
     else:
         transport, client = await create_connection(
             loop,
@@ -439,6 +469,9 @@ async def TestClient(server_or_host, port=None,
             server_hostname=server_hostname,
         )
     try:
+        if ct.use_start_tls:
+            await client.start_tls(ct.client_ssl_context, server_hostname=server_hostname)
+
         yield client
     finally:
         transport.abort()

@@ -8,13 +8,11 @@ from contextlib import contextmanager
 
 import pytest
 
-from aiofastnet import start_tls
-from aiofastnet import sendfile
 from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Transport
 from tests.utils import TestClient, TestServer, \
     multiloop_event_loop_policy, make_test_ssl_contexts, ConnectionType, \
-    AsyncClient, TestException, exc_queue, _logger, conn_type, ssl_conn_type, EchoServerProtocol
+    AsyncClient, TestException, exc_queue, _logger, conn_type, ssl_conn_type, start_tls, sendfile
 
 event_loop_policy = multiloop_event_loop_policy()
 
@@ -830,6 +828,26 @@ async def test_peername(conn_type):
             server_sockname = server_client.transport.get_extra_info('sockname')
             assert client_peername == server_sockname
             assert server_peername == client_sockname
+
+
+async def test_ssl_server_hostname_not_passed(ssl_conn_type):
+    # In stdlib:
+    #   - SSLContext.wrap_socket(check_hostname=True, server_hostname=None) -> ValueError
+    #   - SSLContext.wrap_socket(check_hostname=True, server_hostname="") -> ValueError
+    #   - SSLContext.wrap_bio(check_hostname=True, server_hostname=None) -> succeeds, no hostname match
+    #   - SSLContext.wrap_bio(check_hostname=True, server_hostname="") -> ValueError for empty hostname
+    #   - asyncio.start_tls(check_hostname=True, server_hostname=None) -> succeeds, no hostname match
+    #   - asyncio.start_tls(check_hostname=True, server_hostname="") -> succeeds, no hostname match, because asyncio converts "" to None
+
+    # aiofastnet is intentionally consistent and rigorous here.
+    # If check_hostname=True and not server_hostname -> ValueError always
+    # This may potentially break some code, if it happens, we can relax it
+
+    async with TestServer(ct=ssl_conn_type) as server:
+        ssl_conn_type.client_ssl_context.check_hostname = True
+        with pytest.raises(ValueError, match="check_hostname requires server_hostname"):
+            async with TestClient(server, ct=ssl_conn_type, server_hostname="") as client:
+                pass
 
 
 # Exception from send due to file error should cause fatal error

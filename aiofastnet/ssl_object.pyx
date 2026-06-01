@@ -103,6 +103,9 @@ cdef class SSLObject:
                  sock=None):
         ERR_clear_error()
 
+        if not server_side and ssl_context.check_hostname and not server_hostname:
+            raise ValueError("SSLContext.check_hostname requires server_hostname")
+
         self.ssl_ctx_py = ssl_context
         self.ssl_ctx = _get_ssl_ctx_ptr(ssl_context)
 
@@ -372,7 +375,6 @@ cdef class SSLObject:
         reason_name = reason_name.upper().replace(" ", "_")
 
         if reason_name == "CERTIFICATE_VERIFY_FAILED":
-            assert self.server_hostname is not None
             verify_code = SSL_get_verify_result(self.ssl)
             verify_ptr = X509_verify_cert_error_string(verify_code)
             txt = PyUnicode_FromString(verify_ptr) if verify_ptr != NULL else ""
