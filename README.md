@@ -4,6 +4,7 @@
 [![Latest PyPI package version](https://badge.fury.io/py/aiofastnet.svg)](https://pypi.org/project/aiofastnet)
 [![Downloads count](https://img.shields.io/pypi/dm/aiofastnet.svg)](https://pypistats.org/packages/aiofastnet)
 
+
 `aiofastnet` gives your asyncio networking application an instant performance boost,
 lower latency and higher throughput by just adding two lines:
 
