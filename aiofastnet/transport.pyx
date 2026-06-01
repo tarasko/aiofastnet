@@ -4,7 +4,6 @@ import socket
 import sys
 import warnings
 import asyncio
-from asyncio.trsock import TransportSocket
 from logging import getLogger
 
 from cpython.memoryview cimport PyMemoryView_FromMemory
@@ -14,6 +13,7 @@ from cpython.pythread cimport PyThread_get_thread_ident
 
 from . import constants
 
+from .trsock cimport TransportSocket
 from .utils cimport *
 
 
