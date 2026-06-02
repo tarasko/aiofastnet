@@ -13,8 +13,10 @@ from tests.utils import TestClient, TestServer, conn_type
 async def test_patch_loop_is_idempotent():
     loop = asyncio.get_running_loop()
 
-    patched = patch_loop(loop)
+    patched = patch_loop()
     patched_again = patch_loop(loop)
+
+    assert asyncio.get_running_loop() is loop
 
     assert patched is loop
     assert patched_again is loop
@@ -50,9 +52,12 @@ def test_install_policy_patches_new_loops_and_can_restore_policy():
         try:
             loop = policy.new_event_loop()
             assert "create_connection" in getattr(loop, _AIOFASTNET_PATCHED_ATTR)
+            policy.set_event_loop(loop)
+            assert policy.get_event_loop() is loop
         finally:
             if loop is not None:
                 loop.close()
+            asyncio.set_event_loop(None)
             asyncio.set_event_loop_policy(original_policy)
 
 
