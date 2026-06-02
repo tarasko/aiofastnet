@@ -18,7 +18,7 @@ def _get_original_loop_method(loop: asyncio.AbstractEventLoop, name: str):
 
 def _should_fallback_to_asyncio(loop: asyncio.AbstractEventLoop) -> bool:
     proactor_event_loop = getattr(asyncio, "ProactorEventLoop", None)
-    return isinstance(loop, proactor_event_loop)
+    return proactor_event_loop is not None and isinstance(loop, proactor_event_loop)
 
 
 class _WrappedTransport(Transport):
