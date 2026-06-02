@@ -374,9 +374,10 @@ class ConnectionType:
     "ssl",
     "stls",     # Use SSLTransport_Transport by using start_tls
     pytest.param("ktls",
-                 marks=pytest.mark.skipif(sys.version_info < (3, 12),
-                                          reason="kTLS tests require Python >= 3.12"
-                                          )
+                 marks=[
+                        pytest.mark.skipif(sys.version_info < (3, 12), reason="kTLS tests require Python >= 3.12"),
+                        pytest.mark.skipif(sys.platform != "linux", reason="kTLS is available only on Linux")
+                 ]
                  )
 ])
 def conn_type(request):

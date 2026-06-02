@@ -296,7 +296,7 @@ cdef class SSLTransportBase(Transport):
 
         info.append(f"#{self._ssl_layer_num}")
 
-        if self._is_closed() is None:
+        if self._is_closed():
             info.append('closed')
         elif self.is_closing():
             info.append('closing')
@@ -1554,6 +1554,8 @@ cdef class SSLTransport_Transport(SSLTransportBase):
         meaning a regular EOF is received or the connection was
         aborted or closed).
         """
+        _logger.debug("%r: connection_lost(%s)", self, exc)
+
         self._connection_lost_scheduled = True
         if self._write_backlog_size:
             self._clear_write_backlog(exc)
@@ -1565,7 +1567,6 @@ cdef class SSLTransport_Transport(SSLTransportBase):
                 self._app_state = AppProtocolState.STATE_CON_LOST
                 self._loop.call_soon(self._app_protocol.connection_lost, exc)
         self._set_state(SSLProtocolState.UNWRAPPED)
-        self._transport = None
 
         # Decrease ref counters to user instances to avoid cyclic references
         # between user protocol, SSLProtocol and SSLTransport.
@@ -1714,6 +1715,8 @@ cdef class SSLTransport_Transport(SSLTransportBase):
     cpdef _force_close(self, exc):
         # underlying transport will call connection_lost
         if self._transport is not None:
+            if self._is_debug:
+                _logger.debug("%r: force close on underlying transport", self)
             self._transport._force_close(exc)
 
     cdef _get_sock_fd(self):

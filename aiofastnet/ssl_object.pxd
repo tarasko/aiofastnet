@@ -45,8 +45,6 @@ cdef class SSLObject:
     cdef inline int do_handshake(self) noexcept
     cdef inline int get_shutdown(self) noexcept
     cdef inline int shutdown(self) noexcept
-    cdef inline int read_ex(self, void *buf, size_t num, size_t *bytes_read) noexcept
-    cdef inline int write_ex(self, const void *buf, size_t num, size_t *bytes_written) noexcept
     cdef inline int read(self, void *buf, size_t num) noexcept
     cdef inline int write(self, const void *buf, size_t num) noexcept
     cdef inline Py_ssize_t pending(self) noexcept
