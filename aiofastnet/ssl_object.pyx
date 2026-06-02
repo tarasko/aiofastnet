@@ -277,12 +277,6 @@ cdef class SSLObject:
     cdef int shutdown(self) noexcept:
         return SSL_shutdown(self.ssl)
 
-    cdef int read_ex(self, void *buf, size_t num, size_t *bytes_read) noexcept:
-        return SSL_read_ex(self.ssl, buf, num, bytes_read)
-
-    cdef int write_ex(self, const void *buf, size_t num, size_t *bytes_written) noexcept:
-        return SSL_write_ex(self.ssl, buf, num, bytes_written)
-
     cdef inline int read(self, void *buf, size_t num) noexcept:
         return SSL_read(self.ssl, buf, num)
 
