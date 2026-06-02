@@ -238,9 +238,6 @@ async def test_writelines_paused(conn_type):
 
 
 async def test_pause_reading(conn_type):
-    if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
-        pytest.skip("aiofastnet doesn't work with ProactorEventLoop")
-
     payload = b"x" * (20*1024*1024)
 
     async with TestServer(ct=conn_type) as server:
