@@ -59,6 +59,30 @@ def _linux_kernel_at_least(major: int, minor: int) -> bool:
     return current >= (major, minor)
 
 
+def _log_ktls_deactivation_reason(conn) -> None:
+    if platform.system() == "Linux":
+        # Let's give a user some clue about how to troubleshoot KTLS not switching on
+        if not Path("/sys/module/tls").exists():
+            _logger.warning(
+                "%r: Kernel TLS was not enabled because kernel module 'tls' is not loaded, load module with 'sudo modprobe tls'",
+                conn)
+        elif not _linux_kernel_at_least(5, 19):
+            _logger.warning(
+                "%r: Kernel TLS was not enabled because linux kernel version is < 5.19",
+                conn)
+        elif ssl.OPENSSL_VERSION_INFO[:3] < (3, 0, 0):
+            _logger.warning(
+                "%r: Kernel TLS was not enabled because OpenSSL version is too old, you need OpenSSL >= 3.0", conn)
+            _logger.warning("%r: Loaded libssl: %s", conn, SSL_LIB_PATH)
+            _logger.warning("%r: Loaded libcrypto: %s", conn, CRYPTO_LIB_PATH)
+        else:
+            _logger.warning(
+                "%r: Kernel TLS was not enabled PROBABLY because OpenSSL was built on a machine with an old linux kernel (<5.19)",
+                conn)
+            _logger.warning("%r: Loaded libssl: %s", conn, SSL_LIB_PATH)
+            _logger.warning("%r: Loaded libcrypto: %s", conn, CRYPTO_LIB_PATH)
+
+
 cdef class SendFileRequest:
     cdef:
         int fd
@@ -477,22 +501,7 @@ cdef class SSLTransportBase(Transport):
 
         if (self._ssl_object.incoming == NULL and not self._ssl_object.ktls_recv_enabled()) or \
             (self._ssl_object.outgoing == NULL and not self._ssl_object.ktls_recv_enabled()):
-            if platform.system() == "Linux":
-                # Let's give a user some clue about how to troubleshoot KTLS not switching on
-                if not Path("/sys/module/tls").exists():
-                    _logger.warning("%r: Kernel TLS was not enabled because kernel module 'tls' is not loaded, load module with 'sudo modprobe tls'", self)
-                elif not _linux_kernel_at_least(5, 19):
-                    _logger.warning(
-                        "%r: Kernel TLS was not enabled because linux kernel version is < 5.19",
-                        self)
-                elif ssl.OPENSSL_VERSION_INFO[:3] < (3, 0, 0):
-                    _logger.warning("%r: Kernel TLS was not enabled because OpenSSL version is too old, you need OpenSSL >= 3.0", self)
-                    _logger.warning("%r: Loaded libssl: %s", self, SSL_LIB_PATH)
-                    _logger.warning("%r: Loaded libcrypto: %s", self, CRYPTO_LIB_PATH)
-                else:
-                    _logger.warning("%r: Kernel TLS was not enabled PROBABLY because OpenSSL was built on a machine with an old linux kernel (<5.19)", self)
-                    _logger.warning("%r: Loaded libssl: %s", self, SSL_LIB_PATH)
-                    _logger.warning("%r: Loaded libcrypto: %s", self, CRYPTO_LIB_PATH)
+            _log_ktls_deactivation_reason(self)
 
         self._extra.update(
             peercert=self._ssl_object.getpeercert(),

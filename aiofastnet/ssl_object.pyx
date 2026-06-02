@@ -452,3 +452,5 @@ cdef class SSLObject:
 
 cdef ssl_error_name(int err):
     return SSLError(err).name
+
+
