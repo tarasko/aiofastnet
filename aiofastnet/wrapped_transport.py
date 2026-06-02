@@ -21,9 +21,6 @@ def _should_fallback_to_asyncio(loop: asyncio.AbstractEventLoop) -> bool:
         return False
 
     proactor_event_loop = getattr(asyncio, "ProactorEventLoop", None)
-    if proactor_event_loop is None:
-        return False
-
     return isinstance(loop, proactor_event_loop)
 
 
