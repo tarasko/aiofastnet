@@ -161,7 +161,7 @@ async def test_write_huge_abort(conn_type):
 
 
 async def test_write_paused(conn_type):
-    payload = b"x" * (1024)
+    payload = b"x" * 1024
 
     async with TestServer(ct=conn_type) as server:
         async with TestClient(server, ct=conn_type) as client:
@@ -179,11 +179,16 @@ async def test_write_paused(conn_type):
             _logger.debug("test_write_paused: %d total bytes was sent before pause_writing event, wbuf_size=%d", 
                           total_bytes_written, wbuf_size)
 
+            # increase writing buffer limit, this should cause resume_writing on our transports
+            client.transport.set_write_buffer_limits(wbuf_size + 2048, wbuf_size + 1)
+
+            low, high = client.transport.get_write_buffer_limits()
+            assert high == wbuf_size + 2048
+            assert low == wbuf_size + 1
+
             # asyncio tcp implementations do not notify pause_writing/resume_writing from set_write_buffer_limits()
             # asyncio ssl implementation does. 
             if not (os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop)):
-                # increase writing buffer limit, this should cause resume_writing
-                client.transport.set_write_buffer_limits(wbuf_size+2048, wbuf_size+1)
                 assert not client.is_writing_paused
 
                 # decrease writing buffer limit, cause writing paused
@@ -241,7 +246,9 @@ async def test_pause_reading(conn_type):
     async with TestServer(ct=conn_type) as server:
         async with TestClient(server, ct=conn_type) as client:
             client.transport.write(payload)
+            assert client.transport.is_reading()
             client.transport.pause_reading()
+            assert not client.transport.is_reading()
             with pytest.raises(asyncio.TimeoutError):
                 await client.wait_new_data(0.3)
             client.transport.resume_reading()
