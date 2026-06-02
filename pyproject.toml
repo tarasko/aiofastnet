@@ -52,6 +52,13 @@ source = ["aiofastnet"]
 branch = true
 plugins = ["Cython.Coverage"]
 core = "ctrace"
+omit = [
+    "aiofastnet/api_create_connection.py",
+    "aiofastnet/api_create_server.py",
+    "aiofastnet/api_sendfile.py",
+    "aiofastnet/api_start_tls.py",
+    "aiofastnet/api_utils.py",
+]
 
 [tool.coverage.report]
 show_missing = true
