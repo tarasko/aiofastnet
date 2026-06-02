@@ -336,13 +336,15 @@ def TmpFromData(data):
 
 
 @pytest.mark.parametrize("file_size", [64, 3 * 1024 * 1024])
-async def test_sendfile(conn_type, file_size):
+@pytest.mark.parametrize("header_size", [64, 256 * 1024])
+@pytest.mark.parametrize("tail_size", [64, 256 * 1024])
+async def test_sendfile(conn_type, file_size, header_size, tail_size):
     conn_type.check_sendfile_supported()
 
     loop = asyncio.get_running_loop()
-    header = b"h" * (256*1024)
+    header = b"h" * header_size
     payload = b"p" * file_size
-    tail = b"t" * (256*1024)
+    tail = b"t" * tail_size
     with TmpFromData(payload) as tmp:
         async with TestServer(ct=conn_type) as server:
             async with TestClient(server, ct=conn_type) as client:
