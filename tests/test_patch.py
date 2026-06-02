@@ -1,6 +1,7 @@
 import asyncio
+import warnings
 
-from aiofastnet import loop_factory, patch_loop
+from aiofastnet import install_policy, loop_factory, patch_loop
 from aiofastnet.transport import Transport
 from aiofastnet.wrapped_transport import (
     _AIOFASTNET_ORIGINAL_ATTR,
@@ -31,6 +32,28 @@ def test_loop_factory_sets_and_patches_current_loop():
     finally:
         loop.close()
         asyncio.set_event_loop(None)
+
+
+def test_install_policy_patches_new_loops_and_can_restore_policy():
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="'.*event_loop_policy' is deprecated",
+            category=DeprecationWarning,
+        )
+        original_policy = asyncio.get_event_loop_policy()
+
+        policy = install_policy()
+        assert asyncio.get_event_loop_policy() is policy
+
+        loop = None
+        try:
+            loop = policy.new_event_loop()
+            assert "create_connection" in getattr(loop, _AIOFASTNET_PATCHED_ATTR)
+        finally:
+            if loop is not None:
+                loop.close()
+            asyncio.set_event_loop_policy(original_policy)
 
 
 async def test_patched_loop_connection_methods_use_aiofastnet_transport():

@@ -56,8 +56,7 @@ def patch_loop(
     for name, aiofn_method in _PATCHABLE_METHODS.items():
         if name in patched:
             continue
-        if name not in originals:
-            originals[name] = getattr(loop, name)
+        originals[name] = getattr(loop, name)
         setattr(loop, name, partial(aiofn_method, loop))
         patched.add(name)
 
@@ -102,7 +101,13 @@ def install_policy(
     Returns the installed policy object.
     """
     if base_policy is None:
-        base_policy = asyncio.get_event_loop_policy()
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="'.*get_event_loop_policy' is deprecated",
+                category=DeprecationWarning,
+            )
+            base_policy = asyncio.get_event_loop_policy()
 
     with warnings.catch_warnings():
         warnings.filterwarnings(
@@ -110,7 +115,9 @@ def install_policy(
             message="'.*EventLoopPolicy' is deprecated",
             category=DeprecationWarning,
         )
-        class _PatchedEventLoopPolicy(asyncio.DefaultEventLoopPolicy):
+        class _PatchedEventLoopPolicy(asyncio.AbstractEventLoopPolicy):
+            _base_policy: asyncio.AbstractEventLoopPolicy
+
             def __init__(self, base_policy):
                 self._base_policy = base_policy
 
