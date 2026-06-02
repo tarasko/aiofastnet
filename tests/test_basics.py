@@ -536,7 +536,7 @@ async def test_exc_all(conn_type):
     # do not shut down connection
     # All exceptions are reported through loop exception callback
 
-    payload = b"x" * (20*1024*1024)
+    payload = b"x" * (512*1024)
 
     class ClientRaiseDataReceived(AsyncClient):
         def data_received(self, data):
@@ -558,6 +558,8 @@ async def test_exc_all(conn_type):
                     await client.wait_closed()
                 assert isinstance(excq[0]["exception"], TestException)
 
+        assert "closed" in repr(client.transport)
+
         async with TestClient(server, protocol_factory=ClientRaiseGetBuffer, ct=conn_type, is_buffered=True) as client:
             with exc_queue() as excq:
                 client.transport.write(payload)
@@ -565,12 +567,16 @@ async def test_exc_all(conn_type):
                     await client.wait_closed()
                 assert isinstance(excq[0]["exception"], TestException)
 
+        assert "closed" in repr(client.transport)
+
         async with TestClient(server, protocol_factory=ClientRaiseBufferUpdated, ct=conn_type, is_buffered=True) as client:
             with exc_queue() as excq:
                 client.transport.write(payload)
                 with pytest.raises(TestException, match="buffer_updated"):
                     await client.wait_closed()
                 assert isinstance(excq[0]["exception"], TestException)
+
+        assert "closed" in repr(client.transport)
 
 
 async def test_write_wrong_type(conn_type):
