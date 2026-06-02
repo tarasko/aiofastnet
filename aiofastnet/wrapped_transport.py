@@ -17,9 +17,6 @@ def _get_original_loop_method(loop: asyncio.AbstractEventLoop, name: str):
 
 
 def _should_fallback_to_asyncio(loop: asyncio.AbstractEventLoop) -> bool:
-    if os.name != "nt":
-        return False
-
     proactor_event_loop = getattr(asyncio, "ProactorEventLoop", None)
     return isinstance(loop, proactor_event_loop)
 
