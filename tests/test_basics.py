@@ -587,6 +587,11 @@ async def test_write_wrong_type(conn_type):
     async with TestServer(ct=conn_type) as server:
         async with TestClient(server, ct=conn_type) as client:
             with pytest.raises(TypeError):
+                client.write(None)
+
+            client.write(b"")       # No-op
+
+            with pytest.raises(TypeError):
                 client.transport.write(42)
 
             with pytest.raises(TypeError):
@@ -594,6 +599,12 @@ async def test_write_wrong_type(conn_type):
 
             with pytest.raises(TypeError):
                 client.transport.writelines(42)
+
+    assert "closed" in repr(client.transport)
+
+    # Check that we can write after transport is closed, it is no-op
+    for i in range(10):
+        client.transport.write(b"abcd")
 
 
 async def test_bad_buffer(conn_type):
