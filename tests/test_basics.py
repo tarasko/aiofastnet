@@ -874,10 +874,22 @@ async def test_ssl_server_hostname_not_passed(ssl_conn_type):
                 pass
 
 
-async def test_ssl_shutdown_timeout(ssl_conn_type):
+@pytest.mark.parametrize("timeout_name", [
+    "ssl_shutdown_timeout",
+    "ssl_handshake_timeout",
+])
+@pytest.mark.parametrize("timeout_value", [0, -1])
+async def test_ssl_timeout_validation(ssl_conn_type, timeout_name, timeout_value):
+    kwargs = {timeout_name: timeout_value}
+    match = f"{timeout_name} should be a positive number"
+
+    with pytest.raises(ValueError, match=match):
+        async with TestServer(ct=ssl_conn_type, **kwargs) as server:
+            pass
+
     async with TestServer(ct=ssl_conn_type) as server:
-        with pytest.raises(ValueError, match="ssl_shutdown_timeout should be a positive number"):
-            async with TestClient(server, ct=ssl_conn_type, ssl_shutdown_timeout=-1) as client:
+        with pytest.raises(ValueError, match=match):
+            async with TestClient(server, ct=ssl_conn_type, **kwargs) as client:
                 pass
 
 

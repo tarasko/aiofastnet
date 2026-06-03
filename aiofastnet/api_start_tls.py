@@ -2,6 +2,7 @@ import asyncio
 import ssl
 
 from .ssl_transport import SSLTransport_Transport
+from .api_utils import _validate_ssl_timeout
 from .wrapped_transport import _WrappedTransport
 
 
@@ -29,6 +30,9 @@ async def start_tls(loop: asyncio.AbstractEventLoop,
         raise TypeError(
             f'sslcontext is expected to be an instance of ssl.SSLContext, '
             f'got {sslcontext!r}')
+
+    _validate_ssl_timeout("ssl_handshake_timeout", ssl_handshake_timeout)
+    _validate_ssl_timeout("ssl_shutdown_timeout", ssl_shutdown_timeout)
 
     waiter = loop.create_future()
     ssl_transport = SSLTransport_Transport(

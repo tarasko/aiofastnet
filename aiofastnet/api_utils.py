@@ -18,6 +18,11 @@ def _is_asyncio_loop(loop: asyncio.AbstractEventLoop) -> bool:
     return type(loop).__module__.startswith("asyncio.")
 
 
+def _validate_ssl_timeout(name: str, value: Optional[float]) -> None:
+    if value is not None and value <= 0:
+        raise ValueError(f"{name} should be a positive number, got {value}")
+
+
 async def _create_connection_transport(
         loop: asyncio.AbstractEventLoop,
         sock: socket.socket,

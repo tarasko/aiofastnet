@@ -242,15 +242,11 @@ cdef class SSLTransportBase(Transport):
 
         if ssl_handshake_timeout is None:
             ssl_handshake_timeout = constants.SSL_HANDSHAKE_TIMEOUT
-        elif ssl_handshake_timeout <= 0:
-            raise ValueError(
-                f"ssl_handshake_timeout should be a positive number, got {ssl_handshake_timeout}")
+        assert ssl_handshake_timeout > 0
 
         if ssl_shutdown_timeout is None:
             ssl_shutdown_timeout = constants.SSL_SHUTDOWN_TIMEOUT
-        elif ssl_shutdown_timeout <= 0:
-            raise ValueError(
-                f"ssl_shutdown_timeout should be a positive number, got {ssl_shutdown_timeout}")
+        assert ssl_shutdown_timeout > 0
 
         if ssl_incoming_bio_size is None:
             ssl_incoming_bio_size = constants.SSL_INCOMING_BIO_SIZE

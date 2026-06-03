@@ -10,7 +10,7 @@ import itertools
 import socket
 
 from .api_utils import (_check_ssl_socket, _create_connection_transport,
-                        _logger, _ensure_resolved)
+                        _logger, _ensure_resolved, _validate_ssl_timeout)
 
 
 async def create_connection(
@@ -67,6 +67,9 @@ async def create_connection(
     if ssl_shutdown_timeout is not None and not ssl:
         raise ValueError(
             'ssl_shutdown_timeout is only meaningful with ssl')
+
+    _validate_ssl_timeout("ssl_handshake_timeout", ssl_handshake_timeout)
+    _validate_ssl_timeout("ssl_shutdown_timeout", ssl_shutdown_timeout)
 
     if sock is not None:
         _check_ssl_socket(sock)

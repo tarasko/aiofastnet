@@ -15,7 +15,8 @@ import weakref
 
 from . import constants
 from .api_utils import _is_asyncio_loop, _create_connection_transport, \
-    _check_ssl_socket, _logger, _HAS_IPv6, _ensure_resolved
+    _check_ssl_socket, _logger, _HAS_IPv6, _ensure_resolved, \
+    _validate_ssl_timeout
 from .ssl_transport import SSLTransport_Transport
 from .transport import (aiofn_is_buffered_protocol)
 from .wrapped_transport import (
@@ -68,6 +69,9 @@ async def create_server(
     if ssl_shutdown_timeout is not None and ssl is None:
         raise ValueError(
             'ssl_shutdown_timeout is only meaningful with ssl')
+
+    _validate_ssl_timeout("ssl_handshake_timeout", ssl_handshake_timeout)
+    _validate_ssl_timeout("ssl_shutdown_timeout", ssl_shutdown_timeout)
 
     if _should_fallback_to_asyncio(loop):
         kwargs = {

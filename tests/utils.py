@@ -417,7 +417,9 @@ def ssl_conn_type(request):
 async def TestServer(protocol_factory=None,
                      host="127.0.0.1", port=0,
                      ct: ConnectionType=ConnectionType("tcp"),
-                     is_buffered=False):
+                     is_buffered=False,
+                     ssl_handshake_timeout=None,
+                     ssl_shutdown_timeout=None):
     loop = asyncio.get_running_loop()
     clients = set()
     client_waiters = []
@@ -429,6 +431,8 @@ async def TestServer(protocol_factory=None,
         host=host,
         port=port,
         ssl=ct.server_ssl_context,
+        ssl_handshake_timeout=ssl_handshake_timeout,
+        ssl_shutdown_timeout=ssl_shutdown_timeout,
     )
     try:
         resolved_port = server.sockets[0].getsockname()[1]
