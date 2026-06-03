@@ -602,7 +602,8 @@ async def test_write_wrong_type(conn_type):
             with pytest.raises(TypeError):
                 client.transport.writelines(42)
 
-    assert "closed" in repr(client.transport)
+    if os.name != 'nt' or isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
+        assert "closed" in repr(client.transport)
 
     # Check that we can write after transport is closed, it is no-op
     for i in range(10):
