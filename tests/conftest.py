@@ -17,12 +17,18 @@ def selector_loop():
     """Opt an async test into the selector loop on Windows."""
 
 
+def _new_selector_event_loop():
+    if os.name == "nt":
+        return asyncio.SelectorEventLoop()
+    return asyncio.new_event_loop()
+
+
 def _selector_loop_factories():
     if os.name == "nt":
         return {
-            "asyncio_sel": asyncio.WindowsSelectorEventLoopPolicy().new_event_loop,
+            "asyncio_sel": _new_selector_event_loop,
         }
-    return {"asyncio": asyncio.new_event_loop}
+    return {"asyncio": _new_selector_event_loop}
 
 
 def _selector_loop_policies():
@@ -36,7 +42,7 @@ def _selector_loop_policies():
 def _platform_loop_factories():
     if os.name == "nt":
         factories = {
-            "asyncio_sel": asyncio.WindowsSelectorEventLoopPolicy().new_event_loop,
+            "asyncio_sel": _new_selector_event_loop,
             "asyncio_pro": asyncio.WindowsProactorEventLoopPolicy().new_event_loop,
         }
         if sys.version_info >= (3, 10):
@@ -48,7 +54,7 @@ def _platform_loop_factories():
                 factories["winloop"] = winloop.EventLoopPolicy().new_event_loop
         return factories
 
-    factories = {"asyncio": asyncio.new_event_loop}
+    factories = {"asyncio": _new_selector_event_loop}
     try:
         uvloop = importlib.import_module("uvloop")
     except ImportError:
@@ -118,7 +124,7 @@ def pytest_asyncio_loop_factories(config, item):
         return _platform_loop_factories()
     if "selector_loop" in fixture_names:
         return _selector_loop_factories()
-    return {"asyncio": asyncio.new_event_loop}
+    return {"asyncio": _new_selector_event_loop}
 
 
 def pytest_generate_tests(metafunc):
