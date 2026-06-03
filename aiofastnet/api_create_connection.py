@@ -10,7 +10,7 @@ import itertools
 import socket
 
 from .api_utils import (_check_ssl_socket, _create_connection_transport,
-                        _logger, _ensure_resolved, _validate_ssl_timeout)
+                        _logger, _ensure_resolved, _validate_ssl_timeout, _validate_bio_size)
 
 
 async def create_connection(
@@ -62,6 +62,8 @@ async def create_connection(
 
     ssl_handshake_timeout = _validate_ssl_timeout("ssl_handshake_timeout", ssl_handshake_timeout, ssl)
     ssl_shutdown_timeout = _validate_ssl_timeout("ssl_shutdown_timeout", ssl_shutdown_timeout, ssl)
+    ssl_incoming_bio_size = _validate_bio_size("ssl_incoming_bio_size", ssl_incoming_bio_size, ssl)
+    ssl_outgoing_bio_size = _validate_bio_size("ssl_outgoing_bio_size", ssl_outgoing_bio_size, ssl)
 
     if sock is not None:
         _check_ssl_socket(sock)

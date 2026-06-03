@@ -7,6 +7,7 @@ import warnings
 from asyncio.trsock import TransportSocket
 from logging import getLogger
 from pathlib import Path
+from typing import Optional
 
 from cpython.bytearray cimport PyByteArray_AS_STRING, PyByteArray_GET_SIZE
 from cpython.bytes cimport PyBytes_FromStringAndSize
@@ -220,14 +221,15 @@ cdef class SSLTransportBase(Transport):
     cpdef _force_close(self, exc):
         raise NotImplementedError()
 
-    def __init__(self, loop, app_protocol, sslcontext,
-                 waiter=None,
-                 server_side=False,
-                 server_hostname=None,
-                 ssl_handshake_timeout=None,
-                 ssl_shutdown_timeout=None,
-                 ssl_incoming_bio_size=None,
-                 ssl_outgoing_bio_size=None,
+    def __init__(self,
+                 loop, app_protocol, sslcontext,
+                 bint server_side,
+                 double ssl_handshake_timeout,
+                 double ssl_shutdown_timeout,
+                 Py_ssize_t ssl_incoming_bio_size,
+                 Py_ssize_t ssl_outgoing_bio_size,
+                 waiter: Optional[asyncio.Future]=None,
+                 server_hostname: Optional[str]=None,
                  server=None,
                  sock=None):
         self._thread_id = PyThread_get_thread_ident()
@@ -239,16 +241,8 @@ cdef class SSLTransportBase(Transport):
 
         assert ssl_handshake_timeout > 0
         assert ssl_shutdown_timeout > 0
-
-        if ssl_incoming_bio_size is None:
-            ssl_incoming_bio_size = constants.SSL_INCOMING_BIO_SIZE
-        else:
-            ssl_incoming_bio_size = max(ssl_incoming_bio_size, 16*1024 + 256)
-
-        if ssl_outgoing_bio_size is None:
-            ssl_outgoing_bio_size = constants.SSL_OUTGOING_BIO_SIZE
-        else:
-            ssl_outgoing_bio_size = max(ssl_outgoing_bio_size, 16*1024 + 256)
+        assert ssl_incoming_bio_size > 0
+        assert ssl_outgoing_bio_size > 0
 
         if server_side and not sslcontext:
             raise ValueError('Server side SSL needs a valid SSLContext')
@@ -1123,22 +1117,25 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         object _sock_fd_obj
         int _sock_fd
 
-    def __init__(self, loop, sock, app_protocol, sslcontext,
-                 *,
+    def __init__(self, loop, app_protocol, sslcontext,
+                 bint server_side,
+                 double ssl_handshake_timeout,
+                 double ssl_shutdown_timeout,
+                 Py_ssize_t ssl_incoming_bio_size,
+                 Py_ssize_t ssl_outgoing_bio_size,
+                 sock,
                  waiter=None,
-                 server_side=False,
                  server_hostname=None,
-                 ssl_handshake_timeout=None,
-                 ssl_shutdown_timeout=None,
-                 ssl_incoming_bio_size=None,
-                 ssl_outgoing_bio_size=None,
                  server=None):
-        SSLTransportBase.__init__(self, loop, app_protocol, sslcontext, waiter,
-                                  server_side, server_hostname,
+        SSLTransportBase.__init__(self,
+                                  loop, app_protocol, sslcontext,
+                                  server_side,
                                   ssl_handshake_timeout,
                                   ssl_shutdown_timeout,
                                   ssl_incoming_bio_size,
                                   ssl_outgoing_bio_size,
+                                  waiter,
+                                  server_hostname,
                                   server,
                                   sock)
 
@@ -1493,27 +1490,27 @@ cdef class SSLTransport_Transport(SSLTransportBase):
         bint _is_aiofn_transport
 
     def __init__(self,
-                 loop,
-                 app_protocol,
-                 sslcontext,
-                 *,
+                 loop, app_protocol, sslcontext,
+                 bint server_side,
+                 double ssl_handshake_timeout,
+                 double ssl_shutdown_timeout,
+                 Py_ssize_t ssl_incoming_bio_size,
+                 Py_ssize_t ssl_outgoing_bio_size,
                  waiter=None,
-                 server_side=False,
                  server_hostname=None,
+                 server=None,
                  call_connection_made=True,
-                 ssl_handshake_timeout=None,
-                 ssl_shutdown_timeout=None,
-                 ssl_incoming_bio_size=None,
-                 ssl_outgoing_bio_size=None,
-                 server=None):
-        SSLTransportBase.__init__(self, loop, app_protocol, sslcontext, waiter,
-                                  server_side, server_hostname,
+                 ):
+        SSLTransportBase.__init__(self,
+                                  loop, app_protocol, sslcontext,
+                                  server_side,
                                   ssl_handshake_timeout,
                                   ssl_shutdown_timeout,
                                   ssl_incoming_bio_size,
                                   ssl_outgoing_bio_size,
-                                  server,
-                                  None)
+                                  waiter,
+                                  server_hostname,
+                                  server)
         self._transport = None
         self._is_aiofn_transport = False
 

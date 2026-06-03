@@ -16,7 +16,7 @@ import weakref
 from . import constants
 from .api_utils import _is_asyncio_loop, _create_connection_transport, \
     _check_ssl_socket, _logger, _HAS_IPv6, _ensure_resolved, \
-    _validate_ssl_timeout
+    _validate_ssl_timeout, _validate_bio_size
 from .ssl_transport import SSLTransport_Transport
 from .transport import (aiofn_is_buffered_protocol)
 from .wrapped_transport import (
@@ -64,6 +64,8 @@ async def create_server(
 
     ssl_handshake_timeout = _validate_ssl_timeout("ssl_handshake_timeout", ssl_handshake_timeout, ssl)
     ssl_shutdown_timeout = _validate_ssl_timeout("ssl_shutdown_timeout", ssl_shutdown_timeout, ssl)
+    ssl_incoming_bio_size = _validate_bio_size("ssl_incoming_bio_size", ssl_incoming_bio_size, ssl)
+    ssl_outgoing_bio_size = _validate_bio_size("ssl_outgoing_bio_size", ssl_outgoing_bio_size, ssl)
 
     if _should_fallback_to_asyncio(loop):
         kwargs = {
@@ -82,7 +84,9 @@ async def create_server(
 
         return await _create_server_fallback(
             loop, protocol_factory, ssl,
-            ssl_handshake_timeout, ssl_shutdown_timeout, **kwargs)
+            ssl_handshake_timeout, ssl_shutdown_timeout,
+            ssl_incoming_bio_size, ssl_outgoing_bio_size,
+            **kwargs)
 
     if sock is not None:
         _check_ssl_socket(sock)
@@ -348,6 +352,8 @@ async def _create_server_fallback(loop,
                                   ssl,
                                   ssl_handshake_timeout,
                                   ssl_shutdown_timeout,
+                                  ssl_incoming_bio_size,
+                                  ssl_outgoing_bio_size,
                                   **kwargs
 ):
     if ssl:
@@ -355,11 +361,14 @@ async def _create_server_fallback(loop,
 
         def ssl_protocol_factory():
             protocol = protocol_factory()
+            server_side = True
             tls_transport = SSLTransport_Transport(
                 loop, protocol, sslcontext,
-                server_side=True,
-                ssl_handshake_timeout=ssl_handshake_timeout,
-                ssl_shutdown_timeout=ssl_shutdown_timeout
+                server_side,
+                ssl_handshake_timeout,
+                ssl_shutdown_timeout,
+                ssl_incoming_bio_size,
+                ssl_outgoing_bio_size
             )
             return tls_transport.get_tls_protocol()
 

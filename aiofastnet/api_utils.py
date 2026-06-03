@@ -4,7 +4,7 @@ import ssl
 from logging import getLogger
 from typing import Callable, Union, Optional, Tuple
 
-from .constants import SSL_TIMEOUT_DEFAULTS
+from .constants import SSL_TIMEOUT_DEFAULTS, SSL_BIO_SIZE_DEFAULTS
 from .ssl_transport import SSLTransport_Socket, SSLTransport_Transport
 from .transport import SocketTransport, aiofn_is_buffered_protocol
 from .wrapped_transport import _should_fallback_to_asyncio, \
@@ -29,6 +29,20 @@ def _validate_ssl_timeout(name: str, value: Optional[float], ssl_or_sslcontext: 
 
     if value is None:
         return SSL_TIMEOUT_DEFAULTS[name]
+
+    return value
+
+
+def _validate_bio_size(name: str, value: Optional[int], ssl_or_sslcontext: Optional[bool | ssl.SSLContext]) -> int:
+    if value is not None and not ssl_or_sslcontext:
+        raise ValueError(
+            f'{name} is only meaningful with ssl')
+
+    if value is not None and value < 16384:
+        raise ValueError(f"{name} should be a positive number >= 16384, got {value}")
+
+    if value is None:
+        return SSL_BIO_SIZE_DEFAULTS[name]
 
     return value
 
@@ -59,13 +73,13 @@ async def _create_connection_transport(
 
             ssl_transport = SSLTransport_Transport(
                 loop, protocol, sslcontext,
+                server_side,
+                ssl_handshake_timeout,
+                ssl_shutdown_timeout,
+                ssl_incoming_bio_size,
+                ssl_outgoing_bio_size,
                 waiter=waiter,
-                server_side=server_side,
-                server_hostname=server_hostname,
-                ssl_handshake_timeout=ssl_handshake_timeout,
-                ssl_shutdown_timeout=ssl_shutdown_timeout,
-                ssl_incoming_bio_size=ssl_incoming_bio_size,
-                ssl_outgoing_bio_size=ssl_outgoing_bio_size
+                server_hostname=server_hostname
             )
 
             ssl_protocol_factory = lambda: ssl_transport.get_tls_protocol()
@@ -100,12 +114,15 @@ async def _create_connection_transport(
         if ssl:
             sslcontext = None if isinstance(ssl, bool) else ssl
             transport = SSLTransport_Socket(
-                loop, sock, protocol, sslcontext,
+                loop, protocol, sslcontext,
+                server_side,
+                ssl_handshake_timeout,
+                ssl_shutdown_timeout,
+                ssl_incoming_bio_size,
+                ssl_outgoing_bio_size,
+                sock,
                 waiter=waiter,
-                server_side=server_side,
                 server_hostname=server_hostname,
-                ssl_handshake_timeout=ssl_handshake_timeout,
-                ssl_shutdown_timeout=ssl_shutdown_timeout,
                 server=server
             )
         else:
