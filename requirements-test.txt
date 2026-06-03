@@ -1,7 +1,7 @@
 setuptools >= 78.0
 Cython >= 3.2
 pytest
-pytest-asyncio
+pytest-asyncio >= 1.4.0
 pytest-cov
 async_timeout
 uvloop; sys_platform != 'win32'

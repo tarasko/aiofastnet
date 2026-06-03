@@ -3,7 +3,6 @@ import socket
 import weakref
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
-import importlib
 import os
 from logging import getLogger
 from pathlib import Path
@@ -57,52 +56,6 @@ async def create_server(loop, *args, **kwargs):
         return await loop.create_server(*args, **kwargs)
     else:
         return await aiofastnet.create_server(loop, *args, **kwargs)
-
-
-def multiloop_event_loop_policy():
-    """
-    Returns a pytest fixture function named `event_loop_policy` (by assignment in the test module).
-
-    Usage in a test module:
-        from tests.utils import make_event_loop_policy_fixture
-        event_loop_policy = make_event_loop_policy_fixture()
-
-    Notes:
-    - On Windows, uvloop isn't used (by default) and we return the appropriate asyncio policy.
-    - On non-Windows, params are ("asyncio", "uvloop")
-    """
-    # Decide params at factory creation time (import-time for that module)
-    uvloop = None
-    winloop = None
-    if os.name == "nt":
-        # Winloop doesn't work with python 3.9
-        if sys.version_info >= (3, 10):
-            params = ("asyncio_sel", "asyncio_pro", "winloop")
-        else:
-            params = ("asyncio_sel", "asyncio_pro",)
-        winloop = importlib.import_module("winloop")
-    else:
-        params = ("asyncio", "uvloop")
-        uvloop = importlib.import_module("uvloop")
-
-    @pytest.fixture(params=params)
-    def event_loop_policy(request):
-        name = request.param
-
-        if name == "asyncio":
-            return asyncio.DefaultEventLoopPolicy()
-        elif name == "asyncio_sel":
-            return asyncio.WindowsSelectorEventLoopPolicy()
-        elif name == "asyncio_pro":
-            return asyncio.WindowsProactorEventLoopPolicy()
-        elif name == "uvloop":
-            return uvloop.EventLoopPolicy()
-        elif name == "winloop":
-            return winloop.EventLoopPolicy()
-        else:
-            raise AssertionError(f"unknown loop: {name!r}")
-
-    return event_loop_policy
 
 
 class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):

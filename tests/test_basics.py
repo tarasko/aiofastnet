@@ -13,10 +13,8 @@ import pytest
 from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Transport
 from tests.utils import TestClient, TestServer, \
-    multiloop_event_loop_policy, make_test_ssl_contexts, ConnectionType, \
+    make_test_ssl_contexts, ConnectionType, \
     AsyncClient, SomeException, exc_queue, _logger, conn_type, ssl_conn_type, start_tls, sendfile
-
-event_loop_policy = multiloop_event_loop_policy()
 
 
 @pytest.fixture(params=["simple", "buffered"])
@@ -25,7 +23,7 @@ def buffered_protocol(request):
 
 
 @pytest.mark.parametrize("msg_size", [1, 2, 3, 4, 5, 6, 7, 8, 29, 64, 256 * 1024, 6 * 1024 * 1024])
-async def test_echo(msg_size, conn_type, buffered_protocol):
+async def test_echo(all_loops, msg_size, conn_type, buffered_protocol):
     payload = b"x" * msg_size
 
     async with TestServer(ct=conn_type, is_buffered=buffered_protocol) as server:
@@ -39,7 +37,7 @@ async def test_echo(msg_size, conn_type, buffered_protocol):
 
 @pytest.mark.parametrize("msg_size", [1, 32, 64, 256 * 1024, 6 * 1024 * 1024, 20 * 1024 * 1024])
 @pytest.mark.parametrize("num_lines", [1, 32, 4000])
-async def test_echo_writelines(msg_size, num_lines, conn_type, buffered_protocol):
+async def test_echo_writelines(all_loops, msg_size, num_lines, conn_type, buffered_protocol):
     payload = b"x" * msg_size
 
     async with TestServer(ct=conn_type, is_buffered=buffered_protocol) as server:
@@ -49,7 +47,7 @@ async def test_echo_writelines(msg_size, num_lines, conn_type, buffered_protocol
             assert echoed == payload
 
 
-async def test_write_huge_close(conn_type):
+async def test_write_huge_close(all_loops, conn_type):
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop) and sys.version_info < (3, 11):
         pytest.skip("ProactorEventLoop in 3.9 and 3.10 had issues with connection closing")
 
@@ -104,7 +102,7 @@ async def test_write_huge_close(conn_type):
                 assert client.is_eof_received
 
 
-async def test_write_huge_abort(conn_type):
+async def test_write_huge_abort(all_loops, conn_type):
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
         pytest.skip("ProactorEventLoop has different semantics around exceptions from data_received")
 
@@ -162,7 +160,7 @@ async def test_write_huge_abort(conn_type):
                 assert not client.is_eof_received
 
 
-async def test_write_paused(conn_type):
+async def test_write_paused(all_loops, conn_type):
     payload = b"x" * 1024
 
     async with TestServer(ct=conn_type) as server:
@@ -201,7 +199,7 @@ async def test_write_paused(conn_type):
             await client.readn(total_bytes_written)
 
 
-async def test_writelines_paused(conn_type):
+async def test_writelines_paused(all_loops, conn_type):
     msg1 = b"a" * 256 
     msg2 = b"b" * 256 * 2
     msg3 = b"c" * 256 * 3
@@ -239,7 +237,7 @@ async def test_writelines_paused(conn_type):
             await client.readn(total_bytes_written)
 
 
-async def test_pause_reading(conn_type):
+async def test_pause_reading(all_loops, conn_type):
     payload = b"x" * (20*1024*1024)
 
     async with TestServer(ct=conn_type) as server:
@@ -261,7 +259,7 @@ async def test_pause_reading(conn_type):
             client.transport.resume_reading()
 
 
-async def test_ssl_renegotiate_midstream(ssl_conn_type):
+async def test_ssl_renegotiate_midstream(all_loops, ssl_conn_type):
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
         pytest.skip("aiofastnet doesn't work with ProactorEventLoop")
 
@@ -290,7 +288,7 @@ async def test_ssl_renegotiate_midstream(ssl_conn_type):
             assert await client.readn(len(suffix)) == suffix
 
 
-async def test_ssl_selected_alpn_protocol(ssl_conn_type):
+async def test_ssl_selected_alpn_protocol(all_loops, ssl_conn_type):
     ssl_conn_type.server_ssl_context.set_alpn_protocols(["h2", "http/1.1"])
     ssl_conn_type.client_ssl_context.set_alpn_protocols(["http/1.1", "h2"])
 
@@ -304,7 +302,7 @@ async def test_ssl_selected_alpn_protocol(ssl_conn_type):
             assert server_ssl_object.selected_alpn_protocol() == "h2"
 
 
-async def test_ssl_selected_alpn_protocol_none(ssl_conn_type):
+async def test_ssl_selected_alpn_protocol_none(all_loops, ssl_conn_type):
     async with TestServer(ct=ssl_conn_type) as server:
         async with TestClient(server, ct=ssl_conn_type) as client:
             client_ssl_object = client.transport.get_extra_info("ssl_object")
@@ -315,7 +313,7 @@ async def test_ssl_selected_alpn_protocol_none(ssl_conn_type):
             assert server_ssl_object.selected_alpn_protocol() is None
 
 
-async def test_ssl_getpeercert_binary_form(ssl_conn_type):
+async def test_ssl_getpeercert_binary_form(all_loops, ssl_conn_type):
     expected_der = ssl.PEM_cert_to_DER_cert(open("tests/test.crt", "r", encoding="ascii").read())
 
     async with TestServer(ct=ssl_conn_type) as server:
@@ -344,7 +342,7 @@ def TmpFromData(data):
 @pytest.mark.parametrize("file_size", [64, 3 * 1024 * 1024])
 @pytest.mark.parametrize("header_size", [64, 256 * 1024])
 @pytest.mark.parametrize("tail_size", [64, 256 * 1024])
-async def test_sendfile(conn_type, file_size, header_size, tail_size):
+async def test_sendfile(all_loops, conn_type, file_size, header_size, tail_size):
     conn_type.check_sendfile_supported()
 
     loop = asyncio.get_running_loop()
@@ -375,7 +373,7 @@ async def test_sendfile(conn_type, file_size, header_size, tail_size):
                 assert reply == tail
 
 
-async def test_sendfile_huge_error(conn_type):
+async def test_sendfile_huge_error(all_loops, conn_type):
     conn_type.check_sendfile_supported()
 
     loop = asyncio.get_running_loop()
@@ -420,7 +418,7 @@ async def test_sendfile_huge_error(conn_type):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only test")
-async def test_sendfile_win_not_implemented():
+async def test_sendfile_win_not_implemented(all_loops):
     loop = asyncio.get_running_loop()
     payload = b"p" * (1024)
     with TmpFromData(payload) as tmp:
@@ -430,7 +428,7 @@ async def test_sendfile_win_not_implemented():
                     await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2)
 
 
-async def test_sendfile_ssl_not_implemented(ssl_conn_type):
+async def test_sendfile_ssl_not_implemented(all_loops, ssl_conn_type):
     if ssl_conn_type.name == 'ktls':
         pytest.skip("sendfile is supported by ktls")
 
@@ -443,7 +441,7 @@ async def test_sendfile_ssl_not_implemented(ssl_conn_type):
                     await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2)
 
 
-async def test_exc_eof_received(conn_type):
+async def test_exc_eof_received(all_loops, conn_type):
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
         pytest.skip("aiofastnet doesn't work with ProactorEventLoop")
 
@@ -463,7 +461,7 @@ async def test_exc_eof_received(conn_type):
                 assert isinstance(excq[0]["exception"], SomeException)
 
 
-async def test_exc_connection_made(conn_type):
+async def test_exc_connection_made(all_loops, conn_type):
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
         pytest.skip("exceptions from connection_made has unspecified behavior in asyncio")
 
@@ -485,7 +483,7 @@ async def test_exc_connection_made(conn_type):
                 await client.wait_closed()
 
 
-async def test_exc_pause_writing(conn_type):
+async def test_exc_pause_writing(all_loops, conn_type):
     class ClientRaisePauseWriting(AsyncClient):
         def pause_writing(self):
             super().pause_writing()
@@ -508,7 +506,7 @@ async def test_exc_pause_writing(conn_type):
                 await client.wait_closed()
 
 
-async def test_exc_resume_writing(conn_type):
+async def test_exc_resume_writing(all_loops, conn_type):
     class ClientRaiseResumeWriting(AsyncClient):
         def resume_writing(self):
             super().resume_writing()
@@ -531,7 +529,7 @@ async def test_exc_resume_writing(conn_type):
                 await client.wait_closed()
 
 
-async def test_exc_all(conn_type):
+async def test_exc_all(all_loops, conn_type):
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
         pytest.skip("exceptions from connection_made has unspecified behavior in asyncio")
 
@@ -585,7 +583,7 @@ async def test_exc_all(conn_type):
         assert "closed" in repr(client.transport)
 
 
-async def test_write_wrong_type(conn_type):
+async def test_write_wrong_type(all_loops, conn_type):
     async with TestServer(ct=conn_type) as server:
         async with TestClient(server, ct=conn_type) as client:
             with pytest.raises(TypeError):
@@ -610,7 +608,7 @@ async def test_write_wrong_type(conn_type):
         client.transport.write(b"abcd")
 
 
-async def test_bad_buffer(conn_type):
+async def test_bad_buffer(all_loops, conn_type):
     class ClientWithReadonlyBuffer(AsyncClient):
         def get_buffer(self, hint):
             return b"1" * 16 * 1024
@@ -640,7 +638,7 @@ async def test_bad_buffer(conn_type):
                 await client.wait_closed()
 
 
-async def test_maybe_copy():
+async def test_maybe_copy(all_loops):
     bytes_obj = bytes(b"abcd")
     assert aiofn_maybe_copy_buffer(bytes_obj) is bytes_obj
 
@@ -665,7 +663,7 @@ async def test_maybe_copy():
     assert mv_ba_obj_copy == ba_obj
 
 
-async def test_contextvar(conn_type, buffered_protocol):
+async def test_contextvar(all_loops, conn_type, buffered_protocol):
     payload = b"x" * 6*1024*1024
 
     var = ContextVar('var')
@@ -733,7 +731,7 @@ async def test_contextvar(conn_type, buffered_protocol):
             assert var_values[0] == ('connection_made', 'begin')
 
 
-async def test_transport_base(conn_type):
+async def test_transport_base(all_loops, conn_type):
     async with TestServer(ct=conn_type) as server:
         async with TestClient(server, ct=conn_type) as client:
             assert isinstance(client.transport, Transport)
@@ -741,7 +739,7 @@ async def test_transport_base(conn_type):
             await client.wait_closed()
 
 
-async def test_start_tls():
+async def test_start_tls(all_loops):
     server_ssl_context, client_ssl_context = make_test_ssl_contexts(
         "tests/test.crt", "tests/test.key")
 
@@ -845,7 +843,7 @@ async def test_start_tls():
             assert client.is_eof_received
 
 
-async def test_peername(conn_type):
+async def test_peername(all_loops, conn_type):
     async with TestServer(ct=conn_type, is_buffered=buffered_protocol) as server:
         async with TestClient(server, ct=conn_type, is_buffered=buffered_protocol) as client:
             server_client = await server.get_any_server_client()
@@ -857,7 +855,7 @@ async def test_peername(conn_type):
             assert server_peername == client_sockname
 
 
-async def test_ssl_server_hostname_not_passed(ssl_conn_type):
+async def test_ssl_server_hostname_not_passed(all_loops, ssl_conn_type):
     # In stdlib:
     #   - SSLContext.wrap_socket(check_hostname=True, server_hostname=None) -> ValueError
     #   - SSLContext.wrap_socket(check_hostname=True, server_hostname="") -> ValueError
@@ -882,7 +880,7 @@ async def test_ssl_server_hostname_not_passed(ssl_conn_type):
     "ssl_handshake_timeout",
 ])
 @pytest.mark.parametrize("timeout_value", [0, -1])
-async def test_ssl_timeout_validation(ssl_conn_type, timeout_name, timeout_value):
+async def test_ssl_timeout_validation(all_loops, ssl_conn_type, timeout_name, timeout_value):
     kwargs = {timeout_name: timeout_value}
     match = f"{timeout_name} should be a positive number"
 
@@ -896,7 +894,7 @@ async def test_ssl_timeout_validation(ssl_conn_type, timeout_name, timeout_value
                 pass
 
 
-async def test_ssl_handshake_timeout(ssl_conn_type):
+async def test_ssl_handshake_timeout(all_loops, ssl_conn_type):
     async with TestServer(ct=ssl_conn_type, ssl_handshake_timeout=0.01) as server:
         reader, writer = await asyncio.open_connection(server.host, server.port)
         try:
@@ -907,7 +905,7 @@ async def test_ssl_handshake_timeout(ssl_conn_type):
             await writer.wait_closed()
 
 
-async def test_ssl_shutdown_timeout(ssl_conn_type):
+async def test_ssl_shutdown_timeout(all_loops, ssl_conn_type):
     loop = asyncio.get_running_loop()
     made = loop.create_future()
     lost = loop.create_future()

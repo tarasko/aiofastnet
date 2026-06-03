@@ -19,7 +19,7 @@ def _is_asyncio_loop(loop: asyncio.AbstractEventLoop) -> bool:
     return type(loop).__module__.startswith("asyncio.")
 
 
-def _validate_ssl_timeout(name: str, value: Optional[float], ssl_or_sslcontext: Optional[bool | ssl.SSLContext]) -> float:
+def _validate_ssl_timeout(name: str, value: Optional[float], ssl_or_sslcontext: Optional[Union[bool, ssl.SSLContext]]) -> float:
     if value is not None and not ssl_or_sslcontext:
         raise ValueError(
             f'{name} is only meaningful with ssl')
@@ -33,7 +33,7 @@ def _validate_ssl_timeout(name: str, value: Optional[float], ssl_or_sslcontext: 
     return value
 
 
-def _validate_bio_size(name: str, value: Optional[int], ssl_or_sslcontext: Optional[bool | ssl.SSLContext]) -> int:
+def _validate_bio_size(name: str, value: Optional[int], ssl_or_sslcontext: Optional[Union[bool, ssl.SSLContext]]) -> int:
     if value is not None and not ssl_or_sslcontext:
         raise ValueError(
             f'{name} is only meaningful with ssl')
