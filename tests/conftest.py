@@ -3,8 +3,16 @@ import importlib
 import os
 import sys
 import warnings
+from importlib.metadata import version
 
 import pytest
+
+
+def _version_tuple(package_name):
+    return tuple(int(part) for part in version(package_name).split(".")[:2])
+
+
+_HAS_LOOP_FACTORIES = _version_tuple("pytest-asyncio") >= (1, 4)
 
 
 @pytest.fixture
@@ -98,22 +106,14 @@ def _requested_loop_fixtures(item):
     return fixture_names
 
 
-class _LegacyEventLoopPolicyPlugin:
+if not _HAS_LOOP_FACTORIES:
     @pytest.fixture
-    def event_loop_policy(self, request):
+    def event_loop_policy(request):
         if hasattr(request, "param"):
             return request.param
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
             return asyncio.get_event_loop_policy()
-
-
-def pytest_configure(config):
-    if not hasattr(config.hook, "pytest_asyncio_loop_factories"):
-        config.pluginmanager.register(
-            _LegacyEventLoopPolicyPlugin(),
-            "aiofastnet-legacy-event-loop-policy",
-        )
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -128,7 +128,7 @@ def pytest_asyncio_loop_factories(config, item):
 
 
 def pytest_generate_tests(metafunc):
-    if hasattr(metafunc.config.hook, "pytest_asyncio_loop_factories"):
+    if _HAS_LOOP_FACTORIES:
         return
 
     fixture_names = _requested_loop_fixtures(metafunc.definition)
