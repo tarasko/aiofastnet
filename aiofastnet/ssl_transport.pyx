@@ -177,9 +177,6 @@ cdef class SSLTransportBase(Transport):
     cpdef get_write_buffer_size(self):
         raise NotImplementedError()
 
-    cdef set_sock(self, sock):
-        self._sock
-
     cdef _is_closed(self):
         raise NotImplementedError()
 
@@ -634,10 +631,7 @@ cdef class SSLTransportBase(Transport):
                 user_data = first_chunk
 
             if user_data is not None:
-                if self._app_protocol_aiofn:
-                    (<Protocol>self._app_protocol).data_received(user_data)
-                else:
-                    self._app_protocol.data_received(user_data)
+                self._app_protocol.data_received(user_data)
 
             if not self._should_retry_read(last_error) or self._read_paused:
                 return

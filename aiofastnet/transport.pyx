@@ -59,9 +59,6 @@ cdef class Protocol:
     cpdef buffer_updated(self, Py_ssize_t bytes_read):
         raise NotImplementedError()
 
-    cpdef data_received(self, bytes data):
-        raise NotImplementedError()
-
 
 cpdef aiofn_is_buffered_protocol(protocol):
     try:
@@ -405,10 +402,7 @@ cdef class SocketTransport(Transport):
             return
 
         try:
-            if self._protocol_aiofn:
-                (<Protocol>self._protocol).data_received(data)
-            else:
-                self._protocol.data_received(data)
+            self._protocol.data_received(data)
         except (SystemExit, KeyboardInterrupt):
             raise
         except BaseException as exc:
