@@ -100,21 +100,15 @@ def install_policy(
 
     Returns the installed policy object.
     """
-    if base_policy is None:
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="'.*get_event_loop_policy' is deprecated",
-                category=DeprecationWarning,
-            )
-            base_policy = asyncio.get_event_loop_policy()
-
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",
-            message="'.*EventLoopPolicy' is deprecated",
+            message="'.*is deprecated",
             category=DeprecationWarning,
         )
+        if base_policy is None:
+            base_policy = asyncio.get_event_loop_policy()
+
         class _PatchedEventLoopPolicy(asyncio.AbstractEventLoopPolicy):
             _base_policy: asyncio.AbstractEventLoopPolicy
 
@@ -131,12 +125,6 @@ def install_policy(
                 loop = self._base_policy.new_event_loop()
                 return patch_loop(loop)
 
-    policy = _PatchedEventLoopPolicy(base_policy)
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message="'.*event_loop_policy' is deprecated",
-            category=DeprecationWarning,
-        )
+        policy = _PatchedEventLoopPolicy(base_policy)
         asyncio.set_event_loop_policy(policy)
     return policy

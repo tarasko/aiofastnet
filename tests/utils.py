@@ -3,7 +3,6 @@ import socket
 import weakref
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
-import importlib
 import os
 from logging import getLogger
 from pathlib import Path
@@ -21,7 +20,7 @@ _logger = getLogger("tests.utils")
 NO_AIOFN = os.environ.get('NO_AIOFN')
 
 
-class TestException(Exception):
+class SomeException(Exception):
     pass
 
 
@@ -57,52 +56,6 @@ async def create_server(loop, *args, **kwargs):
         return await loop.create_server(*args, **kwargs)
     else:
         return await aiofastnet.create_server(loop, *args, **kwargs)
-
-
-def multiloop_event_loop_policy():
-    """
-    Returns a pytest fixture function named `event_loop_policy` (by assignment in the test module).
-
-    Usage in a test module:
-        from tests.utils import make_event_loop_policy_fixture
-        event_loop_policy = make_event_loop_policy_fixture()
-
-    Notes:
-    - On Windows, uvloop isn't used (by default) and we return the appropriate asyncio policy.
-    - On non-Windows, params are ("asyncio", "uvloop")
-    """
-    # Decide params at factory creation time (import-time for that module)
-    uvloop = None
-    winloop = None
-    if os.name == "nt":
-        # Winloop doesn't work with python 3.9
-        if sys.version_info >= (3, 10):
-            params = ("asyncio_sel", "asyncio_pro", "winloop")
-        else:
-            params = ("asyncio_sel", "asyncio_pro",)
-        winloop = importlib.import_module("winloop")
-    else:
-        params = ("asyncio", "uvloop")
-        uvloop = importlib.import_module("uvloop")
-
-    @pytest.fixture(params=params)
-    def event_loop_policy(request):
-        name = request.param
-
-        if name == "asyncio":
-            return asyncio.DefaultEventLoopPolicy()
-        elif name == "asyncio_sel":
-            return asyncio.WindowsSelectorEventLoopPolicy()
-        elif name == "asyncio_pro":
-            return asyncio.WindowsProactorEventLoopPolicy()
-        elif name == "uvloop":
-            return uvloop.EventLoopPolicy()
-        elif name == "winloop":
-            return winloop.EventLoopPolicy()
-        else:
-            raise AssertionError(f"unknown loop: {name!r}")
-
-    return event_loop_policy
 
 
 class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
@@ -296,14 +249,17 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         async with async_timeout.timeout(timeout):
             return await asyncio.shield(self._new_data_ev.wait())
 
-    async def start_tls(self, ssl_context, server_hostname="127.0.0.1"):
+    async def start_tls(self, ssl_context, server_hostname="127.0.0.1",
+                        ssl_handshake_timeout=None, ssl_shutdown_timeout=None):
         self.transport = await start_tls(
             asyncio.get_running_loop(),
             self.transport,
             self,
             ssl_context,
             server_side=False,
-            server_hostname=server_hostname
+            server_hostname=server_hostname,
+            ssl_handshake_timeout=ssl_handshake_timeout,
+            ssl_shutdown_timeout=ssl_shutdown_timeout,
         )
         _logger.debug("Client start_tls #%d completed", self._ssl_layer)
         self._ssl_layer += 1
@@ -414,7 +370,9 @@ def ssl_conn_type(request):
 async def TestServer(protocol_factory=None,
                      host="127.0.0.1", port=0,
                      ct: ConnectionType=ConnectionType("tcp"),
-                     is_buffered=False):
+                     is_buffered=False,
+                     ssl_handshake_timeout=None,
+                     ssl_shutdown_timeout=None):
     loop = asyncio.get_running_loop()
     clients = set()
     client_waiters = []
@@ -426,6 +384,8 @@ async def TestServer(protocol_factory=None,
         host=host,
         port=port,
         ssl=ct.server_ssl_context,
+        ssl_handshake_timeout=ssl_handshake_timeout,
+        ssl_shutdown_timeout=ssl_shutdown_timeout,
     )
     try:
         resolved_port = server.sockets[0].getsockname()[1]
@@ -443,7 +403,10 @@ async def TestServer(protocol_factory=None,
 async def TestClient(server_or_host, port=None,
                      ct: ConnectionType=ConnectionType("tcp"),
                      server_hostname=None,
-                     is_buffered=False, protocol_factory=AsyncClient):
+                     is_buffered=False,
+                     protocol_factory=AsyncClient,
+                     ssl_handshake_timeout=None,
+                     ssl_shutdown_timeout=None):
     if isinstance(server_or_host, EchoServerHandle):
         host = server_or_host.host
         port = server_or_host.port
@@ -453,33 +416,42 @@ async def TestClient(server_or_host, port=None,
             raise ValueError("port must be provided when host is passed directly")
 
     loop = asyncio.get_running_loop()
-    if ct.use_start_tls:
-        transport, client = await create_connection(
-            loop,
-            lambda: protocol_factory(is_buffered),
-            host=host,
-            port=port,
-        )
-    else:
-        transport, client = await create_connection(
-            loop,
-            lambda: protocol_factory(is_buffered),
-            host=host,
-            port=port,
-            ssl=ct.client_ssl_context,
-            server_hostname=server_hostname,
-        )
+    transport = None
+    client = None
     try:
+        if ct.use_start_tls or ct.client_ssl_context is None:
+            transport, client = await create_connection(
+                loop,
+                lambda: protocol_factory(is_buffered),
+                host=host,
+                port=port,
+            )
+        else:
+            transport, client = await create_connection(
+                loop,
+                lambda: protocol_factory(is_buffered),
+                host=host,
+                port=port,
+                ssl=ct.client_ssl_context,
+                server_hostname=server_hostname,
+                ssl_handshake_timeout=ssl_handshake_timeout,
+                ssl_shutdown_timeout=ssl_shutdown_timeout
+            )
         if ct.use_start_tls:
-            await client.start_tls(ct.client_ssl_context, server_hostname=server_hostname)
+            await client.start_tls(ct.client_ssl_context,
+                                   server_hostname=server_hostname,
+                                   ssl_handshake_timeout=ssl_handshake_timeout,
+                                   ssl_shutdown_timeout=ssl_shutdown_timeout
+                                   )
 
         yield client
     finally:
-        transport.abort()
-        try:
-            await client.wait_closed(1.0)
-        except:
-            pass
+        if transport is not None:
+            transport.abort()
+            try:
+                await client.wait_closed(1.0)
+            except:
+                pass
 
 
 def make_test_ssl_contexts(cert_file: Union[str, Path], key_file: Union[str, Path], enable_ktls=False):

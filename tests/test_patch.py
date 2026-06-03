@@ -46,6 +46,7 @@ def test_install_policy_patches_new_loops_and_can_restore_policy():
         original_policy = asyncio.get_event_loop_policy()
 
         policy = install_policy()
+        policy = install_policy(original_policy)
         assert asyncio.get_event_loop_policy() is policy
 
         loop = None

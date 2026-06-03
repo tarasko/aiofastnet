@@ -2,6 +2,7 @@ import asyncio
 import ssl
 
 from .ssl_transport import SSLTransport_Transport
+from .api_utils import _validate_ssl_timeout, _validate_bio_size
 from .wrapped_transport import _WrappedTransport
 
 
@@ -22,25 +23,27 @@ async def start_tls(loop: asyncio.AbstractEventLoop,
     if isinstance(transport, _WrappedTransport):
         transport = transport._transport
 
-    if ssl is None:
-        raise RuntimeError('Python ssl module is not available')
-
     if not isinstance(sslcontext, ssl.SSLContext):
         raise TypeError(
             f'sslcontext is expected to be an instance of ssl.SSLContext, '
             f'got {sslcontext!r}')
 
+    ssl_handshake_timeout = _validate_ssl_timeout("ssl_handshake_timeout", ssl_handshake_timeout, sslcontext)
+    ssl_shutdown_timeout = _validate_ssl_timeout("ssl_shutdown_timeout", ssl_shutdown_timeout, sslcontext)
+    ssl_incoming_bio_size = _validate_bio_size("ssl_incoming_bio_size", ssl_incoming_bio_size, ssl)
+    ssl_outgoing_bio_size = _validate_bio_size("ssl_outgoing_bio_size", ssl_outgoing_bio_size, ssl)
+
     waiter = loop.create_future()
     ssl_transport = SSLTransport_Transport(
         loop, protocol, sslcontext,
+        server_side,
+        ssl_handshake_timeout,
+        ssl_shutdown_timeout,
+        ssl_incoming_bio_size,
+        ssl_outgoing_bio_size,
         waiter=waiter,
-        server_side=server_side,
         server_hostname=server_hostname,
         call_connection_made=False,
-        ssl_handshake_timeout=ssl_handshake_timeout,
-        ssl_shutdown_timeout=ssl_shutdown_timeout,
-        ssl_incoming_bio_size=ssl_incoming_bio_size,
-        ssl_outgoing_bio_size=ssl_outgoing_bio_size
         )
     ssl_protocol = ssl_transport.get_tls_protocol()
 

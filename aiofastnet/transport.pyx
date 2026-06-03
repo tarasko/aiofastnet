@@ -59,9 +59,6 @@ cdef class Protocol:
     cpdef buffer_updated(self, Py_ssize_t bytes_read):
         raise NotImplementedError()
 
-    cpdef data_received(self, bytes data):
-        raise NotImplementedError()
-
 
 cpdef aiofn_is_buffered_protocol(protocol):
     try:
@@ -149,8 +146,8 @@ cdef class WriteWatermarks:
 cdef class SocketTransport(Transport):
     cdef:
         object __weakref__
-        object _loop
         unsigned long _thread_id
+        object _loop
         object _protocol
         bint _protocol_buffered
         bint _protocol_aiofn
@@ -174,9 +171,9 @@ cdef class SocketTransport(Transport):
         aiofn_iovec _iovecs[256]
 
     def __init__(self, loop, sock, protocol, waiter=None, extra=None, server=None):
+        self._thread_id = PyThread_get_thread_ident()
         assert loop is not None
         self._loop = loop
-        self._thread_id = PyThread_get_thread_ident()
         self.set_protocol(protocol)
         self._write_watermarks = WriteWatermarks(loop)
         self._extra = {} if extra is None else extra
@@ -405,10 +402,7 @@ cdef class SocketTransport(Transport):
             return
 
         try:
-            if self._protocol_aiofn:
-                (<Protocol>self._protocol).data_received(data)
-            else:
-                self._protocol.data_received(data)
+            self._protocol.data_received(data)
         except (SystemExit, KeyboardInterrupt):
             raise
         except BaseException as exc:

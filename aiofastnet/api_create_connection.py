@@ -10,7 +10,7 @@ import itertools
 import socket
 
 from .api_utils import (_check_ssl_socket, _create_connection_transport,
-                        _logger, _ensure_resolved)
+                        _logger, _ensure_resolved, _validate_ssl_timeout, _validate_bio_size)
 
 
 async def create_connection(
@@ -60,13 +60,10 @@ async def create_connection(
                              'when using ssl without a host')
         server_hostname = host
 
-    if ssl_handshake_timeout is not None and not ssl:
-        raise ValueError(
-            'ssl_handshake_timeout is only meaningful with ssl')
-
-    if ssl_shutdown_timeout is not None and not ssl:
-        raise ValueError(
-            'ssl_shutdown_timeout is only meaningful with ssl')
+    ssl_handshake_timeout = _validate_ssl_timeout("ssl_handshake_timeout", ssl_handshake_timeout, ssl)
+    ssl_shutdown_timeout = _validate_ssl_timeout("ssl_shutdown_timeout", ssl_shutdown_timeout, ssl)
+    ssl_incoming_bio_size = _validate_bio_size("ssl_incoming_bio_size", ssl_incoming_bio_size, ssl)
+    ssl_outgoing_bio_size = _validate_bio_size("ssl_outgoing_bio_size", ssl_outgoing_bio_size, ssl)
 
     if sock is not None:
         _check_ssl_socket(sock)
@@ -75,7 +72,9 @@ async def create_connection(
         # If using happy eyeballs, default to interleave addresses by family
         interleave = 1
 
-    if host is not None or port is not None:
+    owns_sock = host is not None or port is not None
+
+    if owns_sock:
         if sock is not None:
             raise ValueError(
                 'host/port and sock can not be specified at the same time')
@@ -160,15 +159,20 @@ async def create_connection(
             raise ValueError(
                 f'A Stream Socket was expected, got {sock!r}')
 
-    transport, protocol = await _create_connection_transport(
-        loop,
-        sock, protocol_factory, ssl,
-        server_hostname=server_hostname,
-        ssl_handshake_timeout=ssl_handshake_timeout,
-        ssl_shutdown_timeout=ssl_shutdown_timeout,
-        ssl_incoming_bio_size=ssl_incoming_bio_size,
-        ssl_outgoing_bio_size=ssl_outgoing_bio_size,
-    )
+    try:
+        transport, protocol = await _create_connection_transport(
+            loop,
+            sock, protocol_factory, ssl,
+            server_hostname=server_hostname,
+            ssl_handshake_timeout=ssl_handshake_timeout,
+            ssl_shutdown_timeout=ssl_shutdown_timeout,
+            ssl_incoming_bio_size=ssl_incoming_bio_size,
+            ssl_outgoing_bio_size=ssl_outgoing_bio_size,
+        )
+    except:
+        if owns_sock:
+            sock.close()
+        raise
     if loop.get_debug():
         # Get the socket from the transport because SSL transport closes
         # the old socket and creates a new SSL socket
