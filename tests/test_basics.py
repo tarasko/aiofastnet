@@ -1,8 +1,10 @@
 import asyncio
+import socket
 import sys
 import tempfile
 import os
 import ssl
+import threading
 from _contextvars import ContextVar
 from contextlib import contextmanager
 
@@ -891,6 +893,62 @@ async def test_ssl_timeout_validation(ssl_conn_type, timeout_name, timeout_value
         with pytest.raises(ValueError, match=match):
             async with TestClient(server, ct=ssl_conn_type, **kwargs) as client:
                 pass
+
+
+async def test_ssl_handshake_timeout(ssl_conn_type):
+    async with TestServer(ct=ssl_conn_type, ssl_handshake_timeout=0.01) as server:
+        reader, writer = await asyncio.open_connection(server.host, server.port)
+        try:
+            with pytest.raises((asyncio.IncompleteReadError, ConnectionResetError)):
+                await asyncio.wait_for(reader.readexactly(1), timeout=1.0)
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+
+async def test_ssl_shutdown_timeout(ssl_conn_type):
+    loop = asyncio.get_running_loop()
+    made = loop.create_future()
+    lost = loop.create_future()
+
+    class ServerProtocol(asyncio.Protocol):
+        def connection_made(self, transport):
+            self.transport = transport
+            made.set_result(transport)
+
+        def connection_lost(self, exc):
+            if not lost.done():
+                lost.set_result(exc)
+
+    stop_client = threading.Event()
+
+    def blocking_client():
+        raw_sock = socket.create_connection(("127.0.0.1", server.port))
+        try:
+            ssl_sock = ssl_conn_type.client_ssl_context.wrap_socket(
+                raw_sock,
+                server_hostname="127.0.0.1",
+            )
+        except:
+            raw_sock.close()
+            raise
+
+        with ssl_sock:
+            stop_client.wait(1.0)
+
+    async with TestServer(
+        ServerProtocol,
+        ct=ssl_conn_type,
+        ssl_shutdown_timeout=0.01,
+    ) as server:
+        client_fut = loop.run_in_executor(None, blocking_client)
+        try:
+            transport = await asyncio.wait_for(made, timeout=1.0)
+            transport.close()
+            await asyncio.wait_for(lost, timeout=1.0)
+        finally:
+            stop_client.set()
+            await client_fut
 
 
 # Exception from send due to file error should cause fatal error
