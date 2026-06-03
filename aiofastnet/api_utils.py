@@ -4,6 +4,7 @@ import ssl
 from logging import getLogger
 from typing import Callable, Union, Optional, Tuple
 
+from .constants import SSL_TIMEOUT_DEFAULTS
 from .ssl_transport import SSLTransport_Socket, SSLTransport_Transport
 from .transport import SocketTransport, aiofn_is_buffered_protocol
 from .wrapped_transport import _should_fallback_to_asyncio, \
@@ -18,9 +19,18 @@ def _is_asyncio_loop(loop: asyncio.AbstractEventLoop) -> bool:
     return type(loop).__module__.startswith("asyncio.")
 
 
-def _validate_ssl_timeout(name: str, value: Optional[float]) -> None:
+def _validate_ssl_timeout(name: str, value: Optional[float], ssl_or_sslcontext: Optional[bool | ssl.SSLContext]) -> float:
+    if value is not None and not ssl_or_sslcontext:
+        raise ValueError(
+            f'{name} is only meaningful with ssl')
+
     if value is not None and value <= 0:
         raise ValueError(f"{name} should be a positive number, got {value}")
+
+    if value is None:
+        return SSL_TIMEOUT_DEFAULTS[name]
+
+    return value
 
 
 async def _create_connection_transport(

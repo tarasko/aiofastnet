@@ -4,13 +4,14 @@ LOG_THRESHOLD_FOR_CONNLOST_WRITES = 5
 # Seconds to wait before retrying accept().
 ACCEPT_RETRY_DELAY = 1
 
-# Number of seconds to wait for SSL handshake to complete
-# The default timeout matches that of Nginx.
-SSL_HANDSHAKE_TIMEOUT = 60.0
-
-# Number of seconds to wait for SSL shutdown to complete
-# The default timeout mimics lingering_time
-SSL_SHUTDOWN_TIMEOUT = 30.0
+SSL_TIMEOUT_DEFAULTS = {
+    # Number of seconds to wait for SSL handshake to complete
+    # The default timeout matches that of Nginx.
+    "ssl_handshake_timeout": 60.0,
+    # Number of seconds to wait for SSL shutdown to complete
+    # The default timeout mimics lingering_time
+    "ssl_shutdown_timeout": 30.0
+}
 
 # Static size for the incoming SSL BIO
 # This is the size of the buffer that we pass to the recv syscall

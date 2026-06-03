@@ -60,16 +60,8 @@ async def create_connection(
                              'when using ssl without a host')
         server_hostname = host
 
-    if ssl_handshake_timeout is not None and not ssl:
-        raise ValueError(
-            'ssl_handshake_timeout is only meaningful with ssl')
-
-    if ssl_shutdown_timeout is not None and not ssl:
-        raise ValueError(
-            'ssl_shutdown_timeout is only meaningful with ssl')
-
-    _validate_ssl_timeout("ssl_handshake_timeout", ssl_handshake_timeout)
-    _validate_ssl_timeout("ssl_shutdown_timeout", ssl_shutdown_timeout)
+    ssl_handshake_timeout = _validate_ssl_timeout("ssl_handshake_timeout", ssl_handshake_timeout, ssl)
+    ssl_shutdown_timeout = _validate_ssl_timeout("ssl_shutdown_timeout", ssl_shutdown_timeout, ssl)
 
     if sock is not None:
         _check_ssl_socket(sock)

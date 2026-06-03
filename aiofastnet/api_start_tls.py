@@ -23,16 +23,13 @@ async def start_tls(loop: asyncio.AbstractEventLoop,
     if isinstance(transport, _WrappedTransport):
         transport = transport._transport
 
-    if ssl is None:
-        raise RuntimeError('Python ssl module is not available')
-
     if not isinstance(sslcontext, ssl.SSLContext):
         raise TypeError(
             f'sslcontext is expected to be an instance of ssl.SSLContext, '
             f'got {sslcontext!r}')
 
-    _validate_ssl_timeout("ssl_handshake_timeout", ssl_handshake_timeout)
-    _validate_ssl_timeout("ssl_shutdown_timeout", ssl_shutdown_timeout)
+    ssl_handshake_timeout = _validate_ssl_timeout("ssl_handshake_timeout", ssl_handshake_timeout, sslcontext)
+    ssl_shutdown_timeout = _validate_ssl_timeout("ssl_shutdown_timeout", ssl_shutdown_timeout, sslcontext)
 
     waiter = loop.create_future()
     ssl_transport = SSLTransport_Transport(

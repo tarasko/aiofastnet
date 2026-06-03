@@ -237,12 +237,7 @@ cdef class SSLTransportBase(Transport):
         self._sock_fd_obj = sock.fileno() if sock is not None else None
         self._is_debug = loop.get_debug()
 
-        if ssl_handshake_timeout is None:
-            ssl_handshake_timeout = constants.SSL_HANDSHAKE_TIMEOUT
         assert ssl_handshake_timeout > 0
-
-        if ssl_shutdown_timeout is None:
-            ssl_shutdown_timeout = constants.SSL_SHUTDOWN_TIMEOUT
         assert ssl_shutdown_timeout > 0
 
         if ssl_incoming_bio_size is None:

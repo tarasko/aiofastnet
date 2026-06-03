@@ -62,16 +62,8 @@ async def create_server(
     if isinstance(ssl, bool):
         raise TypeError('ssl argument must be an SSLContext or None')
 
-    if ssl_handshake_timeout is not None and ssl is None:
-        raise ValueError(
-            'ssl_handshake_timeout is only meaningful with ssl')
-
-    if ssl_shutdown_timeout is not None and ssl is None:
-        raise ValueError(
-            'ssl_shutdown_timeout is only meaningful with ssl')
-
-    _validate_ssl_timeout("ssl_handshake_timeout", ssl_handshake_timeout)
-    _validate_ssl_timeout("ssl_shutdown_timeout", ssl_shutdown_timeout)
+    ssl_handshake_timeout = _validate_ssl_timeout("ssl_handshake_timeout", ssl_handshake_timeout, ssl)
+    ssl_shutdown_timeout = _validate_ssl_timeout("ssl_shutdown_timeout", ssl_shutdown_timeout, ssl)
 
     if _should_fallback_to_asyncio(loop):
         kwargs = {
