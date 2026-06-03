@@ -21,7 +21,7 @@ _logger = getLogger("tests.utils")
 NO_AIOFN = os.environ.get('NO_AIOFN')
 
 
-class TestException(Exception):
+class SomeException(Exception):
     pass
 
 
@@ -296,14 +296,17 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         async with async_timeout.timeout(timeout):
             return await asyncio.shield(self._new_data_ev.wait())
 
-    async def start_tls(self, ssl_context, server_hostname="127.0.0.1"):
+    async def start_tls(self, ssl_context, server_hostname="127.0.0.1",
+                        ssl_handshake_timeout=None, ssl_shutdown_timeout=None):
         self.transport = await start_tls(
             asyncio.get_running_loop(),
             self.transport,
             self,
             ssl_context,
             server_side=False,
-            server_hostname=server_hostname
+            server_hostname=server_hostname,
+            ssl_handshake_timeout=ssl_handshake_timeout,
+            ssl_shutdown_timeout=ssl_shutdown_timeout,
         )
         _logger.debug("Client start_tls #%d completed", self._ssl_layer)
         self._ssl_layer += 1
@@ -443,7 +446,10 @@ async def TestServer(protocol_factory=None,
 async def TestClient(server_or_host, port=None,
                      ct: ConnectionType=ConnectionType("tcp"),
                      server_hostname=None,
-                     is_buffered=False, protocol_factory=AsyncClient):
+                     is_buffered=False,
+                     protocol_factory=AsyncClient,
+                     ssl_handshake_timeout=None,
+                     ssl_shutdown_timeout=None):
     if isinstance(server_or_host, EchoServerHandle):
         host = server_or_host.host
         port = server_or_host.port
@@ -453,33 +459,42 @@ async def TestClient(server_or_host, port=None,
             raise ValueError("port must be provided when host is passed directly")
 
     loop = asyncio.get_running_loop()
-    if ct.use_start_tls:
-        transport, client = await create_connection(
-            loop,
-            lambda: protocol_factory(is_buffered),
-            host=host,
-            port=port,
-        )
-    else:
-        transport, client = await create_connection(
-            loop,
-            lambda: protocol_factory(is_buffered),
-            host=host,
-            port=port,
-            ssl=ct.client_ssl_context,
-            server_hostname=server_hostname,
-        )
+    transport = None
+    client = None
     try:
+        if ct.use_start_tls or ct.client_ssl_context is None:
+            transport, client = await create_connection(
+                loop,
+                lambda: protocol_factory(is_buffered),
+                host=host,
+                port=port,
+            )
+        else:
+            transport, client = await create_connection(
+                loop,
+                lambda: protocol_factory(is_buffered),
+                host=host,
+                port=port,
+                ssl=ct.client_ssl_context,
+                server_hostname=server_hostname,
+                ssl_handshake_timeout=ssl_handshake_timeout,
+                ssl_shutdown_timeout=ssl_shutdown_timeout
+            )
         if ct.use_start_tls:
-            await client.start_tls(ct.client_ssl_context, server_hostname=server_hostname)
+            await client.start_tls(ct.client_ssl_context,
+                                   server_hostname=server_hostname,
+                                   ssl_handshake_timeout=ssl_handshake_timeout,
+                                   ssl_shutdown_timeout=ssl_shutdown_timeout
+                                   )
 
         yield client
     finally:
-        transport.abort()
-        try:
-            await client.wait_closed(1.0)
-        except:
-            pass
+        if transport is not None:
+            transport.abort()
+            try:
+                await client.wait_closed(1.0)
+            except:
+                pass
 
 
 def make_test_ssl_contexts(cert_file: Union[str, Path], key_file: Union[str, Path], enable_ktls=False):

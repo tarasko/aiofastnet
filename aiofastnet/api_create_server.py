@@ -466,6 +466,8 @@ async def _accept_connection2(
     except (SystemExit, KeyboardInterrupt):
         raise
     except BaseException as exc:
+        if transport is None:
+            sock.close()
         if loop.get_debug():
             context = {
                 'message':

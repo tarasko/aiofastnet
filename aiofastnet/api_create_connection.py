@@ -75,7 +75,9 @@ async def create_connection(
         # If using happy eyeballs, default to interleave addresses by family
         interleave = 1
 
-    if host is not None or port is not None:
+    owns_sock = host is not None or port is not None
+
+    if owns_sock:
         if sock is not None:
             raise ValueError(
                 'host/port and sock can not be specified at the same time')
@@ -160,15 +162,20 @@ async def create_connection(
             raise ValueError(
                 f'A Stream Socket was expected, got {sock!r}')
 
-    transport, protocol = await _create_connection_transport(
-        loop,
-        sock, protocol_factory, ssl,
-        server_hostname=server_hostname,
-        ssl_handshake_timeout=ssl_handshake_timeout,
-        ssl_shutdown_timeout=ssl_shutdown_timeout,
-        ssl_incoming_bio_size=ssl_incoming_bio_size,
-        ssl_outgoing_bio_size=ssl_outgoing_bio_size,
-    )
+    try:
+        transport, protocol = await _create_connection_transport(
+            loop,
+            sock, protocol_factory, ssl,
+            server_hostname=server_hostname,
+            ssl_handshake_timeout=ssl_handshake_timeout,
+            ssl_shutdown_timeout=ssl_shutdown_timeout,
+            ssl_incoming_bio_size=ssl_incoming_bio_size,
+            ssl_outgoing_bio_size=ssl_outgoing_bio_size,
+        )
+    except:
+        if owns_sock:
+            sock.close()
+        raise
     if loop.get_debug():
         # Get the socket from the transport because SSL transport closes
         # the old socket and creates a new SSL socket

@@ -12,7 +12,7 @@ from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Transport
 from tests.utils import TestClient, TestServer, \
     multiloop_event_loop_policy, make_test_ssl_contexts, ConnectionType, \
-    AsyncClient, TestException, exc_queue, _logger, conn_type, ssl_conn_type, start_tls, sendfile
+    AsyncClient, SomeException, exc_queue, _logger, conn_type, ssl_conn_type, start_tls, sendfile
 
 event_loop_policy = multiloop_event_loop_policy()
 
@@ -114,7 +114,7 @@ async def test_write_huge_abort(conn_type):
             self.transport = transport
 
         def data_received(self, data):
-            raise TestException("data_recieved failed")
+            raise SomeException("data_recieved failed")
 
         def eof_received(self):
             self.is_eof_received = True
@@ -447,7 +447,7 @@ async def test_exc_eof_received(conn_type):
 
     class ClientRaiseEofReceived(AsyncClient):
         def eof_received(self):
-            raise TestException("eof_received")
+            raise SomeException("eof_received")
 
     async with TestServer(ct=conn_type) as server:
         async with TestClient(server, protocol_factory=ClientRaiseEofReceived, ct=conn_type, is_buffered=True) as client:
@@ -456,9 +456,9 @@ async def test_exc_eof_received(conn_type):
                 server_client = await server.get_any_server_client()
                 server_client.transport.close()
 
-                with pytest.raises(TestException, match="eof_received"):
+                with pytest.raises(SomeException, match="eof_received"):
                     await client.wait_closed()
-                assert isinstance(excq[0]["exception"], TestException)
+                assert isinstance(excq[0]["exception"], SomeException)
 
 
 async def test_exc_connection_made(conn_type):
@@ -468,14 +468,14 @@ async def test_exc_connection_made(conn_type):
     class ClientRaiseConnectionMade(AsyncClient):
         def connection_made(self, transport):
             super().connection_made(transport)
-            raise TestException("connection_made")
+            raise SomeException("connection_made")
 
     payload = b"x" * (20*1024*1024)
 
     async with TestServer(ct=conn_type) as server:
         with exc_queue() as excq:
             async with TestClient(server, protocol_factory=ClientRaiseConnectionMade, ct=conn_type, is_buffered=False) as client:
-                assert isinstance(excq[0]["exception"], TestException)
+                assert isinstance(excq[0]["exception"], SomeException)
                 client.transport.write(payload)
                 reply = await client.readn(len(payload))
                 assert reply == payload
@@ -487,7 +487,7 @@ async def test_exc_pause_writing(conn_type):
     class ClientRaisePauseWriting(AsyncClient):
         def pause_writing(self):
             super().pause_writing()
-            raise TestException("pause_writing")
+            raise SomeException("pause_writing")
 
     payload = b"x" * 1024
     num_sent = 0
@@ -501,7 +501,7 @@ async def test_exc_pause_writing(conn_type):
 
                 reply = await client.readn(len(payload) * num_sent)
                 assert reply == (payload * num_sent)
-                assert isinstance(excq[0]["exception"], TestException)
+                assert isinstance(excq[0]["exception"], SomeException)
                 client.close()
                 await client.wait_closed()
 
@@ -510,7 +510,7 @@ async def test_exc_resume_writing(conn_type):
     class ClientRaiseResumeWriting(AsyncClient):
         def resume_writing(self):
             super().resume_writing()
-            raise TestException("resume_writing")
+            raise SomeException("resume_writing")
 
     payload = b"x" * 1024
     num_sent = 0
@@ -524,7 +524,7 @@ async def test_exc_resume_writing(conn_type):
 
                 reply = await client.readn(len(payload) * num_sent)
                 assert reply == (payload * num_sent)
-                assert isinstance(excq[0]["exception"], TestException)
+                assert isinstance(excq[0]["exception"], SomeException)
                 client.close()
                 await client.wait_closed()
 
@@ -544,41 +544,41 @@ async def test_exc_all(conn_type):
 
     class ClientRaiseDataReceived(AsyncClient):
         def data_received(self, data):
-            raise TestException("data_received")
+            raise SomeException("data_received")
 
     class ClientRaiseGetBuffer(AsyncClient):
         def get_buffer(self, hint):
-            raise TestException("get_buffer")
+            raise SomeException("get_buffer")
 
     class ClientRaiseBufferUpdated(AsyncClient):
         def buffer_updated(self, bytes_read):
-            raise TestException("buffer_updated")
+            raise SomeException("buffer_updated")
 
     async with TestServer(ct=conn_type) as server:
         async with TestClient(server, protocol_factory=ClientRaiseDataReceived, ct=conn_type, is_buffered=False) as client:
             with exc_queue() as excq:
                 client.transport.write(payload)
-                with pytest.raises(TestException, match="data_received"):
+                with pytest.raises(SomeException, match="data_received"):
                     await client.wait_closed()
-                assert isinstance(excq[0]["exception"], TestException)
+                assert isinstance(excq[0]["exception"], SomeException)
 
         assert "closed" in repr(client.transport)
 
         async with TestClient(server, protocol_factory=ClientRaiseGetBuffer, ct=conn_type, is_buffered=True) as client:
             with exc_queue() as excq:
                 client.transport.write(payload)
-                with pytest.raises(TestException, match="get_buffer"):
+                with pytest.raises(SomeException, match="get_buffer"):
                     await client.wait_closed()
-                assert isinstance(excq[0]["exception"], TestException)
+                assert isinstance(excq[0]["exception"], SomeException)
 
         assert "closed" in repr(client.transport)
 
         async with TestClient(server, protocol_factory=ClientRaiseBufferUpdated, ct=conn_type, is_buffered=True) as client:
             with exc_queue() as excq:
                 client.transport.write(payload)
-                with pytest.raises(TestException, match="buffer_updated"):
+                with pytest.raises(SomeException, match="buffer_updated"):
                     await client.wait_closed()
-                assert isinstance(excq[0]["exception"], TestException)
+                assert isinstance(excq[0]["exception"], SomeException)
 
         assert "closed" in repr(client.transport)
 
@@ -871,6 +871,13 @@ async def test_ssl_server_hostname_not_passed(ssl_conn_type):
         ssl_conn_type.client_ssl_context.check_hostname = True
         with pytest.raises(ValueError, match="check_hostname requires server_hostname"):
             async with TestClient(server, ct=ssl_conn_type, server_hostname="") as client:
+                pass
+
+
+async def test_ssl_shutdown_timeout(ssl_conn_type):
+    async with TestServer(ct=ssl_conn_type) as server:
+        with pytest.raises(ValueError, match="ssl_shutdown_timeout should be a positive number"):
+            async with TestClient(server, ct=ssl_conn_type, ssl_shutdown_timeout=-1) as client:
                 pass
 
 
