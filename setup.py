@@ -61,7 +61,6 @@ extensions = [
     make_extension("aiofastnet.transport", ["aiofastnet/transport.pyx"]),
     make_extension("aiofastnet.ssl_object", ["aiofastnet/ssl_object.pyx", "aiofastnet/static_mem_bio.c", "aiofastnet/openssl_compat.c"]),
     make_extension("aiofastnet.ssl_transport", ["aiofastnet/ssl_transport.pyx"]),
-    make_extension("examples.benchmark_protocol", ["examples/benchmark_protocol.pyx"]),
 ]
 
 if with_examples:
