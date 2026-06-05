@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.9.0
+------------------
+
+* Fail with a clean ImportError when importing aiofastnet by python with statically linked openssl
+
 0.8.0
 ------------------
 

@@ -156,7 +156,12 @@ def _find_openssl_library_paths() -> OpenSSLDynLibs:
     import ssl
     import _ssl
 
-    # Make sure ssl module is loaded and libssl, libcrypto with it
+    if getattr(_ssl, '__file__') is None:
+        raise ImportError(
+            "aiofastnet requires Python distribution that is dynamically linked against OpenSSL. "
+            "It seems your Python is linked statically against OpenSSL (this is common for uv virtual envs)"
+        )
+
     libssl_path: Optional[str] = None
     libcrypto_path: Optional[str] = None
 
@@ -177,12 +182,12 @@ def _find_openssl_library_paths() -> OpenSSLDynLibs:
             if libcrypto_path is None or "ython" in dl:
                 libcrypto_path = os.path.normpath(dl)
 
-    if libssl_path is not None and libcrypto_path is not None:
-        return OpenSSLDynLibs(libssl_path, libcrypto_path)
+    if libssl_path is None and libcrypto_path is None:
+        raise ImportError(
+            "aiofastnet could not locates OpenSSL dynamic libs among loaded libraries. It could be that your Python is linked statically against OpenSSL (this is common for uv virtual envs)"
+        )
 
-    raise ImportError(
-        "aiofastnet requires Python distribution that is dynamically linked against OpenSSL. It seems your Python is linked statically against OpenSSL (this is common for uv virtual envs)"
-    )
+    return OpenSSLDynLibs(libssl_path, libcrypto_path)
 
 
 OPENSSL_DYN_LIBS = _find_openssl_library_paths()
