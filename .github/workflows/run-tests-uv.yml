@@ -30,7 +30,7 @@ jobs:
           pyproject.toml
 
     - name: Create uv virtual environment
-      run: uv venv --python 3.14
+      run: uv venv --managed-python --python 3.14
 
     - name: Show Python and OpenSSL build info
       run: |
