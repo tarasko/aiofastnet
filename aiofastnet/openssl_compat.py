@@ -10,6 +10,7 @@ import os
 # Make sure ssl module is loaded and libssl, libcrypto with it
 import ssl
 import _ssl
+from typing import Tuple
 
 # ctypes.util.dllist is available only since 3.14
 # One day we can replace our implementation with stdlib, but it is still in a very distant future
@@ -138,7 +139,7 @@ else:
     raise ImportError(f"unsupported platform {os.name}-{sys.platform}")
 
 
-def find_openssl_library_paths():
+def find_openssl_library_paths() -> Tuple[bytes, bytes]:
     libssl_path = None
     libcrypto_path = None
 
@@ -159,7 +160,7 @@ def find_openssl_library_paths():
                 libcrypto_path = os.path.normpath(dl)
 
     if libssl_path is not None and libcrypto_path is not None:
-        return libssl_path, libcrypto_path
+        return libssl_path.encode(), libcrypto_path.encode()
 
     # Check if _ssl is statically linked against openssl
     # In such case try to use system openssl
