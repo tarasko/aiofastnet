@@ -183,6 +183,8 @@ cdef class SSLObject:
         else:
             SSL_set_connect_state(self.ssl)
 
+        self._copy_hostflags_from_ctx_to_ssl()
+
         if self.server_hostname is not None:
             self._configure_hostname()
 
@@ -288,9 +290,9 @@ cdef class SSLObject:
         if BIO_static_mem_produce(self.incoming, <size_t>nbytes) != 1:
             raise RuntimeError("incoming BIO: unable to publish received bytes")
 
-    cdef void allow_renegotiation(self) noexcept:
+    cdef allow_renegotiation(self):
         if not SSL_set_options_available():
-            return
+            raise RuntimeError("SSL_set_options is not available")
 
         cdef:
             uint64_t SSL_OP_ALLOW_CLIENT_RENEGOTIATION = (<uint64_t>1) << 8
@@ -359,6 +361,17 @@ cdef class SSLObject:
         exc.library = lib_name
         exc.reason = reason_name
         return exc
+
+    cdef _copy_hostflags_from_ctx_to_ssl(self):
+        cdef:
+            X509_VERIFY_PARAM* ssl_verification_params
+            X509_VERIFY_PARAM* ssl_ctx_verification_params
+            unsigned int ssl_ctx_host_flags
+
+        ssl_verification_params = SSL_get0_param(self.ssl)
+        ssl_ctx_verification_params = SSL_CTX_get0_param(self.ssl_ctx)
+        ssl_ctx_host_flags = X509_VERIFY_PARAM_get_hostflags(ssl_ctx_verification_params)
+        X509_VERIFY_PARAM_set_hostflags(ssl_verification_params, ssl_ctx_host_flags)
 
     cdef _configure_hostname(self):
         if not self.server_hostname or self.server_hostname.startswith("."):

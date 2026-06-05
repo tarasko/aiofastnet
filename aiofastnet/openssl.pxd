@@ -92,7 +92,9 @@ cdef extern from "openssl_compat.h":
 
     X509 *SSL_get_peer_certificate(const SSL *ssl)
     X509_VERIFY_PARAM *SSL_get0_param(SSL *ssl)
+    X509_VERIFY_PARAM *SSL_CTX_get0_param(SSL_CTX *ctx)
 
+    unsigned int X509_VERIFY_PARAM_get_hostflags(const X509_VERIFY_PARAM *param)
     void X509_VERIFY_PARAM_set_hostflags(X509_VERIFY_PARAM *param, unsigned int flags)
     int X509_VERIFY_PARAM_set1_host(X509_VERIFY_PARAM *param, const char *name, size_t namelen)
     int X509_VERIFY_PARAM_set1_ip(X509_VERIFY_PARAM *param, const unsigned char *ip, size_t iplen)

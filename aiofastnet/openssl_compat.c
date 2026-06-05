@@ -63,6 +63,8 @@ const char *(*aiofn_SSL_CIPHER_get_version)(const SSL_CIPHER *cipher) = NULL;
 int (*aiofn_SSL_CIPHER_get_bits)(const SSL_CIPHER *cipher, int *alg_bits) = NULL;
 
 X509_VERIFY_PARAM *(*aiofn_SSL_get0_param)(SSL *ssl) = NULL;
+X509_VERIFY_PARAM *(*aiofn_SSL_CTX_get0_param)(SSL_CTX *ctx) = NULL;
+unsigned int (*aiofn_X509_VERIFY_PARAM_get_hostflags)(const X509_VERIFY_PARAM *param) = NULL;
 void (*aiofn_X509_VERIFY_PARAM_set_hostflags)(X509_VERIFY_PARAM *param, unsigned int flags) = NULL;
 int (*aiofn_X509_VERIFY_PARAM_set1_host)(X509_VERIFY_PARAM *param, const char *name, size_t namelen) = NULL;
 int (*aiofn_X509_VERIFY_PARAM_set1_ip)(X509_VERIFY_PARAM *param, const unsigned char *ip, size_t iplen) = NULL;
@@ -271,6 +273,8 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
     LOAD_REQUIRED(aiofn_SSL_CIPHER_get_version, "SSL_CIPHER_get_version");
     LOAD_REQUIRED(aiofn_SSL_CIPHER_get_bits, "SSL_CIPHER_get_bits");
     LOAD_REQUIRED(aiofn_SSL_get0_param, "SSL_get0_param");
+    LOAD_REQUIRED(aiofn_SSL_CTX_get0_param, "SSL_CTX_get0_param");
+    LOAD_REQUIRED(aiofn_X509_VERIFY_PARAM_get_hostflags, "X509_VERIFY_PARAM_get_hostflags");
     LOAD_REQUIRED(aiofn_X509_VERIFY_PARAM_set_hostflags, "X509_VERIFY_PARAM_set_hostflags");
     LOAD_REQUIRED(aiofn_X509_VERIFY_PARAM_set1_host, "X509_VERIFY_PARAM_set1_host");
     LOAD_REQUIRED(aiofn_X509_VERIFY_PARAM_set1_ip, "X509_VERIFY_PARAM_set1_ip");

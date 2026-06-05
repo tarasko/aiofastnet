@@ -136,6 +136,8 @@ extern const char *(*aiofn_SSL_CIPHER_get_version)(const SSL_CIPHER *cipher);
 extern int (*aiofn_SSL_CIPHER_get_bits)(const SSL_CIPHER *cipher, int *alg_bits);
 
 extern X509_VERIFY_PARAM *(*aiofn_SSL_get0_param)(SSL *ssl);
+extern X509_VERIFY_PARAM *(*aiofn_SSL_CTX_get0_param)(SSL_CTX *ctx);
+extern unsigned int (*aiofn_X509_VERIFY_PARAM_get_hostflags)(const X509_VERIFY_PARAM *param);
 extern void (*aiofn_X509_VERIFY_PARAM_set_hostflags)(X509_VERIFY_PARAM *param, unsigned int flags);
 extern int (*aiofn_X509_VERIFY_PARAM_set1_host)(X509_VERIFY_PARAM *param, const char *name, size_t namelen);
 extern int (*aiofn_X509_VERIFY_PARAM_set1_ip)(X509_VERIFY_PARAM *param, const unsigned char *ip, size_t iplen);
@@ -219,8 +221,10 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define SSL_CIPHER_get_version aiofn_SSL_CIPHER_get_version
 #define SSL_CIPHER_get_bits aiofn_SSL_CIPHER_get_bits
 #define SSL_get0_param aiofn_SSL_get0_param
+#define SSL_CTX_get0_param aiofn_SSL_CTX_get0_param
 #define SSL_set_read_ahead aiofn_SSL_set_read_ahead
 
+#define X509_VERIFY_PARAM_get_hostflags aiofn_X509_VERIFY_PARAM_get_hostflags
 #define X509_VERIFY_PARAM_set_hostflags aiofn_X509_VERIFY_PARAM_set_hostflags
 #define X509_VERIFY_PARAM_set1_host aiofn_X509_VERIFY_PARAM_set1_host
 #define X509_VERIFY_PARAM_set1_ip aiofn_X509_VERIFY_PARAM_set1_ip
