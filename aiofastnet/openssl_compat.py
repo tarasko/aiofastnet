@@ -7,7 +7,9 @@ import ctypes
 import ctypes.util
 import sys
 import os
+from dataclasses import dataclass
 
+from typing import Optional
 
 # ctypes.util.dllist is available only since 3.14
 # One day we can replace our implementation with stdlib, but it is still in a very distant future
@@ -136,14 +138,36 @@ else:
     raise ImportError(f"unsupported platform {os.name}-{sys.platform}")
 
 
-def find_openssl_library_paths():
-    # Make sure ssl module is loaded and libssl, libcrypto with it
+@dataclass(frozen=True)
+class OpenSSLDynLibs:
+    libssl: str
+    libcrypto: str
+
+    @property
+    def libssl_path(self) -> bytes:
+        return self.libssl.encode()
+
+    @property
+    def libcrypto_path(self) -> bytes:
+        return self.libcrypto.encode()
+
+
+def _find_openssl_library_paths() -> OpenSSLDynLibs:
     import ssl
+    import _ssl
 
-    libssl_path = None
-    libcrypto_path = None
+    if getattr(_ssl, '__file__') is None:
+        raise ImportError(
+            "aiofastnet requires Python distribution that is dynamically linked against OpenSSL. "
+            "It seems your Python is linked statically against OpenSSL (this is common for uv virtual envs)"
+        )
 
-    for dl in dllist():
+    libssl_path: Optional[str] = None
+    libcrypto_path: Optional[str] = None
+
+    loaded_libs = dllist()
+    dl: str
+    for dl in loaded_libs:
         if not dl:
             continue
 
@@ -158,11 +182,12 @@ def find_openssl_library_paths():
             if libcrypto_path is None or "ython" in dl:
                 libcrypto_path = os.path.normpath(dl)
 
-    if libssl_path is None or libcrypto_path is None:
+    if libssl_path is None and libcrypto_path is None:
         raise ImportError(
-            "aiofastnet: failed to find loaded OpenSSL libraries via ctypes.util.dllist(); "
-            f"libssl={libssl_path!r}, libcrypto={libcrypto_path!r}"
+            "aiofastnet could not locates OpenSSL dynamic libs among loaded libraries. It could be that your Python is linked statically against OpenSSL (this is common for uv virtual envs)"
         )
 
-    return libssl_path.encode(), libcrypto_path.encode()
+    return OpenSSLDynLibs(libssl_path, libcrypto_path)
 
+
+OPENSSL_DYN_LIBS = _find_openssl_library_paths()

@@ -48,7 +48,7 @@ cdef class SSLObject:
     cdef inline int read(self, void *buf, size_t num) noexcept
     cdef inline int write(self, const void *buf, size_t num) noexcept
     cdef inline Py_ssize_t pending(self) noexcept
-    cdef inline void allow_renegotiation(self) noexcept
+    cdef inline allow_renegotiation(self)
     cdef inline int renegotiate(self) noexcept
     cdef inline int sendfile_available(self) noexcept
     cdef inline int sendfile(self, int fd, Py_ssize_t offset, size_t size) noexcept
@@ -68,6 +68,7 @@ cdef class SSLObject:
     # Implementation details
     cdef inline bytes _certificate_to_der(self, X509* certificate)
     cdef inline _exc_from_err_last_error(self, str descr)
+    cdef inline _copy_hostflags_from_ctx_to_ssl(self)
     cdef inline _configure_hostname(self)
     cdef inline _decode_certificate(self, X509* certificate)
 

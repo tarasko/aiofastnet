@@ -20,7 +20,6 @@ void (*aiofn_BIO_clear_flags)(BIO *b, int flags) = NULL;
 void (*aiofn_BIO_set_data)(BIO *a, void *ptr) = NULL;
 void *(*aiofn_BIO_get_data)(BIO *a) = NULL;
 void (*aiofn_BIO_set_init)(BIO *a, int init) = NULL;
-int (*aiofn_BIO_get_init)(BIO *a) = NULL;
 void (*aiofn_BIO_set_shutdown)(BIO *a, int shut) = NULL;
 
 BIO_METHOD *(*aiofn_BIO_meth_new)(int type, const char *name) = NULL;
@@ -36,27 +35,19 @@ void (*aiofn_BIO_meth_free)(BIO_METHOD *biom) = NULL;
 SSL *(*aiofn_SSL_new)(SSL_CTX *ctx) = NULL;
 void (*aiofn_SSL_free)(SSL *ssl) = NULL;
 void (*aiofn_SSL_set_bio)(SSL *ssl, BIO *rbio, BIO *wbio) = NULL;
-void (*aiofn_SSL_set0_rbio)(SSL *ssl, BIO *rbio) = NULL;
-void (*aiofn_SSL_set0_wbio)(SSL *ssl, BIO *wbio) = NULL;
 int (*aiofn_SSL_set_fd)(SSL *ssl, int fd) = NULL;
-int (*aiofn_SSL_set_rfd)(SSL *ssl, int fd) = NULL;
-int (*aiofn_SSL_set_wfd)(SSL *ssl, int fd) = NULL;
 BIO *(*aiofn_SSL_get_rbio)(const SSL *ssl) = NULL;
 BIO *(*aiofn_SSL_get_wbio)(const SSL *ssl) = NULL;
 void (*aiofn_SSL_set_accept_state)(SSL *ssl) = NULL;
 void (*aiofn_SSL_set_connect_state)(SSL *ssl) = NULL;
 long (*aiofn_SSL_ctrl)(SSL *ssl, int cmd, long larg, void *parg) = NULL;
-uint64_t (*aiofn_SSL_set_options)(SSL *ssl, uint64_t options) = NULL;
-uint64_t (*aiofn_SSL_CTX_get_options)(const SSL_CTX *ctx) = NULL;
+uint64_t (*aiofn_SSL_set_options_sym)(SSL *ssl, uint64_t options) = NULL;
 int (*aiofn_SSL_get_error)(const SSL *ssl, int ret_code) = NULL;
-int (*aiofn_SSL_is_init_finished)(const SSL *s) = NULL;
 int (*aiofn_SSL_pending)(const SSL *ssl) = NULL;
 int (*aiofn_SSL_renegotiate)(SSL *ssl) = NULL;
 int (*aiofn_SSL_do_handshake)(SSL *ssl) = NULL;
 int (*aiofn_SSL_read)(SSL *ssl, void *buf, int num) = NULL;
 int (*aiofn_SSL_write)(SSL *ssl, const void *buf, int num) = NULL;
-int (*aiofn_SSL_read_ex)(SSL *ssl, void *buf, size_t num, size_t *readbytes) = NULL;
-int (*aiofn_SSL_write_ex)(SSL *ssl, const void *buf, size_t num, size_t *written) = NULL;
 ssize_t (*aiofn_SSL_sendfile)(SSL *ssl, int fd, off_t offset, size_t size, int flags) = NULL;
 int (*aiofn_SSL_shutdown)(SSL *ssl) = NULL;
 int (*aiofn_SSL_get_shutdown)(const SSL *ssl) = NULL;
@@ -164,6 +155,34 @@ static void *resolve_symbol(const char *name) {
     }
     return NULL;
 }
+
+static void *open_library(const char *path, const char *kind) {
+    void *lib = NULL;
+    const char *err = NULL;
+
+    if (path == NULL || path[0] == '\0') {
+        set_last_error("empty %s library path", kind);
+        return NULL;
+    }
+
+    dlerror();
+    lib = dlopen(path, RTLD_NOLOAD | RTLD_NOW | RTLD_LOCAL);
+    err = dlerror();
+    if (lib != NULL) {
+        return lib;
+    }
+
+    dlerror();
+    lib = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    err = dlerror();
+    if (lib == NULL) {
+        set_last_error("dlopen %s failed for '%s': %s",
+                       kind,
+                       path,
+                       err ? err : "unknown");
+    }
+    return lib;
+}
 #endif
 
 static void *resolve_required(const char *name) {
@@ -196,23 +215,12 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
         return 0;
     }
 #else
-    const char *err;
-    dlerror();
-    g_ssl_lib = dlopen(ssl_lib_path, RTLD_NOLOAD | RTLD_NOW | RTLD_LOCAL);
-    err = dlerror();
+    g_ssl_lib = open_library(ssl_lib_path, "ssl");
     if (g_ssl_lib == NULL) {
-        set_last_error("dlopen ssl failed for '%s': %s",
-                       ssl_lib_path ? ssl_lib_path : "(null)",
-                       err ? err : "unknown");
         return 0;
     }
-    dlerror();
-    g_crypto_lib = dlopen(crypto_lib_path, RTLD_NOLOAD | RTLD_NOW | RTLD_LOCAL);
-    err = dlerror();
+    g_crypto_lib = open_library(crypto_lib_path, "crypto");
     if (g_crypto_lib == NULL) {
-        set_last_error("dlopen crypto failed for '%s': %s",
-                       crypto_lib_path ? crypto_lib_path : "(null)",
-                       err ? err : "unknown");
         return 0;
     }
 #endif
@@ -226,7 +234,6 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
     LOAD_REQUIRED(aiofn_BIO_set_data, "BIO_set_data");
     LOAD_REQUIRED(aiofn_BIO_get_data, "BIO_get_data");
     LOAD_REQUIRED(aiofn_BIO_set_init, "BIO_set_init");
-    LOAD_REQUIRED(aiofn_BIO_get_init, "BIO_get_init");
     LOAD_REQUIRED(aiofn_BIO_set_shutdown, "BIO_set_shutdown");
 
     LOAD_REQUIRED(aiofn_BIO_meth_new, "BIO_meth_new");
@@ -242,27 +249,19 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
     LOAD_REQUIRED(aiofn_SSL_new, "SSL_new");
     LOAD_REQUIRED(aiofn_SSL_free, "SSL_free");
     LOAD_REQUIRED(aiofn_SSL_set_bio, "SSL_set_bio");
-    LOAD_REQUIRED(aiofn_SSL_set0_rbio, "SSL_set0_rbio");
-    LOAD_REQUIRED(aiofn_SSL_set0_wbio, "SSL_set0_wbio");
     LOAD_REQUIRED(aiofn_SSL_set_fd, "SSL_set_fd");
-    LOAD_REQUIRED(aiofn_SSL_set_rfd, "SSL_set_rfd");
-    LOAD_REQUIRED(aiofn_SSL_set_wfd, "SSL_set_wfd");
     LOAD_REQUIRED(aiofn_SSL_get_rbio, "SSL_get_rbio");
     LOAD_REQUIRED(aiofn_SSL_get_wbio, "SSL_get_wbio");
     LOAD_REQUIRED(aiofn_SSL_set_accept_state, "SSL_set_accept_state");
     LOAD_REQUIRED(aiofn_SSL_set_connect_state, "SSL_set_connect_state");
     LOAD_REQUIRED(aiofn_SSL_ctrl, "SSL_ctrl");
-    LOAD_REQUIRED(aiofn_SSL_set_options, "SSL_set_options");
-    LOAD_REQUIRED(aiofn_SSL_CTX_get_options, "SSL_CTX_get_options");
+    aiofn_SSL_set_options_sym = resolve_symbol("SSL_set_options");
     LOAD_REQUIRED(aiofn_SSL_get_error, "SSL_get_error");
-    LOAD_REQUIRED(aiofn_SSL_is_init_finished, "SSL_is_init_finished");
     LOAD_REQUIRED(aiofn_SSL_pending, "SSL_pending");
     LOAD_REQUIRED(aiofn_SSL_renegotiate, "SSL_renegotiate");
     LOAD_REQUIRED(aiofn_SSL_do_handshake, "SSL_do_handshake");
     LOAD_REQUIRED(aiofn_SSL_read, "SSL_read");
     LOAD_REQUIRED(aiofn_SSL_write, "SSL_write");
-    LOAD_REQUIRED(aiofn_SSL_read_ex, "SSL_read_ex");
-    LOAD_REQUIRED(aiofn_SSL_write_ex, "SSL_write_ex");
     aiofn_SSL_sendfile = resolve_symbol("SSL_sendfile");
     LOAD_REQUIRED(aiofn_SSL_shutdown, "SSL_shutdown");
     LOAD_REQUIRED(aiofn_SSL_get_shutdown, "SSL_get_shutdown");
@@ -369,7 +368,18 @@ int aiofn_SSL_set_tlsext_host_name(const SSL *s, const char *name) {
 }
 
 long aiofn_SSL_set_mode(SSL *ssl, long mode) {
-    return aiofn_SSL_ctrl(ssl, 33, mode, NULL);
+    return aiofn_SSL_ctrl(ssl, SSL_CTRL_MODE, mode, NULL);
+}
+
+int aiofn_SSL_set_options_available(void) {
+    return aiofn_SSL_set_options_sym != NULL;
+}
+
+uint64_t aiofn_SSL_set_options(SSL *ssl, uint64_t options) {
+    if (aiofn_SSL_set_options_sym != NULL) {
+        return aiofn_SSL_set_options_sym(ssl, options);
+    }
+    return 0;
 }
 
 long aiofn_BIO_get_mem_data(BIO *b, char **pp) {

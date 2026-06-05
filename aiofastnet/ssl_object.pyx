@@ -1,5 +1,5 @@
 from .openssl cimport *
-from .openssl_compat import find_openssl_library_paths
+from .openssl_compat import OPENSSL_DYN_LIBS
 
 from cpython.object cimport PyObject
 from cpython.bytes cimport PyBytes_FromStringAndSize, PyBytes_AS_STRING
@@ -17,32 +17,19 @@ import logging
 
 cdef object _logger = logging.getLogger('aiofastnet.ssl')
 
-SSL_LIB_PATH = None
-CRYPTO_LIB_PATH = None
-
 
 cdef _init_openssl():
     cdef:
-        bytes ssl_lib_path
-        bytes crypto_lib_path
         const char* ssl_lib_ptr
         const char* crypto_lib_ptr
-        const char* missing_lib
 
-    global SSL_LIB_PATH
-    global CRYPTO_LIB_PATH
-
-    ssl_lib_path, crypto_lib_path = find_openssl_library_paths()
-    SSL_LIB_PATH = ssl_lib_path.decode()
-    CRYPTO_LIB_PATH = crypto_lib_path.decode()
-
-    if init_openssl_compat(ssl_lib_path, crypto_lib_path) != 1:
+    if init_openssl_compat(OPENSSL_DYN_LIBS.libssl_path, OPENSSL_DYN_LIBS.libcrypto_path) != 1:
         missing_lib = openssl_compat_last_error()
         if missing_lib != NULL:
             raise ImportError(
                 f"aiofastnet: failed to initialize OpenSSL compatibility layer; "
                 f"missing symbol: {PyUnicode_FromString(missing_lib)}; "
-                f"ssl_lib={SSL_LIB_PATH}, crypto_lib={CRYPTO_LIB_PATH}")
+                f"ssl_lib={OPENSSL_DYN_LIBS.libssl}, crypto_lib={OPENSSL_DYN_LIBS.libcrypto}")
         raise ImportError("aiofastnet: failed to initialize OpenSSL compatibility layer")
 
 
@@ -118,14 +105,10 @@ cdef class SSLObject:
         self.server_hostname = server_hostname
         self.server_side = server_side
 
-        cdef bint use_socket_wbio = (
+        cdef bint use_socket_bio = (
             sock is not None and
-            (SSL_CTX_get_options(self.ssl_ctx) & SSL_OP_ENABLE_KTLS) != 0
-        )
-
-        cdef bint use_socket_rbio = (
-            sock is not None and
-            (SSL_CTX_get_options(self.ssl_ctx) & SSL_OP_ENABLE_KTLS) != 0
+            SSL_set_options_available() and
+            (ssl_context.options & getattr(ssl, "OP_ENABLE_KTLS", 0)) != 0
         )
 
         cdef BIO* incoming = NULL
@@ -136,53 +119,36 @@ cdef class SSLObject:
             if self.ssl == NULL:
                 raise MemoryError("Unable to allocate SSL object")
 
-            if use_socket_rbio and use_socket_wbio:
-                # Before openssl 3.5 setting BIOs separately was an issue
-                # kTLS refused to enable if we use SSL_set_rfd and SSL_set_wfd
+            if use_socket_bio:
                 if SSL_set_fd(self.ssl, sock.fileno()) != 1:
                     raise ssl.SSLError("SSL_set_fd failed")
-            else:
-                if not use_socket_rbio:
-                    self.incoming_buf = PyByteArray_FromStringAndSize(
-                        NULL, read_buffer_size)
-                    incoming = BIO_new_static_mem(
-                        PyByteArray_AS_STRING(self.incoming_buf),
-                        <size_t> PyByteArray_GET_SIZE(self.incoming_buf)
-                    )
-                    if incoming == NULL:
-                        raise MemoryError("Unable to initialize incoming mem BIO")
-
-                    BIO_set_nbio(incoming, 1)
-                    SSL_set0_rbio(self.ssl, incoming)
-                    self.incoming = incoming
-                    incoming = NULL
-                else:
-                    if SSL_set_rfd(self.ssl, sock.fileno()) != 1:
-                        raise ssl.SSLError("SSL_set_rfd failed")
-
-                if not use_socket_wbio:
-                    self.outgoing_buf = PyByteArray_FromStringAndSize(
-                        NULL, write_buffer_size)
-
-                    outgoing = BIO_new_static_mem(
-                        PyByteArray_AS_STRING(self.outgoing_buf),
-                        <size_t> PyByteArray_GET_SIZE(self.outgoing_buf)
-                    )
-
-                    if outgoing == NULL:
-                        raise MemoryError("Unable to initialize outgoing mem BIO")
-
-                    BIO_set_nbio(outgoing, 1)
-                    SSL_set0_wbio(self.ssl, outgoing)
-                    self.outgoing = outgoing
-                    outgoing = NULL
-                else:
-                    if SSL_set_wfd(self.ssl, sock.fileno()) != 1:
-                        raise ssl.SSLError("SSL_set_wfd failed")
-
-            if use_socket_rbio or use_socket_wbio:
-                # This is no-op anyway if memory BIO is used
                 SSL_set_options(self.ssl, SSL_OP_ENABLE_KTLS)
+            else:
+                self.incoming_buf = PyByteArray_FromStringAndSize(
+                    NULL, read_buffer_size)
+                incoming = BIO_new_static_mem(
+                    PyByteArray_AS_STRING(self.incoming_buf),
+                    <size_t> PyByteArray_GET_SIZE(self.incoming_buf)
+                )
+                if incoming == NULL:
+                    raise MemoryError("Unable to initialize incoming mem BIO")
+
+                self.outgoing_buf = PyByteArray_FromStringAndSize(
+                    NULL, write_buffer_size)
+                outgoing = BIO_new_static_mem(
+                    PyByteArray_AS_STRING(self.outgoing_buf),
+                    <size_t> PyByteArray_GET_SIZE(self.outgoing_buf)
+                )
+                if outgoing == NULL:
+                    raise MemoryError("Unable to initialize outgoing mem BIO")
+
+                BIO_set_nbio(incoming, 1)
+                BIO_set_nbio(outgoing, 1)
+                SSL_set_bio(self.ssl, incoming, outgoing)
+                self.incoming = incoming
+                self.outgoing = outgoing
+                incoming = NULL
+                outgoing = NULL
 
             SSL_set_mode(self.ssl, SSL_MODE_AUTO_RETRY | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_ENABLE_PARTIAL_WRITE)
             SSL_set_read_ahead(self.ssl, 1)
@@ -204,15 +170,7 @@ cdef class SSLObject:
         else:
             SSL_set_connect_state(self.ssl)
 
-        cdef:
-            X509_VERIFY_PARAM* ssl_verification_params
-            X509_VERIFY_PARAM* ssl_ctx_verification_params
-            unsigned int ssl_ctx_host_flags
-
-        ssl_verification_params = SSL_get0_param(self.ssl)
-        ssl_ctx_verification_params = SSL_CTX_get0_param(self.ssl_ctx)
-        ssl_ctx_host_flags = X509_VERIFY_PARAM_get_hostflags(ssl_ctx_verification_params)
-        X509_VERIFY_PARAM_set_hostflags(ssl_verification_params, ssl_ctx_host_flags)
+        self._copy_hostflags_from_ctx_to_ssl()
 
         if self.server_hostname is not None:
             self._configure_hostname()
@@ -235,9 +193,6 @@ cdef class SSLObject:
         return (name_obj, protocol_obj, bits)
 
     cpdef object getpeercert(self, binary_form=False):
-        if SSL_is_init_finished(self.ssl) != 1:
-            raise ssl.SSLError("SSL_is_init_finished failed")
-
         cdef X509* peer_cert = SSL_get_peer_certificate(self.ssl)
         if peer_cert == NULL:
             return None
@@ -322,10 +277,13 @@ cdef class SSLObject:
         if BIO_static_mem_produce(self.incoming, <size_t>nbytes) != 1:
             raise RuntimeError("incoming BIO: unable to publish received bytes")
 
-    cdef void allow_renegotiation(self) noexcept:
+    cdef allow_renegotiation(self):
+        if not SSL_set_options_available():
+            raise RuntimeError("SSL_set_options is not available")
+
         cdef:
-            int SSL_OP_ALLOW_CLIENT_RENEGOTIATION = (1 << 8)
-            int SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION = (1 << 18)
+            uint64_t SSL_OP_ALLOW_CLIENT_RENEGOTIATION = (<uint64_t>1) << 8
+            uint64_t SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION = (<uint64_t>1) << 18
 
         SSL_set_options(
             self.ssl,
@@ -390,6 +348,17 @@ cdef class SSLObject:
         exc.library = lib_name
         exc.reason = reason_name
         return exc
+
+    cdef _copy_hostflags_from_ctx_to_ssl(self):
+        cdef:
+            X509_VERIFY_PARAM* ssl_verification_params
+            X509_VERIFY_PARAM* ssl_ctx_verification_params
+            unsigned int ssl_ctx_host_flags
+
+        ssl_verification_params = SSL_get0_param(self.ssl)
+        ssl_ctx_verification_params = SSL_CTX_get0_param(self.ssl_ctx)
+        ssl_ctx_host_flags = X509_VERIFY_PARAM_get_hostflags(ssl_ctx_verification_params)
+        X509_VERIFY_PARAM_set_hostflags(ssl_verification_params, ssl_ctx_host_flags)
 
     cdef _configure_hostname(self):
         if not self.server_hostname or self.server_hostname.startswith("."):
@@ -459,5 +428,3 @@ cdef class SSLObject:
 
 cdef ssl_error_name(int err):
     return SSLError(err).name
-
-
