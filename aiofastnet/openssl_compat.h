@@ -117,7 +117,6 @@ uint64_t aiofn_SSL_set_options(SSL *ssl, uint64_t options);
 uint64_t aiofn_SSL_CTX_get_options(const SSL_CTX *ctx);
 int aiofn_SSL_set_tlsext_host_name(const SSL *s, const char *name);
 extern int (*aiofn_SSL_get_error)(const SSL *ssl, int ret_code);
-extern int (*aiofn_SSL_is_init_finished)(const SSL *s);
 extern int (*aiofn_SSL_pending)(const SSL *ssl);
 extern int (*aiofn_SSL_renegotiate)(SSL *ssl);
 extern int (*aiofn_SSL_do_handshake)(SSL *ssl);
@@ -210,7 +209,6 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define SSL_CTX_get_options aiofn_SSL_CTX_get_options
 #define SSL_set_tlsext_host_name aiofn_SSL_set_tlsext_host_name
 #define SSL_get_error aiofn_SSL_get_error
-#define SSL_is_init_finished aiofn_SSL_is_init_finished
 #define SSL_pending aiofn_SSL_pending
 #define SSL_renegotiate aiofn_SSL_renegotiate
 #define SSL_do_handshake aiofn_SSL_do_handshake

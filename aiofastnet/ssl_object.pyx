@@ -213,9 +213,6 @@ cdef class SSLObject:
         return (name_obj, protocol_obj, bits)
 
     cpdef object getpeercert(self, binary_form=False):
-        if SSL_is_init_finished(self.ssl) != 1:
-            raise ssl.SSLError("SSL_is_init_finished failed")
-
         cdef X509* peer_cert = SSL_get_peer_certificate(self.ssl)
         if peer_cert == NULL:
             return None

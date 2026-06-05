@@ -74,7 +74,6 @@ cdef extern from "openssl_compat.h":
     long SSL_set_mode(SSL *ssl, long mode)
     int SSL_set_tlsext_host_name(const SSL *s, const char *name)
     int SSL_get_error(const SSL *ssl, int ret)
-    int SSL_is_init_finished(const SSL *s)
     int SSL_pending(const SSL *ssl)
     int SSL_renegotiate(SSL *ssl)
     int SSL_do_handshake(SSL *ssl)
