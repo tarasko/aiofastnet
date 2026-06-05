@@ -1,5 +1,5 @@
 from .openssl cimport *
-from .openssl_compat import find_openssl_library_paths
+from .openssl_compat import OPENSSL_DYN_LIBS
 
 from cpython.object cimport PyObject
 from cpython.bytes cimport PyBytes_FromStringAndSize, PyBytes_AS_STRING
@@ -17,32 +17,19 @@ import logging
 
 cdef object _logger = logging.getLogger('aiofastnet.ssl')
 
-SSL_LIB_PATH = None
-CRYPTO_LIB_PATH = None
-
 
 cdef _init_openssl():
     cdef:
-        bytes ssl_lib_path
-        bytes crypto_lib_path
         const char* ssl_lib_ptr
         const char* crypto_lib_ptr
-        const char* missing_lib
 
-    global SSL_LIB_PATH
-    global CRYPTO_LIB_PATH
-
-    ssl_lib_path, crypto_lib_path = find_openssl_library_paths()
-    SSL_LIB_PATH = ssl_lib_path.decode()
-    CRYPTO_LIB_PATH = crypto_lib_path.decode()
-
-    if init_openssl_compat(ssl_lib_path, crypto_lib_path) != 1:
+    if init_openssl_compat(OPENSSL_DYN_LIBS.libssl_path, OPENSSL_DYN_LIBS.libcrypto_path) != 1:
         missing_lib = openssl_compat_last_error()
         if missing_lib != NULL:
             raise ImportError(
                 f"aiofastnet: failed to initialize OpenSSL compatibility layer; "
                 f"missing symbol: {PyUnicode_FromString(missing_lib)}; "
-                f"ssl_lib={SSL_LIB_PATH}, crypto_lib={CRYPTO_LIB_PATH}")
+                f"ssl_lib={OPENSSL_DYN_LIBS.libssl}, crypto_lib={OPENSSL_DYN_LIBS.libcrypto}")
         raise ImportError("aiofastnet: failed to initialize OpenSSL compatibility layer")
 
 

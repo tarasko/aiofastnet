@@ -7,10 +7,9 @@ import ctypes
 import ctypes.util
 import sys
 import os
-# Make sure ssl module is loaded and libssl, libcrypto with it
-import ssl
-import _ssl
-from typing import Tuple
+from dataclasses import dataclass
+
+from typing import Optional
 
 # ctypes.util.dllist is available only since 3.14
 # One day we can replace our implementation with stdlib, but it is still in a very distant future
@@ -139,11 +138,30 @@ else:
     raise ImportError(f"unsupported platform {os.name}-{sys.platform}")
 
 
-def find_openssl_library_paths() -> Tuple[bytes, bytes]:
-    libssl_path = None
-    libcrypto_path = None
+@dataclass(frozen=True)
+class OpenSSLDynLibs:
+    libssl: str
+    libcrypto: str
+
+    @property
+    def libssl_path(self) -> bytes:
+        return self.libssl.encode()
+
+    @property
+    def libcrypto_path(self) -> bytes:
+        return self.libcrypto.encode()
+
+
+def _find_openssl_library_paths() -> OpenSSLDynLibs:
+    import ssl
+    import _ssl
+
+    # Make sure ssl module is loaded and libssl, libcrypto with it
+    libssl_path: Optional[str] = None
+    libcrypto_path: Optional[str] = None
 
     loaded_libs = dllist()
+    dl: str
     for dl in loaded_libs:
         if not dl:
             continue
@@ -160,23 +178,11 @@ def find_openssl_library_paths() -> Tuple[bytes, bytes]:
                 libcrypto_path = os.path.normpath(dl)
 
     if libssl_path is not None and libcrypto_path is not None:
-        return libssl_path.encode(), libcrypto_path.encode()
-
-    # Check if _ssl is statically linked against openssl
-    # In such case try to use system openssl
-    if getattr(_ssl, "__file__", None) is None:
-        libssl_path = ctypes.util.find_library("ssl")
-        libcrypto_path = ctypes.util.find_library("crypto")
-        if libssl_path is None or libcrypto_path is None:
-            raise ImportError(
-                "aiofastnet: failed to find system OpenSSL libraries for "
-                "built-in Python _ssl module; "
-                f"libssl={libssl_path!r}, libcrypto={libcrypto_path!r}"
-            )
-        return libssl_path.encode(), libcrypto_path.encode()
+        return OpenSSLDynLibs(libssl_path, libcrypto_path)
 
     raise ImportError(
-        "aiofastnet: failed to find loaded OpenSSL libraries via ctypes.util.dllist(); "
-        f"libssl={libssl_path!r}, libcrypto={libcrypto_path!r}"
+        "aiofastnet requires Python distribution that is dynamically linked against OpenSSL. It seems your Python is linked statically against OpenSSL (this is common for uv virtual envs)"
     )
 
+
+OPENSSL_DYN_LIBS = _find_openssl_library_paths()

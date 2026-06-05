@@ -1,3 +1,6 @@
+# Fail early if python distribution is statically linked against OpenSSL
+from .openssl_compat import OPENSSL_DYN_LIBS as _OPENSSL_DYN_LIBS
+
 from .api_streams import open_connection, start_server
 from .api_create_server import create_server
 from .api_create_connection import create_connection

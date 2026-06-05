@@ -33,9 +33,9 @@ from .utils cimport (
     unlikely
 )
 from .ssl_object cimport (SSLObject, SSLError, ssl_error_name)
-from .ssl_object import SSL_LIB_PATH, CRYPTO_LIB_PATH
 from .transport cimport Transport, Protocol, WriteWatermarks
 from .transport import aiofn_is_buffered_protocol
+from .openssl_compat import OPENSSL_DYN_LIBS
 
 
 cdef object _logger = getLogger('aiofastnet.ssl')
@@ -74,14 +74,14 @@ def _log_ktls_deactivation_reason(conn) -> None:
         elif ssl.OPENSSL_VERSION_INFO[:3] < (3, 0, 0):
             _logger.warning(
                 "%r: Kernel TLS was not enabled because OpenSSL version is too old, you need OpenSSL >= 3.0", conn)
-            _logger.warning("%r: Loaded libssl: %s", conn, SSL_LIB_PATH)
-            _logger.warning("%r: Loaded libcrypto: %s", conn, CRYPTO_LIB_PATH)
+            _logger.warning("%r: Loaded libssl: %s", conn, OPENSSL_DYN_LIBS.libssl)
+            _logger.warning("%r: Loaded libcrypto: %s", conn, OPENSSL_DYN_LIBS.libcrypto)
         else:
             _logger.warning(
                 "%r: Kernel TLS was not enabled PROBABLY because OpenSSL was built on a machine with an old linux kernel (<5.19)",
                 conn)
-            _logger.warning("%r: Loaded libssl: %s", conn, SSL_LIB_PATH)
-            _logger.warning("%r: Loaded libcrypto: %s", conn, CRYPTO_LIB_PATH)
+            _logger.warning("%r: Loaded libssl: %s", conn, OPENSSL_DYN_LIBS.libssl)
+            _logger.warning("%r: Loaded libcrypto: %s", conn, OPENSSL_DYN_LIBS.libcrypto)
 
 
 cdef class SendFileRequest:
@@ -285,8 +285,8 @@ cdef class SSLTransportBase(Transport):
             self._server._attach(self)
 
         if self._is_debug:
-            _logger.debug("%r: libssl: %s", self, SSL_LIB_PATH)
-            _logger.debug("%r: libcrypto: %s", self, CRYPTO_LIB_PATH)
+            _logger.debug("%r: libssl: %s", self, OPENSSL_DYN_LIBS.libssl)
+            _logger.debug("%r: libcrypto: %s", self, OPENSSL_DYN_LIBS.libcrypto)
             _logger.debug("%r: %s", self, ssl.OPENSSL_VERSION)
             _logger.info("%r: SSL_sendfile loaded=%d", self, self._ssl_object.sendfile_available())
 
