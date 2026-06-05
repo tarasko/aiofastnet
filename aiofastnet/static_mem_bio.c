@@ -66,7 +66,7 @@ static_mem_bio_read(BIO *bio, char *out, int outl) {
     }
 
     st = (static_mem_bio_state_t *)BIO_get_data(bio);
-    if (SMB_UNLIKELY(st == NULL || !BIO_get_init(bio))) {
+    if (SMB_UNLIKELY(st == NULL)) {
         return 0;
     }
 
@@ -104,7 +104,7 @@ static_mem_bio_write(BIO *bio, const char *in, int inl) {
     }
 
     st = (static_mem_bio_state_t *)BIO_get_data(bio);
-    if (SMB_UNLIKELY(st == NULL || !BIO_get_init(bio))) {
+    if (SMB_UNLIKELY(st == NULL)) {
         return 0;
     }
 
@@ -212,7 +212,7 @@ BIO_static_mem_get_write_buf(BIO *bio, char **pp, size_t *space) {
     }
 
     st = (static_mem_bio_state_t *)BIO_get_data(bio);
-    if (SMB_UNLIKELY(st == NULL || !BIO_get_init(bio))) {
+    if (SMB_UNLIKELY(st == NULL)) {
         return 0;
     }
 
@@ -238,7 +238,7 @@ BIO_static_mem_produce(BIO *bio, size_t nbytes) {
     }
 
     st = (static_mem_bio_state_t *)BIO_get_data(bio);
-    if (SMB_UNLIKELY(st == NULL || !BIO_get_init(bio))) {
+    if (SMB_UNLIKELY(st == NULL)) {
         return -1;
     }
 
@@ -261,7 +261,7 @@ BIO_static_mem_consume(BIO *bio, size_t nbytes) {
     }
 
     st = (static_mem_bio_state_t *)BIO_get_data(bio);
-    if (SMB_UNLIKELY(st == NULL || !BIO_get_init(bio))) {
+    if (SMB_UNLIKELY(st == NULL)) {
         return -1;
     }
 

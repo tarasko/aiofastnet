@@ -20,7 +20,6 @@ void (*aiofn_BIO_clear_flags)(BIO *b, int flags) = NULL;
 void (*aiofn_BIO_set_data)(BIO *a, void *ptr) = NULL;
 void *(*aiofn_BIO_get_data)(BIO *a) = NULL;
 void (*aiofn_BIO_set_init)(BIO *a, int init) = NULL;
-int (*aiofn_BIO_get_init)(BIO *a) = NULL;
 void (*aiofn_BIO_set_shutdown)(BIO *a, int shut) = NULL;
 
 BIO_METHOD *(*aiofn_BIO_meth_new)(int type, const char *name) = NULL;
@@ -243,7 +242,6 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
     LOAD_REQUIRED(aiofn_BIO_set_data, "BIO_set_data");
     LOAD_REQUIRED(aiofn_BIO_get_data, "BIO_get_data");
     LOAD_REQUIRED(aiofn_BIO_set_init, "BIO_set_init");
-    LOAD_REQUIRED(aiofn_BIO_get_init, "BIO_get_init");
     LOAD_REQUIRED(aiofn_BIO_set_shutdown, "BIO_set_shutdown");
 
     LOAD_REQUIRED(aiofn_BIO_meth_new, "BIO_meth_new");

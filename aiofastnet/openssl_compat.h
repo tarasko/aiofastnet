@@ -87,7 +87,6 @@ extern void (*aiofn_BIO_clear_flags)(BIO *b, int flags);
 extern void (*aiofn_BIO_set_data)(BIO *a, void *ptr);
 extern void *(*aiofn_BIO_get_data)(BIO *a);
 extern void (*aiofn_BIO_set_init)(BIO *a, int init);
-extern int (*aiofn_BIO_get_init)(BIO *a);
 extern void (*aiofn_BIO_set_shutdown)(BIO *a, int shut);
 
 extern BIO_METHOD *(*aiofn_BIO_meth_new)(int type, const char *name);
@@ -180,7 +179,6 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define BIO_set_data aiofn_BIO_set_data
 #define BIO_get_data aiofn_BIO_get_data
 #define BIO_set_init aiofn_BIO_set_init
-#define BIO_get_init aiofn_BIO_get_init
 #define BIO_set_shutdown aiofn_BIO_set_shutdown
 #define BIO_meth_new aiofn_BIO_meth_new
 #define BIO_meth_set_write aiofn_BIO_meth_set_write
