@@ -41,8 +41,7 @@ BIO *(*aiofn_SSL_get_wbio)(const SSL *ssl) = NULL;
 void (*aiofn_SSL_set_accept_state)(SSL *ssl) = NULL;
 void (*aiofn_SSL_set_connect_state)(SSL *ssl) = NULL;
 long (*aiofn_SSL_ctrl)(SSL *ssl, int cmd, long larg, void *parg) = NULL;
-uint64_t (*aiofn_SSL_set_options)(SSL *ssl, uint64_t options) = NULL;
-uint64_t (*aiofn_SSL_CTX_get_options)(const SSL_CTX *ctx) = NULL;
+long (*aiofn_SSL_CTX_ctrl)(SSL_CTX *ctx, int cmd, long larg, void *parg) = NULL;
 int (*aiofn_SSL_get_error)(const SSL *ssl, int ret_code) = NULL;
 int (*aiofn_SSL_is_init_finished)(const SSL *s) = NULL;
 int (*aiofn_SSL_pending)(const SSL *ssl) = NULL;
@@ -259,8 +258,7 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
     LOAD_REQUIRED(aiofn_SSL_set_accept_state, "SSL_set_accept_state");
     LOAD_REQUIRED(aiofn_SSL_set_connect_state, "SSL_set_connect_state");
     LOAD_REQUIRED(aiofn_SSL_ctrl, "SSL_ctrl");
-    LOAD_REQUIRED(aiofn_SSL_set_options, "SSL_set_options");
-    LOAD_REQUIRED(aiofn_SSL_CTX_get_options, "SSL_CTX_get_options");
+    LOAD_REQUIRED(aiofn_SSL_CTX_ctrl, "SSL_CTX_ctrl");
     LOAD_REQUIRED(aiofn_SSL_get_error, "SSL_get_error");
     LOAD_REQUIRED(aiofn_SSL_is_init_finished, "SSL_is_init_finished");
     LOAD_REQUIRED(aiofn_SSL_pending, "SSL_pending");
@@ -376,7 +374,15 @@ int aiofn_SSL_set_tlsext_host_name(const SSL *s, const char *name) {
 }
 
 long aiofn_SSL_set_mode(SSL *ssl, long mode) {
-    return aiofn_SSL_ctrl(ssl, 33, mode, NULL);
+    return aiofn_SSL_ctrl(ssl, SSL_CTRL_MODE, mode, NULL);
+}
+
+uint64_t aiofn_SSL_set_options(SSL *ssl, uint64_t options) {
+    return (uint64_t)aiofn_SSL_ctrl(ssl, SSL_CTRL_OPTIONS, (long)options, NULL);
+}
+
+uint64_t aiofn_SSL_CTX_get_options(const SSL_CTX *ctx) {
+    return (uint64_t)aiofn_SSL_CTX_ctrl((SSL_CTX *)ctx, SSL_CTRL_OPTIONS, 0, NULL);
 }
 
 long aiofn_BIO_get_mem_data(BIO *b, char **pp) {

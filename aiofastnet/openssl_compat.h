@@ -52,6 +52,9 @@ typedef int (*err_print_errors_cb_fn)(const char *str, size_t len, void *u);
 #define SSL_MODE_AUTO_RETRY 0x00000004U
 #define SSL_OP_ENABLE_KTLS SSL_OP_BIT(3)
 
+#define SSL_CTRL_OPTIONS 32
+#define SSL_CTRL_MODE 33
+
 #define BIO_TYPE_SOURCE_SINK 0x0400
 #define BIO_CTRL_RESET 1
 #define BIO_CTRL_EOF 2
@@ -107,10 +110,11 @@ extern BIO *(*aiofn_SSL_get_rbio)(const SSL *ssl);
 extern BIO *(*aiofn_SSL_get_wbio)(const SSL *ssl);
 extern void (*aiofn_SSL_set_accept_state)(SSL *ssl);
 extern void (*aiofn_SSL_set_connect_state)(SSL *ssl);
-extern uint64_t (*aiofn_SSL_set_options)(SSL *ssl, uint64_t options);
-extern uint64_t (*aiofn_SSL_CTX_get_options)(const SSL_CTX *ctx);
 extern long (*aiofn_SSL_ctrl)(SSL *ssl, int cmd, long larg, void *parg);
+extern long (*aiofn_SSL_CTX_ctrl)(SSL_CTX *ctx, int cmd, long larg, void *parg);
 long aiofn_SSL_set_mode(SSL *ssl, long mode);
+uint64_t aiofn_SSL_set_options(SSL *ssl, uint64_t options);
+uint64_t aiofn_SSL_CTX_get_options(const SSL_CTX *ctx);
 int aiofn_SSL_set_tlsext_host_name(const SSL *s, const char *name);
 extern int (*aiofn_SSL_get_error)(const SSL *ssl, int ret_code);
 extern int (*aiofn_SSL_is_init_finished)(const SSL *s);
