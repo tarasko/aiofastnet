@@ -243,11 +243,11 @@ compatibility wrapper preserves the documented `write()` /
 
 `aiofastnet` requires a Python distribution whose `ssl` module is dynamically
 linked against OpenSSL. Some self-contained Python distributions statically link
-or otherwise hide OpenSSL from the process dynamic library list. In that case
-`aiofastnet` cannot load the matching `libssl` / `libcrypto` symbols, and
-`import aiofastnet` will fail with an `ImportError` describing the OpenSSL
-dynamic-library problem. This is known to affect uv-managed Python
-installations because they use standalone Python builds.
+OpenSSL instead of using separate `libssl` / `libcrypto` shared libraries. In
+that case `aiofastnet` cannot load the matching `libssl` / `libcrypto` symbols,
+and `import aiofastnet` will fail with an `ImportError` describing the OpenSSL
+dynamic-library problem. This is known to affect uv-managed Python installations
+because they use standalone Python builds.
 
 You can check what `aiofastnet` found with:
 
