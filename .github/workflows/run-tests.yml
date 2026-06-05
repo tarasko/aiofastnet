@@ -16,7 +16,7 @@ jobs:
 
   coverage:
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
@@ -57,7 +57,7 @@ jobs:
             os: ubuntu-24.04-arm
           - pyver: '3.14'
             os: windows-11-arm
-      fail-fast: true
+      fail-fast: false
 
     runs-on: ${{ matrix.os }}
 
@@ -124,7 +124,7 @@ jobs:
   build-uv:
     name: uv Python 3.14 (${{ matrix.os }})
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
@@ -176,7 +176,7 @@ jobs:
     name: musllinux (${{ matrix.python-tag }})
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - python-tag: cp314-cp314
