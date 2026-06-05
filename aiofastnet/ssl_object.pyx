@@ -118,12 +118,7 @@ cdef class SSLObject:
         self.server_hostname = server_hostname
         self.server_side = server_side
 
-        cdef bint use_socket_wbio = (
-            sock is not None and
-            (SSL_CTX_get_options(self.ssl_ctx) & SSL_OP_ENABLE_KTLS) != 0
-        )
-
-        cdef bint use_socket_rbio = (
+        cdef bint use_socket_bio = (
             sock is not None and
             (SSL_CTX_get_options(self.ssl_ctx) & SSL_OP_ENABLE_KTLS) != 0
         )
@@ -136,53 +131,36 @@ cdef class SSLObject:
             if self.ssl == NULL:
                 raise MemoryError("Unable to allocate SSL object")
 
-            if use_socket_rbio and use_socket_wbio:
-                # Before openssl 3.5 setting BIOs separately was an issue
-                # kTLS refused to enable if we use SSL_set_rfd and SSL_set_wfd
+            if use_socket_bio:
                 if SSL_set_fd(self.ssl, sock.fileno()) != 1:
                     raise ssl.SSLError("SSL_set_fd failed")
-            else:
-                if not use_socket_rbio:
-                    self.incoming_buf = PyByteArray_FromStringAndSize(
-                        NULL, read_buffer_size)
-                    incoming = BIO_new_static_mem(
-                        PyByteArray_AS_STRING(self.incoming_buf),
-                        <size_t> PyByteArray_GET_SIZE(self.incoming_buf)
-                    )
-                    if incoming == NULL:
-                        raise MemoryError("Unable to initialize incoming mem BIO")
-
-                    BIO_set_nbio(incoming, 1)
-                    SSL_set0_rbio(self.ssl, incoming)
-                    self.incoming = incoming
-                    incoming = NULL
-                else:
-                    if SSL_set_rfd(self.ssl, sock.fileno()) != 1:
-                        raise ssl.SSLError("SSL_set_rfd failed")
-
-                if not use_socket_wbio:
-                    self.outgoing_buf = PyByteArray_FromStringAndSize(
-                        NULL, write_buffer_size)
-
-                    outgoing = BIO_new_static_mem(
-                        PyByteArray_AS_STRING(self.outgoing_buf),
-                        <size_t> PyByteArray_GET_SIZE(self.outgoing_buf)
-                    )
-
-                    if outgoing == NULL:
-                        raise MemoryError("Unable to initialize outgoing mem BIO")
-
-                    BIO_set_nbio(outgoing, 1)
-                    SSL_set0_wbio(self.ssl, outgoing)
-                    self.outgoing = outgoing
-                    outgoing = NULL
-                else:
-                    if SSL_set_wfd(self.ssl, sock.fileno()) != 1:
-                        raise ssl.SSLError("SSL_set_wfd failed")
-
-            if use_socket_rbio or use_socket_wbio:
-                # This is no-op anyway if memory BIO is used
                 SSL_set_options(self.ssl, SSL_OP_ENABLE_KTLS)
+            else:
+                self.incoming_buf = PyByteArray_FromStringAndSize(
+                    NULL, read_buffer_size)
+                incoming = BIO_new_static_mem(
+                    PyByteArray_AS_STRING(self.incoming_buf),
+                    <size_t> PyByteArray_GET_SIZE(self.incoming_buf)
+                )
+                if incoming == NULL:
+                    raise MemoryError("Unable to initialize incoming mem BIO")
+
+                self.outgoing_buf = PyByteArray_FromStringAndSize(
+                    NULL, write_buffer_size)
+                outgoing = BIO_new_static_mem(
+                    PyByteArray_AS_STRING(self.outgoing_buf),
+                    <size_t> PyByteArray_GET_SIZE(self.outgoing_buf)
+                )
+                if outgoing == NULL:
+                    raise MemoryError("Unable to initialize outgoing mem BIO")
+
+                BIO_set_nbio(incoming, 1)
+                BIO_set_nbio(outgoing, 1)
+                SSL_set_bio(self.ssl, incoming, outgoing)
+                self.incoming = incoming
+                self.outgoing = outgoing
+                incoming = NULL
+                outgoing = NULL
 
             SSL_set_mode(self.ssl, SSL_MODE_AUTO_RETRY | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_ENABLE_PARTIAL_WRITE)
             SSL_set_read_ahead(self.ssl, 1)
@@ -459,5 +437,3 @@ cdef class SSLObject:
 
 cdef ssl_error_name(int err):
     return SSLError(err).name
-
-

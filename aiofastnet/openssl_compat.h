@@ -102,11 +102,7 @@ extern void (*aiofn_BIO_meth_free)(BIO_METHOD *biom);
 extern SSL *(*aiofn_SSL_new)(SSL_CTX *ctx);
 extern void (*aiofn_SSL_free)(SSL *ssl);
 extern void (*aiofn_SSL_set_bio)(SSL *ssl, BIO *rbio, BIO *wbio);
-extern void (*aiofn_SSL_set0_rbio)(SSL *ssl, BIO *rbio);
-extern void (*aiofn_SSL_set0_wbio)(SSL *ssl, BIO *wbio);
 extern int (*aiofn_SSL_set_fd)(SSL *ssl, int fd);
-extern int (*aiofn_SSL_set_rfd)(SSL *ssl, int fd);
-extern int (*aiofn_SSL_set_wfd)(SSL *ssl, int fd);
 extern BIO *(*aiofn_SSL_get_rbio)(const SSL *ssl);
 extern BIO *(*aiofn_SSL_get_wbio)(const SSL *ssl);
 extern void (*aiofn_SSL_set_accept_state)(SSL *ssl);
@@ -200,11 +196,7 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define SSL_new aiofn_SSL_new
 #define SSL_free aiofn_SSL_free
 #define SSL_set_bio aiofn_SSL_set_bio
-#define SSL_set0_rbio aiofn_SSL_set0_rbio
-#define SSL_set0_wbio aiofn_SSL_set0_wbio
 #define SSL_set_fd aiofn_SSL_set_fd
-#define SSL_set_rfd aiofn_SSL_set_rfd
-#define SSL_set_wfd aiofn_SSL_set_wfd
 #define SSL_get_rbio aiofn_SSL_get_rbio
 #define SSL_get_wbio aiofn_SSL_get_wbio
 #define SSL_set_accept_state aiofn_SSL_set_accept_state
