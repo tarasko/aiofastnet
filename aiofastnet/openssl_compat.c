@@ -164,6 +164,34 @@ static void *resolve_symbol(const char *name) {
     }
     return NULL;
 }
+
+static void *open_library(const char *path, const char *kind) {
+    void *lib = NULL;
+    const char *err = NULL;
+
+    if (path == NULL || path[0] == '\0') {
+        set_last_error("empty %s library path", kind);
+        return NULL;
+    }
+
+    dlerror();
+    lib = dlopen(path, RTLD_NOLOAD | RTLD_NOW | RTLD_LOCAL);
+    err = dlerror();
+    if (lib != NULL) {
+        return lib;
+    }
+
+    dlerror();
+    lib = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    err = dlerror();
+    if (lib == NULL) {
+        set_last_error("dlopen %s failed for '%s': %s",
+                       kind,
+                       path,
+                       err ? err : "unknown");
+    }
+    return lib;
+}
 #endif
 
 static void *resolve_required(const char *name) {
@@ -196,23 +224,12 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
         return 0;
     }
 #else
-    const char *err;
-    dlerror();
-    g_ssl_lib = dlopen(ssl_lib_path, RTLD_NOLOAD | RTLD_NOW | RTLD_LOCAL);
-    err = dlerror();
+    g_ssl_lib = open_library(ssl_lib_path, "ssl");
     if (g_ssl_lib == NULL) {
-        set_last_error("dlopen ssl failed for '%s': %s",
-                       ssl_lib_path ? ssl_lib_path : "(null)",
-                       err ? err : "unknown");
         return 0;
     }
-    dlerror();
-    g_crypto_lib = dlopen(crypto_lib_path, RTLD_NOLOAD | RTLD_NOW | RTLD_LOCAL);
-    err = dlerror();
+    g_crypto_lib = open_library(crypto_lib_path, "crypto");
     if (g_crypto_lib == NULL) {
-        set_last_error("dlopen crypto failed for '%s': %s",
-                       crypto_lib_path ? crypto_lib_path : "(null)",
-                       err ? err : "unknown");
         return 0;
     }
 #endif
