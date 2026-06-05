@@ -69,6 +69,7 @@ cdef extern from "openssl_compat.h":
     BIO *SSL_get_wbio(const SSL *ssl)
     void SSL_set_accept_state(SSL *ssl)
     void SSL_set_connect_state(SSL *ssl)
+    int SSL_set_options_available()
     uint64_t SSL_set_options(SSL *ssl, uint64_t op)
     long SSL_set_mode(SSL *ssl, long mode)
     int SSL_set_tlsext_host_name(const SSL *s, const char *name)

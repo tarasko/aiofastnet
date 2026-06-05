@@ -41,6 +41,7 @@ BIO *(*aiofn_SSL_get_wbio)(const SSL *ssl) = NULL;
 void (*aiofn_SSL_set_accept_state)(SSL *ssl) = NULL;
 void (*aiofn_SSL_set_connect_state)(SSL *ssl) = NULL;
 long (*aiofn_SSL_ctrl)(SSL *ssl, int cmd, long larg, void *parg) = NULL;
+uint64_t (*aiofn_SSL_set_options_sym)(SSL *ssl, uint64_t options) = NULL;
 int (*aiofn_SSL_get_error)(const SSL *ssl, int ret_code) = NULL;
 int (*aiofn_SSL_pending)(const SSL *ssl) = NULL;
 int (*aiofn_SSL_renegotiate)(SSL *ssl) = NULL;
@@ -252,6 +253,7 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
     LOAD_REQUIRED(aiofn_SSL_set_accept_state, "SSL_set_accept_state");
     LOAD_REQUIRED(aiofn_SSL_set_connect_state, "SSL_set_connect_state");
     LOAD_REQUIRED(aiofn_SSL_ctrl, "SSL_ctrl");
+    aiofn_SSL_set_options_sym = resolve_symbol("SSL_set_options");
     LOAD_REQUIRED(aiofn_SSL_get_error, "SSL_get_error");
     LOAD_REQUIRED(aiofn_SSL_pending, "SSL_pending");
     LOAD_REQUIRED(aiofn_SSL_renegotiate, "SSL_renegotiate");
@@ -365,8 +367,15 @@ long aiofn_SSL_set_mode(SSL *ssl, long mode) {
     return aiofn_SSL_ctrl(ssl, SSL_CTRL_MODE, mode, NULL);
 }
 
+int aiofn_SSL_set_options_available(void) {
+    return aiofn_SSL_set_options_sym != NULL;
+}
+
 uint64_t aiofn_SSL_set_options(SSL *ssl, uint64_t options) {
-    return (uint64_t)aiofn_SSL_ctrl(ssl, SSL_CTRL_OPTIONS, (long)options, NULL);
+    if (aiofn_SSL_set_options_sym != NULL) {
+        return aiofn_SSL_set_options_sym(ssl, options);
+    }
+    return 0;
 }
 
 long aiofn_BIO_get_mem_data(BIO *b, char **pp) {

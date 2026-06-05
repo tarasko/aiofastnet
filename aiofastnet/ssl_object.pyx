@@ -120,6 +120,7 @@ cdef class SSLObject:
 
         cdef bint use_socket_bio = (
             sock is not None and
+            SSL_set_options_available() and
             (ssl_context.options & getattr(ssl, "OP_ENABLE_KTLS", 0)) != 0
         )
 
@@ -288,9 +289,12 @@ cdef class SSLObject:
             raise RuntimeError("incoming BIO: unable to publish received bytes")
 
     cdef void allow_renegotiation(self) noexcept:
+        if not SSL_set_options_available():
+            return
+
         cdef:
-            int SSL_OP_ALLOW_CLIENT_RENEGOTIATION = (1 << 8)
-            int SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION = (1 << 18)
+            uint64_t SSL_OP_ALLOW_CLIENT_RENEGOTIATION = (<uint64_t>1) << 8
+            uint64_t SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION = (<uint64_t>1) << 18
 
         SSL_set_options(
             self.ssl,
