@@ -241,6 +241,35 @@ transport implementation. For transports created through `aiofastnet`, a
 compatibility wrapper preserves the documented `write()` /
 `writelines()` buffer-safety behavior.
 
+`aiofastnet` requires a Python distribution whose `ssl` module is dynamically
+linked against OpenSSL. Some self-contained Python distributions statically link
+or otherwise hide OpenSSL from the process dynamic library list. In that case
+`aiofastnet` cannot load the matching `libssl` / `libcrypto` symbols and will
+raise an import error. This is known to affect uv-managed Python installations
+because they use standalone Python builds.
+
+You can check what `aiofastnet` found with:
+
+```console
+$ python -c "import aiofastnet; print(aiofastnet.OPENSSL_DYN_LIBS)"
+```
+
+Possible workarounds:
+
+- Use a system Python, `actions/setup-python`, pyenv, Conda, or another Python
+  distribution that provides OpenSSL as dynamic libraries.
+- If you use uv only for environment and package management, create the virtual
+  environment from an existing system interpreter:
+
+  ```console
+  $ uv venv --no-managed-python --python python
+  ```
+
+- Use `virtualenv` with a system Python interpreter, since `virtualenv` does
+  not download its own Python builds.
+- Build or install Python so that `_ssl` is a dynamic extension linked against
+  shared OpenSSL libraries.
+
 ## Kernel TLS (KTLS) support on Linux
 
 On Linux, `aiofastnet` can use OpenSSL's KTLS support for TLS
