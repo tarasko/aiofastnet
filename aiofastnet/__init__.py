@@ -1,5 +1,5 @@
 # Fail early if python distribution is statically linked against OpenSSL
-from .openssl_compat import OPENSSL_DYN_LIBS as _OPENSSL_DYN_LIBS
+from .openssl_compat import OPENSSL_DYN_LIBS
 
 from .api_streams import open_connection, start_server
 from .api_create_server import create_server
@@ -15,6 +15,7 @@ from .transport import (
 )
 
 __all__ = [
+    'OPENSSL_DYN_LIBS',
     'open_connection',
     'start_server',
     'create_server',
@@ -29,5 +30,5 @@ __all__ = [
     'aiofn_is_buffered_protocol'
 ]
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 __author__ = "Taras Kozlov"

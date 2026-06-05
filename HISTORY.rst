@@ -9,6 +9,8 @@ aiofastnet Release History
 ------------------
 
 * Fail with a clean ImportError when importing aiofastnet by python with statically linked openssl
+* Improve compatibility with older OpenSSL versions
+* Export OPENSSL_DYN_LIBS for testing and verification
 
 0.8.0
 ------------------
