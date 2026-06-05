@@ -182,16 +182,6 @@ cdef class SSLObject:
         else:
             SSL_set_connect_state(self.ssl)
 
-        cdef:
-            X509_VERIFY_PARAM* ssl_verification_params
-            X509_VERIFY_PARAM* ssl_ctx_verification_params
-            unsigned int ssl_ctx_host_flags
-
-        ssl_verification_params = SSL_get0_param(self.ssl)
-        ssl_ctx_verification_params = SSL_CTX_get0_param(self.ssl_ctx)
-        ssl_ctx_host_flags = X509_VERIFY_PARAM_get_hostflags(ssl_ctx_verification_params)
-        X509_VERIFY_PARAM_set_hostflags(ssl_verification_params, ssl_ctx_host_flags)
-
         if self.server_hostname is not None:
             self._configure_hostname()
 
