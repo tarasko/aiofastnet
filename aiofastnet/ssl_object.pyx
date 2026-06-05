@@ -120,7 +120,7 @@ cdef class SSLObject:
 
         cdef bint use_socket_bio = (
             sock is not None and
-            (SSL_CTX_get_options(self.ssl_ctx) & SSL_OP_ENABLE_KTLS) != 0
+            (ssl_context.options & getattr(ssl, "OP_ENABLE_KTLS", 0)) != 0
         )
 
         cdef BIO* incoming = NULL

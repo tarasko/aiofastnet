@@ -70,7 +70,6 @@ cdef extern from "openssl_compat.h":
     void SSL_set_accept_state(SSL *ssl)
     void SSL_set_connect_state(SSL *ssl)
     uint64_t SSL_set_options(SSL *ssl, uint64_t op)
-    uint64_t SSL_CTX_get_options(const SSL_CTX *ctx)
     long SSL_set_mode(SSL *ssl, long mode)
     int SSL_set_tlsext_host_name(const SSL *s, const char *name)
     int SSL_get_error(const SSL *ssl, int ret)
