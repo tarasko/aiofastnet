@@ -122,8 +122,6 @@ extern int (*aiofn_SSL_renegotiate)(SSL *ssl);
 extern int (*aiofn_SSL_do_handshake)(SSL *ssl);
 extern int (*aiofn_SSL_read)(SSL *ssl, void *buf, int num);
 extern int (*aiofn_SSL_write)(SSL *ssl, const void *buf, int num);
-extern int (*aiofn_SSL_read_ex)(SSL *ssl, void *buf, size_t num, size_t *readbytes);
-extern int (*aiofn_SSL_write_ex)(SSL *ssl, const void *buf, size_t num, size_t *written);
 extern ssize_t (*aiofn_SSL_sendfile)(SSL *ssl, int fd, off_t offset, size_t size, int flags);
 extern int (*aiofn_SSL_shutdown)(SSL *ssl);
 extern int (*aiofn_SSL_get_shutdown)(const SSL *ssl);
@@ -214,8 +212,6 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define SSL_do_handshake aiofn_SSL_do_handshake
 #define SSL_read aiofn_SSL_read
 #define SSL_write aiofn_SSL_write
-#define SSL_read_ex aiofn_SSL_read_ex
-#define SSL_write_ex aiofn_SSL_write_ex
 #define SSL_shutdown aiofn_SSL_shutdown
 #define SSL_get_shutdown aiofn_SSL_get_shutdown
 #define SSL_get_verify_result aiofn_SSL_get_verify_result

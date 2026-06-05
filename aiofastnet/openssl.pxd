@@ -79,8 +79,6 @@ cdef extern from "openssl_compat.h":
     int SSL_do_handshake(SSL *ssl)
     int SSL_read(SSL *ssl, void *buf, int num)
     int SSL_write(SSL *ssl, const void *buf, int num)
-    int SSL_read_ex(SSL *ssl, void *buf, size_t num, size_t *readbytes)
-    int SSL_write_ex(SSL *s, const void *buf, size_t num, size_t *written)
     int SSL_shutdown(SSL *ssl)
     int SSL_get_shutdown(const SSL *ssl)
     long SSL_get_verify_result(const SSL *ssl)

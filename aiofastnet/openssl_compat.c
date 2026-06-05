@@ -48,8 +48,6 @@ int (*aiofn_SSL_renegotiate)(SSL *ssl) = NULL;
 int (*aiofn_SSL_do_handshake)(SSL *ssl) = NULL;
 int (*aiofn_SSL_read)(SSL *ssl, void *buf, int num) = NULL;
 int (*aiofn_SSL_write)(SSL *ssl, const void *buf, int num) = NULL;
-int (*aiofn_SSL_read_ex)(SSL *ssl, void *buf, size_t num, size_t *readbytes) = NULL;
-int (*aiofn_SSL_write_ex)(SSL *ssl, const void *buf, size_t num, size_t *written) = NULL;
 ssize_t (*aiofn_SSL_sendfile)(SSL *ssl, int fd, off_t offset, size_t size, int flags) = NULL;
 int (*aiofn_SSL_shutdown)(SSL *ssl) = NULL;
 int (*aiofn_SSL_get_shutdown)(const SSL *ssl) = NULL;
@@ -264,8 +262,6 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
     LOAD_REQUIRED(aiofn_SSL_do_handshake, "SSL_do_handshake");
     LOAD_REQUIRED(aiofn_SSL_read, "SSL_read");
     LOAD_REQUIRED(aiofn_SSL_write, "SSL_write");
-    LOAD_REQUIRED(aiofn_SSL_read_ex, "SSL_read_ex");
-    LOAD_REQUIRED(aiofn_SSL_write_ex, "SSL_write_ex");
     aiofn_SSL_sendfile = resolve_symbol("SSL_sendfile");
     LOAD_REQUIRED(aiofn_SSL_shutdown, "SSL_shutdown");
     LOAD_REQUIRED(aiofn_SSL_get_shutdown, "SSL_get_shutdown");
