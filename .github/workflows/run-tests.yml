@@ -112,6 +112,9 @@ jobs:
       run: |
         python setup.py build_ext --inplace
 
+    - name: Show aiofastnet OpenSSL dynamic libraries
+      run: python -c "import aiofastnet; print('aiofastnet.OPENSSL_DYN_LIBS:', aiofastnet.OPENSSL_DYN_LIBS)"
+
 #    - uses: actions/checkout@v6
 #    - name: Setup tmate session
 #      if: runner.os == 'Linux'
