@@ -19,12 +19,15 @@ except ImportError:
 
 
 async def run_benchmark(args, loop_kind: str, use_aiofastnet: bool, transport_kind: str, msg_size: int):
+    if args.asyncio_debug:
+        asyncio.get_running_loop().set_debug(True)
+
     payload = b"x" * msg_size
 
     server_ssl_ctx, client_ssl_ctx = build_ssl_contexts(enable_ktls=False) \
         if transport_kind == "ssl" else (None, None)
 
-    requests = await run_pair(use_aiofastnet, args.duration, payload, server_ssl_ctx, client_ssl_ctx, None, args.sndbuf_size)
+    requests = await run_pair(use_aiofastnet, args.duration, payload, not args.simple, server_ssl_ctx, client_ssl_ctx, None, args.sndbuf_size)
     rps = requests/args.duration
     print(f"{transport_kind}-{loop_kind}-{'aiofastnet' if use_aiofastnet else 'native'}-{msg_size}: {rps:.2f}")
 
@@ -95,14 +98,17 @@ def main():
         default=256*1024,
         help="Socket SO_SNDBUF value to request",
     )
+    parser.add_argument("--simple", action="store_true", help="Use simple protocol instead of buffered")
     parser.add_argument("--save-plot", action="store_true", help="Save plot to examples/benchmark.png")
     parser.add_argument("--no-plot", action="store_true", help="Disable plotting")
+    parser.add_argument("--asyncio-debug", action="store_true", help="Enable loop debug")
     args = parser.parse_args()
 
     if args.duration <= 0:
         parser.error("--duration must be > 0")
     if args.sndbuf_size <= 0:
         parser.error("--sndbuf-size must be > 0")
+
 
     args.transports = [transport.strip() for transport in args.transport.split(",") if transport.strip()]
     args.loops = [loop_name.strip() for loop_name in args.loops.split(",") if loop_name.strip()]
@@ -155,5 +161,5 @@ def main():
 
 
 if __name__ == "__main__":
-#    basicConfig(level=logging.DEBUG)
+    basicConfig(level=logging.WARNING)
     main()

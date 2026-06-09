@@ -16,3 +16,4 @@ playground.py
 !certdecode.c
 !aiofastnet/openssl_compat.c
 .coverage
+uv.lock

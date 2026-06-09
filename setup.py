@@ -65,7 +65,7 @@ extensions = [
 
 if with_examples:
     extensions.append(
-        make_extension("examples.benchmark_protocol", ["examples/benchmark_protocol.pyx"])
+        make_extension("examples.benchmark_protocol", ["examples/benchmark_protocol.py"])
     )
 
 setup(
