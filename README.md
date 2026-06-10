@@ -1,9 +1,9 @@
 # aiofastnet
 
 [![Test status](https://img.shields.io/github/actions/workflow/status/tarasko/aiofastnet/run-tests.yml?branch=master&label=tests)](https://github.com/tarasko/aiofastnet/actions/workflows/run-tests.yml?query=branch%3Amaster)
+[![codecov](https://codecov.io/github/tarasko/aiofastnet/graph/badge.svg?token=TC4IG6K78V)](https://codecov.io/github/tarasko/aiofastnet)
 [![Latest PyPI package version](https://badge.fury.io/py/aiofastnet.svg)](https://pypi.org/project/aiofastnet)
 [![Downloads count](https://img.shields.io/pypi/dm/aiofastnet.svg)](https://pypistats.org/packages/aiofastnet)
-[![codecov](https://codecov.io/github/tarasko/aiofastnet/graph/badge.svg?token=TC4IG6K78V)](https://codecov.io/github/tarasko/aiofastnet)
 
 `aiofastnet` gives your asyncio networking application an instant performance boost,
 lower latency and higher throughput by just adding two lines:
