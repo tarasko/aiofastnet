@@ -84,11 +84,52 @@ from cpython.bytearray cimport (
 from cpython.unicode cimport PyUnicode_FromString, PyUnicode_FromStringAndSize
 
 import os
+import platform
+import re
 import ssl
 import tempfile
 import logging
+from pathlib import Path
 
 cdef object _logger = logging.getLogger('aiofastnet.ssl')
+
+
+def _linux_kernel_at_least(major: int, minor: int) -> bool:
+    if platform.system() != "Linux":
+        return False
+
+    match = re.match(r"^(\d+)\.(\d+)", platform.release())
+    if match is None:
+        return False
+
+    current = tuple(map(int, match.groups()))
+    return current >= (major, minor)
+
+
+def _ktls_prerequisites_available() -> bool:
+    if not Path("/sys/module/tls").exists():
+        _logger.warning(
+            "Kernel TLS was requested but is unavailable because kernel module "
+            "'tls' is not loaded; load it with 'sudo modprobe tls'. "
+            "Falling back to memory BIO.")
+        return False
+
+    if not _linux_kernel_at_least(5, 19):
+        _logger.warning(
+            "Kernel TLS was requested but is unavailable because the Linux "
+            "kernel version is < 5.19. Falling back to memory BIO.")
+        return False
+
+    if ssl.OPENSSL_VERSION_INFO[:3] < (3, 0, 0):
+        _logger.warning(
+            "Kernel TLS was requested but is unavailable because OpenSSL "
+            "version is too old; OpenSSL >= 3.0 is required. "
+            "Falling back to memory BIO.")
+        _logger.warning("Loaded libssl: %s", OPENSSL_DYN_LIBS.libssl)
+        _logger.warning("Loaded libcrypto: %s", OPENSSL_DYN_LIBS.libcrypto)
+        return False
+
+    return True
 
 
 cdef _init_openssl():
@@ -174,10 +215,17 @@ cdef class SSLObject:
         self.server_hostname = server_hostname
         self.server_side = server_side
 
+        cdef bint ktls_requested = (
+            (ssl_context.options & getattr(ssl, "OP_ENABLE_KTLS", 0)) != 0
+        )
+        cdef bint ktls_prerequisites_available = (
+            _ktls_prerequisites_available() if ktls_requested else False
+        )
         cdef bint use_socket_bio = (
             sock is not None and
             SSL_set_options_available() and
-            (ssl_context.options & getattr(ssl, "OP_ENABLE_KTLS", 0)) != 0
+            ktls_requested and
+            ktls_prerequisites_available
         )
 
         cdef BIO* incoming = NULL

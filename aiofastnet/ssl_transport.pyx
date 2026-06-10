@@ -1,12 +1,9 @@
 import asyncio
 import os
-import platform
-import re
 import ssl
 import warnings
 from asyncio.trsock import TransportSocket
 from logging import getLogger
-from pathlib import Path
 from typing import Optional
 
 from cpython.bytearray cimport PyByteArray_AS_STRING, PyByteArray_GET_SIZE
@@ -49,40 +46,13 @@ def _create_transport_context(server_side, server_hostname):
     return sslcontext
 
 
-def _linux_kernel_at_least(major: int, minor: int) -> bool:
-    if platform.system() != "Linux":
-        return False
-
-    match = re.match(r"^(\d+)\.(\d+)", platform.release())
-    if match is None:
-        return False
-
-    current = tuple(map(int, match.groups()))
-    return current >= (major, minor)
-
-
 def _log_ktls_deactivation_reason(conn) -> None:
-    if platform.system() == "Linux":
-        # Let's give a user some clue about how to troubleshoot KTLS not switching on
-        if not Path("/sys/module/tls").exists():
-            _logger.warning(
-                "%r: Kernel TLS was not enabled because kernel module 'tls' is not loaded, load module with 'sudo modprobe tls'",
-                conn)
-        elif not _linux_kernel_at_least(5, 19):
-            _logger.warning(
-                "%r: Kernel TLS was not enabled because linux kernel version is < 5.19",
-                conn)
-        elif ssl.OPENSSL_VERSION_INFO[:3] < (3, 0, 0):
-            _logger.warning(
-                "%r: Kernel TLS was not enabled because OpenSSL version is too old, you need OpenSSL >= 3.0", conn)
-            _logger.warning("%r: Loaded libssl: %s", conn, OPENSSL_DYN_LIBS.libssl)
-            _logger.warning("%r: Loaded libcrypto: %s", conn, OPENSSL_DYN_LIBS.libcrypto)
-        else:
-            _logger.warning(
-                "%r: Kernel TLS was not enabled PROBABLY because OpenSSL was built on a machine with an old linux kernel (<5.19)",
-                conn)
-            _logger.warning("%r: Loaded libssl: %s", conn, OPENSSL_DYN_LIBS.libssl)
-            _logger.warning("%r: Loaded libcrypto: %s", conn, OPENSSL_DYN_LIBS.libcrypto)
+    # Give the user a clue for a cause that cannot be detected before the handshake.
+    _logger.warning(
+        "%r: Kernel TLS was not enabled PROBABLY because OpenSSL was built on a machine with an old linux kernel (<5.19)",
+        conn)
+    _logger.warning("%r: Loaded libssl: %s", conn, OPENSSL_DYN_LIBS.libssl)
+    _logger.warning("%r: Loaded libcrypto: %s", conn, OPENSSL_DYN_LIBS.libcrypto)
 
 
 cdef class SendFileRequest:
