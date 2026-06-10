@@ -48,7 +48,7 @@ async def test_ktls_enabled(ktls_conn_type):
             assert server_client.transport.get_extra_info("ktls_recv_enabled")
 
 
-async def test_ssl_sbio_enabled(ssl_sbio_conn_type):
+async def test_ssl_sbio_enabled(selector_loop, ssl_sbio_conn_type):
     async with TestServer(ct=ssl_sbio_conn_type) as server:
         async with TestClient(server, ct=ssl_sbio_conn_type) as client:
             server_client = await server.get_any_server_client()
