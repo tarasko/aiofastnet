@@ -40,6 +40,7 @@ BIO *(*aiofn_SSL_get_wbio)(const SSL *ssl) = NULL;
 void (*aiofn_SSL_set_accept_state)(SSL *ssl) = NULL;
 void (*aiofn_SSL_set_connect_state)(SSL *ssl) = NULL;
 long (*aiofn_SSL_ctrl)(SSL *ssl, int cmd, long larg, void *parg) = NULL;
+uint64_t (*aiofn_SSL_clear_options)(SSL *ssl, uint64_t options) = NULL;
 uint64_t (*aiofn_SSL_set_options_sym)(SSL *ssl, uint64_t options) = NULL;
 int (*aiofn_SSL_get_error)(const SSL *ssl, int ret_code) = NULL;
 int (*aiofn_SSL_pending)(const SSL *ssl) = NULL;
@@ -252,6 +253,7 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
     LOAD_REQUIRED(aiofn_SSL_set_accept_state, "SSL_set_accept_state");
     LOAD_REQUIRED(aiofn_SSL_set_connect_state, "SSL_set_connect_state");
     LOAD_REQUIRED(aiofn_SSL_ctrl, "SSL_ctrl");
+    LOAD_REQUIRED(aiofn_SSL_clear_options, "SSL_clear_options");
     aiofn_SSL_set_options_sym = resolve_symbol("SSL_set_options");
     LOAD_REQUIRED(aiofn_SSL_get_error, "SSL_get_error");
     LOAD_REQUIRED(aiofn_SSL_pending, "SSL_pending");

@@ -32,7 +32,9 @@ from .openssl cimport (
     SSL_MODE_AUTO_RETRY,
     SSL_MODE_ENABLE_PARTIAL_WRITE,
     SSL_OP_ENABLE_KTLS,
+    SSL_OP_IGNORE_UNEXPECTED_EOF,
     SSL_VERIFY_PEER,
+    SSL_clear_options,
     SSL_do_handshake,
     SSL_free,
     SSL_get0_alpn_selected,
@@ -84,11 +86,53 @@ from cpython.bytearray cimport (
 from cpython.unicode cimport PyUnicode_FromString, PyUnicode_FromStringAndSize
 
 import os
+import platform
+import re
 import ssl
+import sys
 import tempfile
 import logging
+from pathlib import Path
 
 cdef object _logger = logging.getLogger('aiofastnet.ssl')
+
+
+def _linux_kernel_at_least(major: int, minor: int) -> bool:
+    if platform.system() != "Linux":
+        return False
+
+    match = re.match(r"^(\d+)\.(\d+)", platform.release())
+    if match is None:
+        return False
+
+    current = tuple(map(int, match.groups()))
+    return current >= (major, minor)
+
+
+def _ktls_prerequisites_available() -> bool:
+    if not Path("/sys/module/tls").exists():
+        _logger.warning(
+            "Kernel TLS was requested but is unavailable because kernel module "
+            "'tls' is not loaded; load it with 'sudo modprobe tls'. "
+            "Falling back to memory BIO.")
+        return False
+
+    if not _linux_kernel_at_least(5, 19):
+        _logger.warning(
+            "Kernel TLS was requested but is unavailable because the Linux "
+            "kernel version is < 5.19. Falling back to memory BIO.")
+        return False
+
+    if ssl.OPENSSL_VERSION_INFO[:3] < (3, 0, 0):
+        _logger.warning(
+            "Kernel TLS was requested but is unavailable because OpenSSL "
+            "version is too old; OpenSSL >= 3.0 is required. "
+            "Falling back to memory BIO.")
+        _logger.warning("Loaded libssl: %s", OPENSSL_DYN_LIBS.libssl)
+        _logger.warning("Loaded libcrypto: %s", OPENSSL_DYN_LIBS.libcrypto)
+        return False
+
+    return True
 
 
 cdef _init_openssl():
@@ -174,10 +218,24 @@ cdef class SSLObject:
         self.server_hostname = server_hostname
         self.server_side = server_side
 
+        cdef bint force_socket_bio = getattr(ssl_context, "_aiofastnet_force_socket_bio", False)
+
+        self.ktls_requested = (ssl_context.options & getattr(ssl, "OP_ENABLE_KTLS", 0)) != 0
+
+        # force_socket_bio is only used for testing, tests should not use it together with OP_ENABLE_KTLS
+        assert not self.ktls_requested or (self.ktls_requested and not force_socket_bio)
+
+        cdef bint ktls_prerequisites_available = (
+            _ktls_prerequisites_available() if self.ktls_requested else False
+        )
+        cdef bint enable_ktls = (
+            SSL_set_options_available() and
+            self.ktls_requested and
+            ktls_prerequisites_available
+        )
         cdef bint use_socket_bio = (
             sock is not None and
-            SSL_set_options_available() and
-            (ssl_context.options & getattr(ssl, "OP_ENABLE_KTLS", 0)) != 0
+            (force_socket_bio or enable_ktls)
         )
 
         cdef BIO* incoming = NULL
@@ -188,10 +246,17 @@ cdef class SSLObject:
             if self.ssl == NULL:
                 raise MemoryError("Unable to allocate SSL object")
 
+            # Some Python 3.9/OpenSSL combinations inherit this option from
+            # SSLContext. Clear it per connection so an unclean TCP EOF remains
+            # an error, matching the behavior seen with newer Python versions.
+            if sys.version_info[:2] < (3, 10):
+                SSL_clear_options(self.ssl, SSL_OP_IGNORE_UNEXPECTED_EOF)
+
             if use_socket_bio:
                 if SSL_set_fd(self.ssl, sock.fileno()) != 1:
                     raise ssl.SSLError("SSL_set_fd failed")
-                SSL_set_options(self.ssl, SSL_OP_ENABLE_KTLS)
+                if enable_ktls:
+                    SSL_set_options(self.ssl, SSL_OP_ENABLE_KTLS)
             else:
                 self.incoming_buf = PyByteArray_FromStringAndSize(
                     NULL, read_buffer_size)
@@ -296,6 +361,9 @@ cdef class SSLObject:
             return None
 
         return PyUnicode_FromStringAndSize(<const char*>protocol, protocol_len)
+
+    cpdef bint is_socket_bio_enabled(self):
+        return self.incoming == NULL or self.outgoing == NULL
 
     cpdef int ktls_send_enabled(self):
         return BIO_get_ktls_send(SSL_get_wbio(self.ssl))

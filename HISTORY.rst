@@ -9,6 +9,7 @@ aiofastnet Release History
 ------------------
 
 * Optimized bytes object creation for data_received in simple protocols
+* Fall back to memory bio early if kTLS is requested, but prerequisites are not satisfied
 
 0.9.0
 ------------------

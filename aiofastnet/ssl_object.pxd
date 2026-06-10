@@ -30,12 +30,14 @@ cdef class SSLObject:
         SSL* ssl
         str server_hostname
         bint server_side
+        bint ktls_requested
 
     # Exposed to the end user
     cpdef tuple cipher(self)
     cpdef object getpeercert(self, binary_form=*)
     cpdef str compression(self)
     cpdef object selected_alpn_protocol(self)
+    cpdef bint is_socket_bio_enabled(self)
     cpdef int ktls_send_enabled(self)
     cpdef int ktls_recv_enabled(self)
 

@@ -127,6 +127,7 @@ def pytest_asyncio_loop_factories(config, item):
     return {"asyncio": _new_selector_event_loop}
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_generate_tests(metafunc):
     if _HAS_LOOP_FACTORIES:
         return

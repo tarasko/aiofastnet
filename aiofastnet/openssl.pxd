@@ -41,6 +41,7 @@ cdef extern from "openssl_compat.h":
         SSL_MODE_ENABLE_PARTIAL_WRITE
         SSL_MODE_AUTO_RETRY
         SSL_OP_ENABLE_KTLS
+        SSL_OP_IGNORE_UNEXPECTED_EOF
 
     int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path)
     const char* openssl_compat_last_error()
@@ -62,6 +63,7 @@ cdef extern from "openssl_compat.h":
     BIO *SSL_get_wbio(const SSL *ssl)
     void SSL_set_accept_state(SSL *ssl)
     void SSL_set_connect_state(SSL *ssl)
+    uint64_t SSL_clear_options(SSL *ssl, uint64_t op)
     int SSL_set_options_available()
     uint64_t SSL_set_options(SSL *ssl, uint64_t op)
     long SSL_set_mode(SSL *ssl, long mode)
