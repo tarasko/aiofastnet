@@ -8,7 +8,7 @@ aiofastnet Release History
 0.11.0
 ------------------
 
-* Add type annotations for the public API
+* Added type annotations for the public API
 
 0.10.0
 ------------------
