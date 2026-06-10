@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.11.0
+------------------
+
+* Add type annotations for the public API
+
 0.10.0
 ------------------
 
