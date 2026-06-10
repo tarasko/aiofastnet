@@ -78,7 +78,7 @@ async def create_server(
     ssl_incoming_bio_size: Optional[int] = ...,
     ssl_outgoing_bio_size: Optional[int] = ...,
     start_serving: bool = ...,
-) -> asyncio.AbstractServer: ...
+) -> asyncio.Server: ...
 
 async def open_connection(
     loop: asyncio.AbstractEventLoop,
@@ -100,7 +100,7 @@ async def start_server(
     *,
     limit: int = ...,
     **kwds: Any,
-) -> asyncio.AbstractServer: ...
+) -> asyncio.Server: ...
 
 async def start_tls(
     loop: asyncio.AbstractEventLoop,

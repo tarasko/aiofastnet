@@ -35,7 +35,7 @@ async def check_public_api(
         443,
         ssl=ssl_context,
     )
-    assert_type(server, asyncio.AbstractServer)
+    assert_type(server, asyncio.Server)
 
     reader, writer = await aiofastnet.open_connection(
         loop,
@@ -53,7 +53,7 @@ async def check_public_api(
         443,
         ssl=ssl_context,
     )
-    assert_type(stream_server, asyncio.AbstractServer)
+    assert_type(stream_server, asyncio.Server)
 
     tls_transport = await aiofastnet.start_tls(
         loop,
