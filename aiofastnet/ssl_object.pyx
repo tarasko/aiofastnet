@@ -215,17 +215,24 @@ cdef class SSLObject:
         self.server_hostname = server_hostname
         self.server_side = server_side
 
-        cdef bint ktls_requested = (
-            (ssl_context.options & getattr(ssl, "OP_ENABLE_KTLS", 0)) != 0
-        )
+        cdef bint force_socket_bio = getattr(ssl_context, "_aiofastnet_force_socket_bio", False)
+
+        self.ktls_requested = (ssl_context.options & getattr(ssl, "OP_ENABLE_KTLS", 0)) != 0
+
+        # force_socket_bio is only used for testing, tests should not use it together with OP_ENABLE_KTLS
+        assert not self.ktls_requested or (self.ktls_requested and not force_socket_bio)
+
         cdef bint ktls_prerequisites_available = (
-            _ktls_prerequisites_available() if ktls_requested else False
+            _ktls_prerequisites_available() if self.ktls_requested else False
+        )
+        cdef bint enable_ktls = (
+            SSL_set_options_available() and
+            self.ktls_requested and
+            ktls_prerequisites_available
         )
         cdef bint use_socket_bio = (
             sock is not None and
-            SSL_set_options_available() and
-            ktls_requested and
-            ktls_prerequisites_available
+            (force_socket_bio or enable_ktls)
         )
 
         cdef BIO* incoming = NULL
@@ -239,7 +246,8 @@ cdef class SSLObject:
             if use_socket_bio:
                 if SSL_set_fd(self.ssl, sock.fileno()) != 1:
                     raise ssl.SSLError("SSL_set_fd failed")
-                SSL_set_options(self.ssl, SSL_OP_ENABLE_KTLS)
+                if enable_ktls:
+                    SSL_set_options(self.ssl, SSL_OP_ENABLE_KTLS)
             else:
                 self.incoming_buf = PyByteArray_FromStringAndSize(
                     NULL, read_buffer_size)
@@ -344,6 +352,9 @@ cdef class SSLObject:
             return None
 
         return PyUnicode_FromStringAndSize(<const char*>protocol, protocol_len)
+
+    cpdef bint is_socket_bio_enabled(self):
+        return self.incoming == NULL or self.outgoing == NULL
 
     cpdef int ktls_send_enabled(self):
         return BIO_get_ktls_send(SSL_get_wbio(self.ssl))

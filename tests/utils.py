@@ -314,7 +314,7 @@ class ConnectionType:
         if os.name == "nt":
             pytest.skip("sendfile is not supported in Windows")
 
-        if self.name in ("ssl", "stls"):
+        if self.name in ("ssl_mbio", "ssl_sbio", "stls"):
             pytest.skip("SSL_sendfile is not supported for non-kernel TLS")
 
         if self.name == "ktls" and sys.platform != "linux":
@@ -342,9 +342,24 @@ def ktls_conn_type():
     return _make_ktls_conn_type()
 
 
+def _make_ssl_sbio_conn_type():
+    server_context, client_context = make_test_ssl_contexts(
+        "tests/test.crt", "tests/test.key", False
+    )
+    server_context._aiofastnet_force_socket_bio = True
+    client_context._aiofastnet_force_socket_bio = True
+    return ConnectionType("ssl_sbio", server_context, client_context)
+
+
+@pytest.fixture
+def ssl_sbio_conn_type():
+    return _make_ssl_sbio_conn_type()
+
+
 @pytest.fixture(params=[
     "tcp",
-    "ssl",
+    "ssl_mbio",
+    "ssl_sbio",
     "stls",     # Use SSLTransport_Transport by using start_tls
     pytest.param("ktls",
                  marks=[
@@ -357,15 +372,18 @@ def conn_type(request):
     if request.param == "tcp":
         return ConnectionType(name=request.param)
     else:
-        if request.param in ("ssl", "stls"):
+        if request.param in ("ssl_mbio", "stls"):
             server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
             return ConnectionType(request.param, server_context, client_context)
+        elif request.param == "ssl_sbio":
+            return _make_ssl_sbio_conn_type()
         elif request.param == "ktls":
             return _make_ktls_conn_type()
 
 
 @pytest.fixture(params=[
-    "ssl",
+    "ssl_mbio",
+    "ssl_sbio",
     "stls",     # Use SSLTransport_Transport by using start_tls
     pytest.param("ktls",
                  marks=pytest.mark.skipif(sys.version_info < (3, 12),
@@ -374,9 +392,11 @@ def conn_type(request):
                  )
 ])
 def ssl_conn_type(request):
-    if request.param in ("ssl", "stls"):
+    if request.param in ("ssl_mbio", "stls"):
         server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
         return ConnectionType(request.param, server_context, client_context)
+    elif request.param == "ssl_sbio":
+        return _make_ssl_sbio_conn_type()
     elif request.param == "ktls":
         return _make_ktls_conn_type()
 

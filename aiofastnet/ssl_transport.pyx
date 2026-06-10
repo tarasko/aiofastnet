@@ -298,6 +298,8 @@ cdef class SSLTransportBase(Transport):
             return self
         elif name == 'ssl_layer_num':
             return self._ssl_layer_num
+        elif name == 'ssl_socket_bio_enabled':
+            return bool(self._ssl_object.is_socket_bio_enabled())
         elif name == 'ktls_send_enabled':
             return bool(self._ssl_object.ktls_send_enabled())
         elif name == 'ktls_recv_enabled':
@@ -458,8 +460,10 @@ cdef class SSLTransportBase(Transport):
         _logger.debug("%r: KTLS RECV: %s",
                       self, 'enabled' if self._ssl_object.ktls_recv_enabled() else 'disabled')
 
-        if (self._ssl_object.incoming == NULL and not self._ssl_object.ktls_recv_enabled()) or \
-            (self._ssl_object.outgoing == NULL and not self._ssl_object.ktls_recv_enabled()):
+        if self._ssl_object.ktls_requested and (
+            (self._ssl_object.incoming == NULL and not self._ssl_object.ktls_recv_enabled()) or
+            (self._ssl_object.outgoing == NULL and not self._ssl_object.ktls_send_enabled())
+        ):
             _log_ktls_deactivation_reason(self)
 
         self._extra.update(
