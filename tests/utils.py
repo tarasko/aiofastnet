@@ -325,6 +325,23 @@ class ConnectionType:
         return self.name == "stls"
 
 
+def _make_ktls_conn_type():
+    if sys.version_info < (3, 12):
+        pytest.skip("kTLS tests require Python >= 3.12")
+    if sys.platform != "linux":
+        pytest.skip("kTLS is available only on Linux")
+
+    server_context, client_context = make_test_ssl_contexts(
+        "tests/test.crt", "tests/test.key", True
+    )
+    return ConnectionType("ktls", server_context, client_context)
+
+
+@pytest.fixture
+def ktls_conn_type():
+    return _make_ktls_conn_type()
+
+
 @pytest.fixture(params=[
     "tcp",
     "ssl",
@@ -344,8 +361,7 @@ def conn_type(request):
             server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
             return ConnectionType(request.param, server_context, client_context)
         elif request.param == "ktls":
-            server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", True)
-            return ConnectionType(request.param, server_context, client_context)
+            return _make_ktls_conn_type()
 
 
 @pytest.fixture(params=[
@@ -362,8 +378,7 @@ def ssl_conn_type(request):
         server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
         return ConnectionType(request.param, server_context, client_context)
     elif request.param == "ktls":
-        server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", True)
-        return ConnectionType(request.param, server_context, client_context)
+        return _make_ktls_conn_type()
 
 
 @asynccontextmanager

@@ -13,8 +13,8 @@ import pytest
 from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Transport
 from tests.utils import TestClient, TestServer, \
-    make_test_ssl_contexts, ConnectionType, \
-    AsyncClient, SomeException, exc_queue, _logger, conn_type, ssl_conn_type, start_tls, sendfile
+    make_test_ssl_contexts, AsyncClient, SomeException, exc_queue, _logger, \
+    conn_type, ssl_conn_type, ktls_conn_type, start_tls, sendfile
 
 
 @pytest.fixture(params=["simple", "buffered"])
@@ -33,6 +33,17 @@ async def test_echo(all_loops, msg_size, conn_type, buffered_protocol):
             assert echoed == payload
             client.close()
             await client.wait_closed()
+
+
+async def test_ktls_enabled(ktls_conn_type):
+    async with TestServer(ct=ktls_conn_type) as server:
+        async with TestClient(server, ct=ktls_conn_type) as client:
+            server_client = await server.get_any_server_client()
+
+            assert client.transport.get_extra_info("ktls_send_enabled")
+            assert client.transport.get_extra_info("ktls_recv_enabled")
+            assert server_client.transport.get_extra_info("ktls_send_enabled")
+            assert server_client.transport.get_extra_info("ktls_recv_enabled")
 
 
 @pytest.mark.parametrize("msg_size", [1, 32, 64, 256 * 1024, 6 * 1024 * 1024, 20 * 1024 * 1024])

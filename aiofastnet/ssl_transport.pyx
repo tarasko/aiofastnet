@@ -298,6 +298,10 @@ cdef class SSLTransportBase(Transport):
             return self
         elif name == 'ssl_layer_num':
             return self._ssl_layer_num
+        elif name == 'ktls_send_enabled':
+            return bool(self._ssl_object.ktls_send_enabled())
+        elif name == 'ktls_recv_enabled':
+            return bool(self._ssl_object.ktls_recv_enabled())
         return self._extra.get(name, default)
 
     cpdef set_protocol(self, protocol):
