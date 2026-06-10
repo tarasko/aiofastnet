@@ -30,5 +30,5 @@ __all__ = [
     'aiofn_is_buffered_protocol'
 ]
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 __author__ = "Taras Kozlov"
