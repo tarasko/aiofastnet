@@ -32,7 +32,9 @@ from .openssl cimport (
     SSL_MODE_AUTO_RETRY,
     SSL_MODE_ENABLE_PARTIAL_WRITE,
     SSL_OP_ENABLE_KTLS,
+    SSL_OP_IGNORE_UNEXPECTED_EOF,
     SSL_VERIFY_PEER,
+    SSL_clear_options,
     SSL_do_handshake,
     SSL_free,
     SSL_get0_alpn_selected,
@@ -87,6 +89,7 @@ import os
 import platform
 import re
 import ssl
+import sys
 import tempfile
 import logging
 from pathlib import Path
@@ -242,6 +245,12 @@ cdef class SSLObject:
             self.ssl = SSL_new(self.ssl_ctx)
             if self.ssl == NULL:
                 raise MemoryError("Unable to allocate SSL object")
+
+            # Some Python 3.9/OpenSSL combinations inherit this option from
+            # SSLContext. Clear it per connection so an unclean TCP EOF remains
+            # an error, matching the behavior seen with newer Python versions.
+            if sys.version_info[:2] < (3, 10):
+                SSL_clear_options(self.ssl, SSL_OP_IGNORE_UNEXPECTED_EOF)
 
             if use_socket_bio:
                 if SSL_set_fd(self.ssl, sock.fileno()) != 1:

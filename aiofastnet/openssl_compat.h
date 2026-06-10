@@ -49,6 +49,7 @@ typedef int (*err_print_errors_cb_fn)(const char *str, size_t len, void *u);
 #define SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER 0x00000002U
 #define SSL_MODE_AUTO_RETRY 0x00000004U
 #define SSL_OP_ENABLE_KTLS SSL_OP_BIT(3)
+#define SSL_OP_IGNORE_UNEXPECTED_EOF SSL_OP_BIT(7)
 
 #define SSL_CTRL_MODE 33
 
@@ -107,6 +108,7 @@ extern BIO *(*aiofn_SSL_get_wbio)(const SSL *ssl);
 extern void (*aiofn_SSL_set_accept_state)(SSL *ssl);
 extern void (*aiofn_SSL_set_connect_state)(SSL *ssl);
 extern long (*aiofn_SSL_ctrl)(SSL *ssl, int cmd, long larg, void *parg);
+extern uint64_t (*aiofn_SSL_clear_options)(SSL *ssl, uint64_t options);
 extern uint64_t (*aiofn_SSL_set_options_sym)(SSL *ssl, uint64_t options);
 long aiofn_SSL_set_mode(SSL *ssl, long mode);
 int aiofn_SSL_set_options_available(void);
@@ -197,6 +199,7 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define SSL_set_accept_state aiofn_SSL_set_accept_state
 #define SSL_set_connect_state aiofn_SSL_set_connect_state
 #define SSL_set_mode aiofn_SSL_set_mode
+#define SSL_clear_options aiofn_SSL_clear_options
 #define SSL_set_options_available aiofn_SSL_set_options_available
 #define SSL_set_options aiofn_SSL_set_options
 #define SSL_set_tlsext_host_name aiofn_SSL_set_tlsext_host_name
