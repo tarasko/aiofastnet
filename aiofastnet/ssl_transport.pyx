@@ -29,6 +29,7 @@ from .utils cimport (
     aiofn_send,
     aiofn_allocate_bytes,
     aiofn_finalize_bytes,
+    aiofn_resize_bytes,
     aiofn_set_nodelay,
     unlikely
 )
@@ -575,55 +576,48 @@ cdef class SSLTransportBase(Transport):
     cdef inline _do_read__copied(self):
         cdef:
             int bytes_read
-            list data = None
-            char* bytes_buffer_ptr
-            bytes first_chunk = None, curr_chunk
-            PyObject* bytes_obj
-            int last_error
-
-        # SSL_read can only read up to 16KB
-        # If there are more data available, you are supposed to call SSL_read again
-        # From https://docs.openssl.org/3.0/man3/SSL_read/#notes
-        #
-        # At most the contents of one record will be returned.
-        # As the size of an SSL/TLS record may exceed the maximum packet size of the underlying transport (e.g. TCP),
-        # it may be necessary to read several packets from the transport layer before the record is complete and
-        # the read call can succeed.
-        cdef:
-            int max_ssl_read_size = 16 * 1024
+            char* bytes_buffer_ptr = NULL
+            PyObject* bytes_obj = NULL
+            int last_error = 0
+            Py_ssize_t capacity
+            Py_ssize_t total_bytes_read
+            Py_ssize_t available
+            Py_ssize_t max_ssl_read_size = 16 * 1024
 
         while True:
+            capacity = self._ssl_object.pending() + max_ssl_read_size
+            if self._ssl_object.incoming != NULL:
+                capacity += self._ssl_object.incoming_bio_pending()
+
+            bytes_obj = aiofn_allocate_bytes(capacity, &bytes_buffer_ptr)
+            total_bytes_read = 0
+
             while True:
-                bytes_obj = aiofn_allocate_bytes(max_ssl_read_size, &bytes_buffer_ptr)
-                bytes_read = self._ssl_object.read(bytes_buffer_ptr, max_ssl_read_size)
+                available = capacity - total_bytes_read
+                if available == 0:
+                    capacity += max(capacity, max_ssl_read_size)
+                    aiofn_resize_bytes(&bytes_obj, capacity, &bytes_buffer_ptr)
+
+                bytes_read = self._ssl_object.read(
+                    bytes_buffer_ptr + total_bytes_read,
+                    min(capacity - total_bytes_read, max_ssl_read_size)
+                )
 
                 if bytes_read <= 0:
                     last_error = self._ssl_object.get_error(bytes_read)
                     if unlikely(self._is_debug):
                         _logger.debug("%r: SSL_read(buf_len=%d)=%d, %s",
-                                      self, max_ssl_read_size, bytes_read,
+                                      self, capacity - total_bytes_read, bytes_read,
                                       ssl_error_name(last_error))
-                    curr_chunk = aiofn_finalize_bytes(bytes_obj, 0)
                     break
 
+                total_bytes_read += bytes_read
                 if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_read(buf_len=%d)=%d",
-                                  self, max_ssl_read_size, bytes_read)
-                curr_chunk = aiofn_finalize_bytes(bytes_obj, bytes_read)
+                    _logger.debug("%r: SSL_read(buf_len=%d)=%d, total=%d",
+                                  self, capacity - total_bytes_read + bytes_read,
+                                  bytes_read, total_bytes_read)
 
-                if first_chunk is None:
-                    first_chunk = curr_chunk
-                elif data is None:
-                    data = [first_chunk, curr_chunk]
-                else:
-                    data.append(curr_chunk)
-
-            user_data = None
-            if data is not None:
-                user_data = b''.join(data)
-            elif first_chunk is not None:
-                user_data = first_chunk
-
+            user_data = aiofn_finalize_bytes(bytes_obj, total_bytes_read)
             if user_data is not None:
                 self._app_protocol.data_received(user_data)
 

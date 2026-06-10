@@ -42,6 +42,7 @@ void (*aiofn_SSL_set_connect_state)(SSL *ssl) = NULL;
 long (*aiofn_SSL_ctrl)(SSL *ssl, int cmd, long larg, void *parg) = NULL;
 uint64_t (*aiofn_SSL_set_options_sym)(SSL *ssl, uint64_t options) = NULL;
 int (*aiofn_SSL_get_error)(const SSL *ssl, int ret_code) = NULL;
+int (*aiofn_SSL_pending)(const SSL *ssl) = NULL;
 int (*aiofn_SSL_renegotiate)(SSL *ssl) = NULL;
 int (*aiofn_SSL_do_handshake)(SSL *ssl) = NULL;
 int (*aiofn_SSL_read)(SSL *ssl, void *buf, int num) = NULL;
@@ -253,6 +254,7 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
     LOAD_REQUIRED(aiofn_SSL_ctrl, "SSL_ctrl");
     aiofn_SSL_set_options_sym = resolve_symbol("SSL_set_options");
     LOAD_REQUIRED(aiofn_SSL_get_error, "SSL_get_error");
+    LOAD_REQUIRED(aiofn_SSL_pending, "SSL_pending");
     LOAD_REQUIRED(aiofn_SSL_renegotiate, "SSL_renegotiate");
     LOAD_REQUIRED(aiofn_SSL_do_handshake, "SSL_do_handshake");
     LOAD_REQUIRED(aiofn_SSL_read, "SSL_read");

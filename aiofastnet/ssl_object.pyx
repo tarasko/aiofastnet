@@ -40,6 +40,7 @@ from .openssl cimport (
     SSL_get_current_cipher,
     SSL_get_error,
     SSL_get_peer_certificate,
+    SSL_pending,
     SSL_get_rbio,
     SSL_get_verify_result,
     SSL_get_wbio,
@@ -218,8 +219,15 @@ cdef class SSLObject:
                 incoming = NULL
                 outgoing = NULL
 
+                # Both _do_read__copied and _do_read_buffered call SSL_read in the loop
+                # until all data is consumed from the incoming BIO. Setting read_ahead to 1
+                # may cause SSL to over-consume data from incoming BIO and cache it internally,
+                # thus grow its internal buffers
+                # Single call to SSL_read can't return more than 16 KB regardless of this setting
+
+                SSL_set_read_ahead(self.ssl, 0)
+
             SSL_set_mode(self.ssl, SSL_MODE_AUTO_RETRY | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_ENABLE_PARTIAL_WRITE)
-            SSL_set_read_ahead(self.ssl, 1)
         except:
             if incoming != NULL:
                 BIO_free(incoming)
@@ -310,6 +318,9 @@ cdef class SSLObject:
     cdef inline int write(self, const void *buf, size_t num) noexcept:
         return SSL_write(self.ssl, buf, num)
 
+    cdef Py_ssize_t pending(self) noexcept:
+        return <Py_ssize_t>SSL_pending(self.ssl)
+
     cdef int outgoing_bio_reset(self) noexcept:
         return BIO_reset(self.outgoing)
 
@@ -322,6 +333,9 @@ cdef class SSLObject:
     cdef outgoing_bio_consume(self, Py_ssize_t nbytes):
         if BIO_static_mem_consume(self.outgoing, <size_t>nbytes) != 1:
             raise RuntimeError("BIO_static_mem_consume(outgoing) failed")
+
+    cdef Py_ssize_t incoming_bio_pending(self) except -1:
+        return _bio_pending(self.incoming)
 
     cdef incoming_bio_get_write_buf(self, char **pp, Py_ssize_t *space):
         cdef size_t sz = 0
