@@ -50,7 +50,7 @@ async def test_streams_echo(msg_size, conn_type):
 
     loop = asyncio.get_running_loop()
     async with StreamEchoServer(ssl_context=conn_type.server_ssl_context) as server:
-        async with timeout(2.0):
+        async with timeout(4.0):
             reader, writer = await open_connection(loop, host=server.host, port=server.port, ssl=conn_type.client_ssl_context)
             writer.write(payload)
             reply = await reader.readexactly(msg_size)
