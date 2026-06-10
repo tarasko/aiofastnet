@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.10.0
+------------------
+
+* Optimized bytes object creation for data_received in simple protocols
+
 0.9.0
 ------------------
 
