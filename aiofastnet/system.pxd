@@ -111,6 +111,17 @@ cdef extern from *:
         _PyBytes_Resize(&obj, new_size);
         return obj;
     }
+
+    int aiofn_resize_bytes(PyObject** obj, Py_ssize_t new_size, char** ptr)
+    {
+        if (_PyBytes_Resize(obj, new_size) < 0)
+        {
+            *ptr = NULL;
+            return -1;
+        }
+        *ptr = PyBytes_AS_STRING(*obj);
+        return 0;
+    }
     """
 
     cdef bint AIOFN_IS_APPLE
@@ -125,6 +136,7 @@ cdef extern from *:
     void aiofn_set_exc_from_error(int error)
     PyObject* aiofn_allocate_bytes(Py_ssize_t sz, char** buf) except NULL
     bytes aiofn_finalize_bytes(PyObject* obj, Py_ssize_t sz)
+    int aiofn_resize_bytes(PyObject** obj, Py_ssize_t sz, char** buf) except -1
 
     ssize_t recv(int sockfd, void* buf, size_t len, int flags)
     ssize_t send(int sockfd, const void* buf, size_t len, int flags)
