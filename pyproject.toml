@@ -38,6 +38,7 @@ Documentation = "https://aiofastnet.readthedocs.io/en/latest"
 
 [tool.setuptools]
 packages = ["aiofastnet"]
+package-data = {aiofastnet = ["*.pyi", "py.typed"]}
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
@@ -46,6 +47,11 @@ version = {attr = "aiofastnet.__version__"}
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.mypy]
+files = ["tests/typing/public_api.py"]
+follow_imports = "silent"
+strict = true
 
 [tool.coverage.run]
 source = ["aiofastnet"]
