@@ -70,7 +70,7 @@ jobs:
         python setup.py build_ext --inplace --with-coverage --force
     - name: Make coverage report
       run: |
-        pytest -v --cov=aiofastnet --cov-report=xml:coverage-${{ runner.os }}.xml --asyncio-debug
+        pytest -n auto -v --cov=aiofastnet --cov-report=xml:coverage-${{ runner.os }}.xml --asyncio-debug
     - name: Upload coverage report
       uses: codecov/codecov-action@v6
       with:
@@ -158,7 +158,7 @@ jobs:
 
     - name: Run tests
       run: |
-        pytest -v
+        pytest -n auto -v
 
   build-musllinux:
     name: musllinux (${{ matrix.python-tag }})
@@ -191,6 +191,6 @@ jobs:
             "$PYBIN/python" -m pip install -r requirements.txt
             "$PYBIN/python" -m pip install -r requirements-test.txt
             "$PYBIN/python" setup.py build_ext --inplace
-            "$PYBIN/python" -m pytest -v
+            "$PYBIN/python" -m pytest -n auto -v
           '
         
