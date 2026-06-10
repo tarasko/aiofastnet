@@ -42,8 +42,6 @@ typedef int (*bio_destroy_fn)(BIO *);
 typedef int (*err_print_errors_cb_fn)(const char *str, size_t len, void *u);
 
 #define SSL_VERIFY_PEER 0x01
-#define SSL_SENT_SHUTDOWN 1
-#define SSL_RECEIVED_SHUTDOWN 2
 
 #define SSL_OP_BIT(n)  ((uint64_t)1 << (uint64_t)n)
 
@@ -82,7 +80,6 @@ const char *openssl_compat_last_error(void);
 
 extern BIO *(*aiofn_BIO_new)(const BIO_METHOD *type);
 extern int (*aiofn_BIO_free)(BIO *a);
-extern int (*aiofn_BIO_socket_nbio)(int fd, int mode);
 extern long (*aiofn_BIO_ctrl)(BIO *bp, int cmd, long larg, void *parg);
 extern void (*aiofn_BIO_set_flags)(BIO *b, int flags);
 extern void (*aiofn_BIO_clear_flags)(BIO *b, int flags);
@@ -116,14 +113,12 @@ int aiofn_SSL_set_options_available(void);
 uint64_t aiofn_SSL_set_options(SSL *ssl, uint64_t options);
 int aiofn_SSL_set_tlsext_host_name(const SSL *s, const char *name);
 extern int (*aiofn_SSL_get_error)(const SSL *ssl, int ret_code);
-extern int (*aiofn_SSL_pending)(const SSL *ssl);
 extern int (*aiofn_SSL_renegotiate)(SSL *ssl);
 extern int (*aiofn_SSL_do_handshake)(SSL *ssl);
 extern int (*aiofn_SSL_read)(SSL *ssl, void *buf, int num);
 extern int (*aiofn_SSL_write)(SSL *ssl, const void *buf, int num);
 extern ssize_t (*aiofn_SSL_sendfile)(SSL *ssl, int fd, off_t offset, size_t size, int flags);
 extern int (*aiofn_SSL_shutdown)(SSL *ssl);
-extern int (*aiofn_SSL_get_shutdown)(const SSL *ssl);
 extern long (*aiofn_SSL_get_verify_result)(const SSL *ssl);
 extern X509 *(*aiofn_SSL_get_peer_certificate)(const SSL *ssl);
 extern void (*aiofn_SSL_get0_alpn_selected)(const SSL *ssl, const unsigned char **data,
@@ -168,7 +163,6 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 
 #define BIO_new aiofn_BIO_new
 #define BIO_free aiofn_BIO_free
-#define BIO_socket_nbio aiofn_BIO_socket_nbio
 #define BIO_ctrl aiofn_BIO_ctrl
 #define BIO_set_flags aiofn_BIO_set_flags
 #define BIO_clear_flags aiofn_BIO_clear_flags
@@ -206,13 +200,11 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define SSL_set_options aiofn_SSL_set_options
 #define SSL_set_tlsext_host_name aiofn_SSL_set_tlsext_host_name
 #define SSL_get_error aiofn_SSL_get_error
-#define SSL_pending aiofn_SSL_pending
 #define SSL_renegotiate aiofn_SSL_renegotiate
 #define SSL_do_handshake aiofn_SSL_do_handshake
 #define SSL_read aiofn_SSL_read
 #define SSL_write aiofn_SSL_write
 #define SSL_shutdown aiofn_SSL_shutdown
-#define SSL_get_shutdown aiofn_SSL_get_shutdown
 #define SSL_get_verify_result aiofn_SSL_get_verify_result
 #define SSL_get_peer_certificate aiofn_SSL_get_peer_certificate
 #define SSL_get0_alpn_selected aiofn_SSL_get0_alpn_selected

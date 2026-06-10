@@ -1,4 +1,76 @@
-from .openssl cimport *
+from .openssl cimport (
+    ASN1_OCTET_STRING,
+    ASN1_OCTET_STRING_free,
+    ASN1_STRING_get0_data,
+    ASN1_STRING_length,
+    BIO,
+    BIO_free,
+    BIO_get_ktls_recv,
+    BIO_get_ktls_send,
+    BIO_get_mem_data,
+    BIO_pending,
+    BIO_reset,
+    BIO_set_nbio,
+    BIO_new_static_mem,
+    BIO_static_mem_consume,
+    BIO_static_mem_get_write_buf,
+    BIO_static_mem_produce,
+    ERR_GET_LIB,
+    ERR_clear_error,
+    ERR_lib_error_string,
+    ERR_peek_last_error,
+    ERR_print_errors_cb,
+    ERR_reason_error_string,
+    SSL,
+    SSL_CIPHER,
+    SSL_CIPHER_get_bits,
+    SSL_CIPHER_get_name,
+    SSL_CIPHER_get_version,
+    SSL_CTX,
+    SSL_CTX_get0_param,
+    SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER,
+    SSL_MODE_AUTO_RETRY,
+    SSL_MODE_ENABLE_PARTIAL_WRITE,
+    SSL_OP_ENABLE_KTLS,
+    SSL_VERIFY_PEER,
+    SSL_do_handshake,
+    SSL_free,
+    SSL_get0_alpn_selected,
+    SSL_get0_param,
+    SSL_get_current_cipher,
+    SSL_get_error,
+    SSL_get_peer_certificate,
+    SSL_get_rbio,
+    SSL_get_verify_result,
+    SSL_get_wbio,
+    SSL_new,
+    SSL_read,
+    SSL_renegotiate,
+    SSL_sendfile,
+    SSL_set_accept_state,
+    SSL_set_bio,
+    SSL_set_connect_state,
+    SSL_set_fd,
+    SSL_set_mode,
+    SSL_set_options,
+    SSL_set_options_available,
+    SSL_set_read_ahead,
+    SSL_set_tlsext_host_name,
+    SSL_shutdown,
+    SSL_write,
+    X509,
+    X509_VERIFY_PARAM,
+    X509_VERIFY_PARAM_get_hostflags,
+    X509_VERIFY_PARAM_set1_host,
+    X509_VERIFY_PARAM_set1_ip,
+    X509_VERIFY_PARAM_set_hostflags,
+    X509_free,
+    X509_verify_cert_error_string,
+    a2i_IPADDRESS,
+    i2d_X509,
+    init_openssl_compat,
+    openssl_compat_last_error,
+)
 from .openssl_compat import OPENSSL_DYN_LIBS
 
 from cpython.object cimport PyObject
@@ -19,10 +91,6 @@ cdef object _logger = logging.getLogger('aiofastnet.ssl')
 
 
 cdef _init_openssl():
-    cdef:
-        const char* ssl_lib_ptr
-        const char* crypto_lib_ptr
-
     if init_openssl_compat(OPENSSL_DYN_LIBS.libssl_path, OPENSSL_DYN_LIBS.libcrypto_path) != 1:
         missing_lib = openssl_compat_last_error()
         if missing_lib != NULL:
@@ -233,9 +301,6 @@ cdef class SSLObject:
     cdef int do_handshake(self) noexcept:
         return SSL_do_handshake(self.ssl)
 
-    cdef int get_shutdown(self) noexcept:
-        return SSL_get_shutdown(self.ssl)
-
     cdef int shutdown(self) noexcept:
         return SSL_shutdown(self.ssl)
 
@@ -244,9 +309,6 @@ cdef class SSLObject:
 
     cdef inline int write(self, const void *buf, size_t num) noexcept:
         return SSL_write(self.ssl, buf, num)
-
-    cdef Py_ssize_t pending(self) noexcept:
-        return <Py_ssize_t>SSL_pending(self.ssl)
 
     cdef int outgoing_bio_reset(self) noexcept:
         return BIO_reset(self.outgoing)
@@ -260,9 +322,6 @@ cdef class SSLObject:
     cdef outgoing_bio_consume(self, Py_ssize_t nbytes):
         if BIO_static_mem_consume(self.outgoing, <size_t>nbytes) != 1:
             raise RuntimeError("BIO_static_mem_consume(outgoing) failed")
-
-    cdef Py_ssize_t incoming_bio_pending(self) except -1:
-        return _bio_pending(self.incoming)
 
     cdef incoming_bio_get_write_buf(self, char **pp, Py_ssize_t *space):
         cdef size_t sz = 0

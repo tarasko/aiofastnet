@@ -20,9 +20,6 @@ cdef extern from "openssl_compat.h":
     ctypedef struct SSL:
         pass
 
-    ctypedef struct BIO_METHOD:
-        pass
-
     ctypedef struct BIO:
         pass
 
@@ -40,8 +37,6 @@ cdef extern from "openssl_compat.h":
 
     enum:
         SSL_VERIFY_PEER
-        SSL_SENT_SHUTDOWN
-        SSL_RECEIVED_SHUTDOWN
         SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER
         SSL_MODE_ENABLE_PARTIAL_WRITE
         SSL_MODE_AUTO_RETRY
@@ -50,9 +45,7 @@ cdef extern from "openssl_compat.h":
     int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path)
     const char* openssl_compat_last_error()
 
-    BIO *BIO_new(const BIO_METHOD *type)
     int BIO_free(BIO *a)
-    int BIO_socket_nbio(int fd, int mode)
     int BIO_pending(BIO *b)
     long BIO_set_nbio(BIO *b, long n)
     long BIO_get_mem_data(BIO *b, char** pp)
@@ -74,13 +67,11 @@ cdef extern from "openssl_compat.h":
     long SSL_set_mode(SSL *ssl, long mode)
     int SSL_set_tlsext_host_name(const SSL *s, const char *name)
     int SSL_get_error(const SSL *ssl, int ret)
-    int SSL_pending(const SSL *ssl)
     int SSL_renegotiate(SSL *ssl)
     int SSL_do_handshake(SSL *ssl)
     int SSL_read(SSL *ssl, void *buf, int num)
     int SSL_write(SSL *ssl, const void *buf, int num)
     int SSL_shutdown(SSL *ssl)
-    int SSL_get_shutdown(const SSL *ssl)
     long SSL_get_verify_result(const SSL *ssl)
     void SSL_get0_alpn_selected(const SSL *ssl, const unsigned char **data, unsigned int *len)
     void SSL_set_read_ahead(SSL *s, int yes)

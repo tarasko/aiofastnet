@@ -13,7 +13,6 @@
 
 BIO *(*aiofn_BIO_new)(const BIO_METHOD *type) = NULL;
 int (*aiofn_BIO_free)(BIO *a) = NULL;
-int (*aiofn_BIO_socket_nbio)(int fd, int mode) = NULL;
 long (*aiofn_BIO_ctrl)(BIO *bp, int cmd, long larg, void *parg) = NULL;
 void (*aiofn_BIO_set_flags)(BIO *b, int flags) = NULL;
 void (*aiofn_BIO_clear_flags)(BIO *b, int flags) = NULL;
@@ -43,14 +42,12 @@ void (*aiofn_SSL_set_connect_state)(SSL *ssl) = NULL;
 long (*aiofn_SSL_ctrl)(SSL *ssl, int cmd, long larg, void *parg) = NULL;
 uint64_t (*aiofn_SSL_set_options_sym)(SSL *ssl, uint64_t options) = NULL;
 int (*aiofn_SSL_get_error)(const SSL *ssl, int ret_code) = NULL;
-int (*aiofn_SSL_pending)(const SSL *ssl) = NULL;
 int (*aiofn_SSL_renegotiate)(SSL *ssl) = NULL;
 int (*aiofn_SSL_do_handshake)(SSL *ssl) = NULL;
 int (*aiofn_SSL_read)(SSL *ssl, void *buf, int num) = NULL;
 int (*aiofn_SSL_write)(SSL *ssl, const void *buf, int num) = NULL;
 ssize_t (*aiofn_SSL_sendfile)(SSL *ssl, int fd, off_t offset, size_t size, int flags) = NULL;
 int (*aiofn_SSL_shutdown)(SSL *ssl) = NULL;
-int (*aiofn_SSL_get_shutdown)(const SSL *ssl) = NULL;
 long (*aiofn_SSL_get_verify_result)(const SSL *ssl) = NULL;
 X509 *(*aiofn_SSL_get_peer_certificate)(const SSL *ssl) = NULL;
 void (*aiofn_SSL_get0_alpn_selected)(const SSL *ssl, const unsigned char **data,
@@ -227,7 +224,6 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
 
     LOAD_REQUIRED(aiofn_BIO_new, "BIO_new");
     LOAD_REQUIRED(aiofn_BIO_free, "BIO_free");
-    LOAD_REQUIRED(aiofn_BIO_socket_nbio, "BIO_socket_nbio");
     LOAD_REQUIRED(aiofn_BIO_ctrl, "BIO_ctrl");
     LOAD_REQUIRED(aiofn_BIO_set_flags, "BIO_set_flags");
     LOAD_REQUIRED(aiofn_BIO_clear_flags, "BIO_clear_flags");
@@ -257,14 +253,12 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
     LOAD_REQUIRED(aiofn_SSL_ctrl, "SSL_ctrl");
     aiofn_SSL_set_options_sym = resolve_symbol("SSL_set_options");
     LOAD_REQUIRED(aiofn_SSL_get_error, "SSL_get_error");
-    LOAD_REQUIRED(aiofn_SSL_pending, "SSL_pending");
     LOAD_REQUIRED(aiofn_SSL_renegotiate, "SSL_renegotiate");
     LOAD_REQUIRED(aiofn_SSL_do_handshake, "SSL_do_handshake");
     LOAD_REQUIRED(aiofn_SSL_read, "SSL_read");
     LOAD_REQUIRED(aiofn_SSL_write, "SSL_write");
     aiofn_SSL_sendfile = resolve_symbol("SSL_sendfile");
     LOAD_REQUIRED(aiofn_SSL_shutdown, "SSL_shutdown");
-    LOAD_REQUIRED(aiofn_SSL_get_shutdown, "SSL_get_shutdown");
     LOAD_REQUIRED(aiofn_SSL_set_read_ahead, "SSL_set_read_ahead");
     LOAD_REQUIRED(aiofn_SSL_get_verify_result, "SSL_get_verify_result");
     LOAD_REQUIRED(aiofn_SSL_get0_alpn_selected, "SSL_get0_alpn_selected");

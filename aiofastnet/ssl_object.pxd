@@ -43,11 +43,9 @@ cdef class SSLObject:
     # These methods wrap SSL* operations
     cdef inline int get_error(self, int ret) noexcept
     cdef inline int do_handshake(self) noexcept
-    cdef inline int get_shutdown(self) noexcept
     cdef inline int shutdown(self) noexcept
     cdef inline int read(self, void *buf, size_t num) noexcept
     cdef inline int write(self, const void *buf, size_t num) noexcept
-    cdef inline Py_ssize_t pending(self) noexcept
     cdef inline allow_renegotiation(self)
     cdef inline int renegotiate(self) noexcept
     cdef inline int sendfile_available(self) noexcept
@@ -59,7 +57,6 @@ cdef class SSLObject:
     cdef inline Py_ssize_t outgoing_bio_get_data(self, char** pp) noexcept
     cdef inline outgoing_bio_consume(self, Py_ssize_t nbytes)
 
-    cdef inline Py_ssize_t incoming_bio_pending(self) except -1
     cdef inline incoming_bio_get_write_buf(self, char **pp, Py_ssize_t *space)
     cdef inline incoming_bio_produce(self, Py_ssize_t nbytes)
 

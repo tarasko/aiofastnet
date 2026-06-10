@@ -572,38 +572,43 @@ cdef class SSLTransportBase(Transport):
             if not self._should_retry_read(last_error) or self._read_paused:
                 return
 
-    cdef inline Py_ssize_t _pending_estimate(self) noexcept:
-        # TODO: Supposed to be overriden
-        return 128*1024
-
     cdef inline _do_read__copied(self):
         cdef:
             int bytes_read
             list data = None
             char* bytes_buffer_ptr
             bytes first_chunk = None, curr_chunk
-            Py_ssize_t bytes_estimated
             PyObject* bytes_obj
             int last_error
 
+        # SSL_read can only read up to 16KB
+        # If there are more data available, you are supposed to call SSL_read again
+        # From https://docs.openssl.org/3.0/man3/SSL_read/#notes
+        #
+        # At most the contents of one record will be returned.
+        # As the size of an SSL/TLS record may exceed the maximum packet size of the underlying transport (e.g. TCP),
+        # it may be necessary to read several packets from the transport layer before the record is complete and
+        # the read call can succeed.
+        cdef:
+            int max_ssl_read_size = 16 * 1024
+
         while True:
             while True:
-                bytes_estimated = self._pending_estimate()
-                bytes_obj = aiofn_allocate_bytes(bytes_estimated, &bytes_buffer_ptr)
-                bytes_read = self._ssl_object.read(bytes_buffer_ptr, bytes_estimated)
+                bytes_obj = aiofn_allocate_bytes(max_ssl_read_size, &bytes_buffer_ptr)
+                bytes_read = self._ssl_object.read(bytes_buffer_ptr, max_ssl_read_size)
 
                 if bytes_read <= 0:
                     last_error = self._ssl_object.get_error(bytes_read)
                     if unlikely(self._is_debug):
                         _logger.debug("%r: SSL_read(buf_len=%d)=%d, %s",
-                                      self, bytes_estimated, bytes_read,
+                                      self, max_ssl_read_size, bytes_read,
                                       ssl_error_name(last_error))
                     curr_chunk = aiofn_finalize_bytes(bytes_obj, 0)
                     break
 
                 if unlikely(self._is_debug):
                     _logger.debug("%r: SSL_read(buf_len=%d)=%d",
-                                  self, bytes_estimated, bytes_read)
+                                  self, max_ssl_read_size, bytes_read)
                 curr_chunk = aiofn_finalize_bytes(bytes_obj, bytes_read)
 
                 if first_chunk is None:
@@ -674,7 +679,7 @@ cdef class SSLTransportBase(Transport):
 
     cdef inline _do_read_into_void(self):
         cdef:
-            bytearray buffer = bytearray(17 * 1024)
+            bytearray buffer = bytearray(16 * 1024)
             int bytes_read
             int ssl_error
 
@@ -903,7 +908,6 @@ cdef class SSLTransportBase(Transport):
             char* data_ptr
             Py_ssize_t data_len
             bint add_to_backlog = False
-            Py_ssize_t data_cnt = len(list_of_data)
             Py_ssize_t idx
 
         try:
@@ -1081,9 +1085,7 @@ cdef class SSLTransportBase(Transport):
             raise NotImplementedError(
                 "TLS 1.3 does not support classic SSL renegotiation")
 
-        cdef:
-            int rc
-            int ssl_error
+        cdef int rc
 
         try:
             rc = self._ssl_object.renegotiate()
