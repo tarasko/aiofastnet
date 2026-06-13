@@ -201,7 +201,7 @@ cdef class SocketTransport(Transport):
         if self._server is not None:
             self._server._attach(self)
 
-        self._sendfile_compatible = True
+        self._sendfile_compatible = os.name != 'nt'
 
         self._eof = False
         self._is_debug = loop.get_debug()
