@@ -165,6 +165,8 @@ cdef class SocketTransport(Transport):
         bint _closing
         bint _paused
 
+        public bint _sendfile_compatible
+
         bint _eof
         bint _is_debug
 
@@ -198,6 +200,8 @@ cdef class SocketTransport(Transport):
 
         if self._server is not None:
             self._server._attach(self)
+
+        self._sendfile_compatible = os.name != 'nt'
 
         self._eof = False
         self._is_debug = loop.get_debug()
@@ -674,6 +678,12 @@ cdef class SocketTransport(Transport):
 
     async def sendfile(self, file, offset, count):
         self._check_thread("sendfile")
+
+        # This is an undocumented feature in asyncio and uvloop
+        # Some 3rdparty tests use it to disable native sendfile (for example aiohttp tests)
+        if not self._sendfile_compatible:
+            raise NotImplementedError()
+
         if self._eof:
             raise RuntimeError('Cannot call sendfile() after write_eof()')
 
