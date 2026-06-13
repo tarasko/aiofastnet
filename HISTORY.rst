@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.12.0
+------------------
+
+* Added undocumented, but used by 3rdparties Transport._sendfile_compatible attribute
+
 0.11.0
 ------------------
 

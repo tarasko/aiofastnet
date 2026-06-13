@@ -126,6 +126,7 @@ cdef class SSLTransportBase(Transport):
         object _shutdown_timeout_handle
         object _ssl_layer_num
 
+        public bint _sendfile_compatible
         bint _server_side
         str _server_hostname
 
@@ -150,9 +151,6 @@ cdef class SSLTransportBase(Transport):
         raise NotImplementedError()
 
     cdef _is_closed(self):
-        raise NotImplementedError()
-
-    cdef _check_sendfile_supported(self):
         raise NotImplementedError()
 
     cdef bint _try_sendfile(self, SendFileRequest req) except -1:
@@ -236,6 +234,7 @@ cdef class SSLTransportBase(Transport):
         self._handshake_timeout_handle = None
         self._shutdown_timeout_handle = None
         self._ssl_layer_num = 0
+        self._sendfile_compatible = False
         self._server_side = server_side
         self._server_hostname = None if server_side else server_hostname
         self._state = SSLProtocolState.UNWRAPPED
@@ -465,6 +464,8 @@ cdef class SSLTransportBase(Transport):
             (self._ssl_object.outgoing == NULL and not self._ssl_object.ktls_send_enabled())
         ):
             _log_ktls_deactivation_reason(self)
+
+        self._sendfile_compatible = self._ssl_object.sendfile_available() and self._ssl_object.ktls_send_enabled()
 
         self._extra.update(
             peercert=self._ssl_object.getpeercert(),
@@ -797,10 +798,8 @@ cdef class SSLTransportBase(Transport):
 
         # This is an undocumented feature in asyncio and uvloop
         # Some 3rdparty tests use it to disable native sendfile (for example aiohttp tests)
-        if not getattr(self, '_sendfile_compatible', True):
+        if not self._sendfile_compatible:
             raise NotImplementedError()
-
-        self._check_sendfile_supported()
 
         if not self._is_protocol_ready():
             raise RuntimeError("Transport is closing")
@@ -1300,11 +1299,6 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         except BaseException as exc:
             # _fatal_error will always _drop_writer()
             self._fatal_error(exc, "Error occurred during write")
-
-    cdef _check_sendfile_supported(self):
-        if not self._ssl_object.sendfile_available() or \
-            not self._ssl_object.ktls_send_enabled():
-            raise NotImplementedError()
 
     cdef bint _try_sendfile(self, SendFileRequest req) except -1:
         cdef Py_ssize_t bytes_written
