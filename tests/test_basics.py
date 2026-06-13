@@ -398,6 +398,10 @@ async def test_sendfile(all_loops, conn_type, file_size, header_size, tail_size)
                 reply = await client.readn(len(tail))
                 assert reply == tail
 
+                client.transport._sendfile_compatible = False
+                with pytest.raises(NotImplementedError):
+                    await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2)
+
 
 async def test_sendfile_huge_error(all_loops, conn_type):
     conn_type.check_sendfile_supported()
