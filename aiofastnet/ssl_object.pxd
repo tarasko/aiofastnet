@@ -36,6 +36,7 @@ cdef class SSLObject:
     cpdef object version(self)
     cpdef tuple cipher(self)
     cpdef object getpeercert(self, binary_form=*)
+    cpdef object get_channel_binding(self, str cb_type=*)
     cpdef str compression(self)
     cpdef object selected_alpn_protocol(self)
     cpdef bint is_socket_bio_enabled(self)

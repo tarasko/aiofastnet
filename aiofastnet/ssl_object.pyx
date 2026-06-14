@@ -41,6 +41,8 @@ from .openssl cimport (
     SSL_get0_param,
     SSL_get_current_cipher,
     SSL_get_error,
+    SSL_get_finished,
+    SSL_get_peer_finished,
     SSL_get_peer_certificate,
     SSL_get_version,
     SSL_pending,
@@ -61,6 +63,7 @@ from .openssl cimport (
     SSL_set_read_ahead,
     SSL_set_tlsext_host_name,
     SSL_shutdown,
+    SSL_session_reused,
     SSL_write,
     X509,
     X509_VERIFY_PARAM,
@@ -354,6 +357,27 @@ cdef class SSLObject:
             return self._decode_certificate(peer_cert) if verification & SSL_VERIFY_PEER else dict()
         finally:
             X509_free(peer_cert)
+
+    cpdef object get_channel_binding(self, str cb_type="tls-unique"):
+        cdef:
+            char buf[128]
+            size_t length
+            bint session_reused
+
+        if cb_type != "tls-unique":
+            raise ValueError(
+                f"'{cb_type}' channel binding type not implemented")
+
+        # Match CPython's RFC 5929 tls-unique selection rule.
+        session_reused = SSL_session_reused(self.ssl) != 0
+        if session_reused ^ (not self.server_side):
+            length = SSL_get_finished(self.ssl, buf, sizeof(buf))
+        else:
+            length = SSL_get_peer_finished(self.ssl, buf, sizeof(buf))
+
+        if length == 0:
+            return None
+        return PyBytes_FromStringAndSize(buf, length)
 
     # TODO: I don't think people would need this.
     # For now I return None but if somebody asks can be made compatible with

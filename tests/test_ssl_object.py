@@ -86,6 +86,37 @@ def test_ssl_object_uses_memory_bio_when_ktls_kernel_unavailable(monkeypatch):
     )
 
 
+def test_ssl_get_channel_binding_before_handshake():
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    ssl_obj = ssl_object.SSLObject(
+        context,
+        False,
+        None,
+        1024,
+        1024,
+    )
+
+    assert ssl_obj.get_channel_binding() is None
+
+
+def test_ssl_get_channel_binding_rejects_unknown_type():
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    ssl_obj = ssl_object.SSLObject(
+        context,
+        False,
+        None,
+        1024,
+        1024,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="'tls-exporter' channel binding type not implemented",
+    ):
+        ssl_obj.get_channel_binding("tls-exporter")
+
 
 async def test_ssl_selected_alpn_protocol(ssl_conn_type):
     ssl_conn_type.server_ssl_context.set_alpn_protocols(["h2", "http/1.1"])
@@ -110,6 +141,21 @@ async def test_ssl_selected_alpn_protocol_none(ssl_conn_type):
 
             assert client_ssl_object.selected_alpn_protocol() is None
             assert server_ssl_object.selected_alpn_protocol() is None
+
+
+async def test_ssl_get_channel_binding(ssl_conn_type):
+    async with TestServer(ct=ssl_conn_type) as server:
+        async with TestClient(server, ct=ssl_conn_type) as client:
+            client_ssl_object = client.transport.get_extra_info("ssl_object")
+            server_client = await server.get_any_server_client()
+            server_ssl_object = server_client.transport.get_extra_info("ssl_object")
+
+            client_binding = client_ssl_object.get_channel_binding()
+            server_binding = server_ssl_object.get_channel_binding("tls-unique")
+
+            assert isinstance(client_binding, bytes)
+            assert client_binding
+            assert server_binding == client_binding
 
 
 async def test_ssl_object_connection_attributes(ssl_conn_type):
@@ -144,4 +190,3 @@ async def test_ssl_getpeercert_binary_form(ssl_conn_type):
             assert client_ssl_object.getpeercert(binary_form=True) == expected_der
             assert client_ssl_object.getpeercert(binary_form=False) == {}
             assert server_ssl_object.getpeercert(binary_form=True) is None
-

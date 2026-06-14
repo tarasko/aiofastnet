@@ -124,6 +124,9 @@ extern ssize_t (*aiofn_SSL_sendfile)(SSL *ssl, int fd, off_t offset, size_t size
 extern int (*aiofn_SSL_shutdown)(SSL *ssl);
 extern long (*aiofn_SSL_get_verify_result)(const SSL *ssl);
 extern const char *(*aiofn_SSL_get_version)(const SSL *ssl);
+extern size_t (*aiofn_SSL_get_finished)(const SSL *ssl, void *buf, size_t count);
+extern size_t (*aiofn_SSL_get_peer_finished)(const SSL *ssl, void *buf, size_t count);
+extern int (*aiofn_SSL_session_reused)(const SSL *ssl);
 extern X509 *(*aiofn_SSL_get_peer_certificate)(const SSL *ssl);
 extern void (*aiofn_SSL_get0_alpn_selected)(const SSL *ssl, const unsigned char **data,
                                             unsigned int *len);
@@ -213,6 +216,9 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define SSL_shutdown aiofn_SSL_shutdown
 #define SSL_get_verify_result aiofn_SSL_get_verify_result
 #define SSL_get_version aiofn_SSL_get_version
+#define SSL_get_finished aiofn_SSL_get_finished
+#define SSL_get_peer_finished aiofn_SSL_get_peer_finished
+#define SSL_session_reused aiofn_SSL_session_reused
 #define SSL_get_peer_certificate aiofn_SSL_get_peer_certificate
 #define SSL_get0_alpn_selected aiofn_SSL_get0_alpn_selected
 #define SSL_get_current_cipher aiofn_SSL_get_current_cipher

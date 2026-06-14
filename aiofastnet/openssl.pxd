@@ -77,6 +77,9 @@ cdef extern from "openssl_compat.h":
     int SSL_shutdown(SSL *ssl)
     long SSL_get_verify_result(const SSL *ssl)
     const char *SSL_get_version(const SSL *ssl)
+    size_t SSL_get_finished(const SSL *ssl, void *buf, size_t count)
+    size_t SSL_get_peer_finished(const SSL *ssl, void *buf, size_t count)
+    int SSL_session_reused(const SSL *ssl)
     void SSL_get0_alpn_selected(const SSL *ssl, const unsigned char **data, unsigned int *len)
     void SSL_set_read_ahead(SSL *s, int yes)
 
