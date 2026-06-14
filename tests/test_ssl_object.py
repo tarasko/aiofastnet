@@ -210,7 +210,8 @@ async def test_ssl_object_connection_attributes(ssl_conn_type):
 
 
 async def test_ssl_getpeercert_binary_form(ssl_conn_type):
-    expected_der = ssl.PEM_cert_to_DER_cert(open("tests/test.crt", "r", encoding="ascii").read())
+    expected_der = ssl.PEM_cert_to_DER_cert(
+        open("tests/test.crt", "r", encoding="ascii").read())
 
     async with TestServer(ct=ssl_conn_type) as server:
         async with TestClient(server, ct=ssl_conn_type) as client:
@@ -221,3 +222,15 @@ async def test_ssl_getpeercert_binary_form(ssl_conn_type):
             assert client_ssl_object.getpeercert(binary_form=True) == expected_der
             assert client_ssl_object.getpeercert(binary_form=False) == {}
             assert server_ssl_object.getpeercert(binary_form=True) is None
+
+
+async def test_ssl_getpeercert_decoded(ssl_conn_type):
+    expected = ssl._ssl._test_decode_cert("tests/test.crt")
+    ssl_conn_type.client_ssl_context.load_verify_locations("tests/test.crt")
+    ssl_conn_type.client_ssl_context.verify_mode = ssl.CERT_REQUIRED
+
+    async with TestServer(ct=ssl_conn_type) as server:
+        async with TestClient(server, ct=ssl_conn_type) as client:
+            ssl_obj = client.transport.get_extra_info("ssl_object")
+
+            assert ssl_obj.getpeercert() == expected

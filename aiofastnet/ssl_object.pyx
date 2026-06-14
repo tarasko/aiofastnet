@@ -33,7 +33,6 @@ from .openssl cimport (
     SSL_MODE_ENABLE_PARTIAL_WRITE,
     SSL_OP_ENABLE_KTLS,
     SSL_OP_IGNORE_UNEXPECTED_EOF,
-    SSL_VERIFY_PEER,
     SSL_clear_options,
     SSL_do_handshake,
     SSL_free,
@@ -359,7 +358,8 @@ cdef class SSLObject:
         try:
             if binary_form:
                 return self._certificate_to_der(peer_cert)
-            return self._decode_certificate(peer_cert) if verification & SSL_VERIFY_PEER else dict()
+            return self._decode_certificate(
+                peer_cert) if verification != ssl.CERT_NONE else dict()
         finally:
             X509_free(peer_cert)
 
