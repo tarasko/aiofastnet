@@ -133,6 +133,24 @@ def test_ssl_certificate_chains_before_handshake():
     assert ssl_obj.get_unverified_chain() == []
 
 
+@pytest.mark.parametrize("server_hostname", ["", ".aiofastnet.org"])
+def test_ssl_object_rejects_invalid_server_hostname(server_hostname):
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+
+    with pytest.raises(
+        ValueError,
+        match="server_hostname cannot be an empty string or start with a leading dot",
+    ):
+        ssl_object.SSLObject(
+            context,
+            False,
+            server_hostname,
+            1024,
+            1024,
+        )
+
+
 async def test_ssl_selected_alpn_protocol(ssl_conn_type):
     ssl_conn_type.server_ssl_context.set_alpn_protocols(["h2", "http/1.1"])
     ssl_conn_type.client_ssl_context.set_alpn_protocols(["http/1.1", "h2"])
@@ -234,3 +252,39 @@ async def test_ssl_getpeercert_decoded(ssl_conn_type):
             ssl_obj = client.transport.get_extra_info("ssl_object")
 
             assert ssl_obj.getpeercert() == expected
+
+
+@pytest.mark.parametrize("server_hostname", ["aiofastnet.org", "127.0.0.1"])
+async def test_ssl_hostname_verification(ssl_conn_type, server_hostname):
+    ssl_conn_type.client_ssl_context.load_verify_locations("tests/test.crt")
+    ssl_conn_type.client_ssl_context.check_hostname = True
+
+    async with TestServer(ct=ssl_conn_type) as server:
+        async with TestClient(
+                server,
+                ct=ssl_conn_type,
+                server_hostname=server_hostname):
+            pass
+
+
+@pytest.mark.parametrize(
+    ("server_hostname", "error"),
+    [
+        ("other.example", "hostname mismatch"),
+        ("127.0.0.2", "IP address mismatch"),
+    ],
+)
+async def test_ssl_hostname_verification_mismatch(
+        ssl_conn_type, server_hostname, error):
+    ssl_conn_type.client_ssl_context.load_verify_locations("tests/test.crt")
+    ssl_conn_type.client_ssl_context.check_hostname = True
+
+    async with TestServer(ct=ssl_conn_type) as server:
+        with pytest.raises(
+                ssl.SSLCertVerificationError,
+                match=error):
+            async with TestClient(
+                    server,
+                    ct=ssl_conn_type,
+                    server_hostname=server_hostname):
+                pass
