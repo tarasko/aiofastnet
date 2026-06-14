@@ -207,6 +207,27 @@ async def test_ssl_certificate_chains(ssl_conn_type):
             assert server_ssl_object.get_verified_chain() == []
 
 
+async def test_ssl_certificate_chains_with_client_auth(ssl_conn_type):
+    expected_der = ssl.PEM_cert_to_DER_cert(
+        open("tests/test.crt", "r", encoding="ascii").read())
+
+    ssl_conn_type.server_ssl_context.verify_mode = ssl.CERT_REQUIRED
+    ssl_conn_type.server_ssl_context.load_verify_locations(cafile="tests/test.crt")
+    ssl_conn_type.client_ssl_context.load_cert_chain(
+        certfile="tests/test.crt",
+        keyfile="tests/test.key",
+    )
+
+    async with TestServer(ct=ssl_conn_type) as server:
+        async with TestClient(server, ct=ssl_conn_type) as client:
+            client_ssl_object = client.transport.get_extra_info("ssl_object")
+            server_client = await server.get_any_server_client()
+            server_ssl_object = server_client.transport.get_extra_info("ssl_object")
+
+            assert client_ssl_object.get_unverified_chain() == [expected_der]
+            assert server_ssl_object.get_unverified_chain() == [expected_der]
+
+
 async def test_ssl_object_connection_attributes(ssl_conn_type):
     async with TestServer(ct=ssl_conn_type) as server:
         async with TestClient(server, ct=ssl_conn_type) as client:
