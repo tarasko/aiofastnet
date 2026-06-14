@@ -339,6 +339,26 @@ async def test_ssl_selected_alpn_protocol_none(all_loops, ssl_conn_type):
             assert server_ssl_object.selected_alpn_protocol() is None
 
 
+async def test_ssl_object_connection_attributes(all_loops, ssl_conn_type):
+    async with TestServer(ct=ssl_conn_type) as server:
+        async with TestClient(server, ct=ssl_conn_type) as client:
+            client_ssl_object = client.transport.get_extra_info("ssl_object")
+            server_client = await server.get_any_server_client()
+            server_ssl_object = server_client.transport.get_extra_info("ssl_object")
+
+            assert client_ssl_object.version() == "TLSv1.2"
+            assert server_ssl_object.version() == client_ssl_object.version()
+            assert client_ssl_object.context is ssl_conn_type.client_ssl_context
+            assert server_ssl_object.context is ssl_conn_type.server_ssl_context
+            expected_server_hostname = (
+                None if ssl_conn_type.use_start_tls else server.host
+            )
+            assert client_ssl_object.server_hostname == expected_server_hostname
+            assert server_ssl_object.server_hostname is None
+            assert client_ssl_object.server_side is False
+            assert server_ssl_object.server_side is True
+
+
 async def test_ssl_getpeercert_binary_form(all_loops, ssl_conn_type):
     expected_der = ssl.PEM_cert_to_DER_cert(open("tests/test.crt", "r", encoding="ascii").read())
 

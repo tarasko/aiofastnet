@@ -28,11 +28,12 @@ cdef class SSLObject:
         BIO* incoming
         BIO* outgoing
         SSL* ssl
-        str server_hostname
-        bint server_side
+        readonly str server_hostname
+        readonly bint server_side
         bint ktls_requested
 
     # Exposed to the end user
+    cpdef object version(self)
     cpdef tuple cipher(self)
     cpdef object getpeercert(self, binary_form=*)
     cpdef str compression(self)

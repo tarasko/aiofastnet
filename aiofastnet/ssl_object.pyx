@@ -42,6 +42,7 @@ from .openssl cimport (
     SSL_get_current_cipher,
     SSL_get_error,
     SSL_get_peer_certificate,
+    SSL_get_version,
     SSL_pending,
     SSL_get_rbio,
     SSL_get_verify_result,
@@ -319,6 +320,14 @@ cdef class SSLObject:
     def __dealloc__(self):
         # Free SSL and its BIO
         SSL_free(self.ssl)
+
+    @property
+    def context(self):
+        return self.ssl_ctx_py
+
+    cpdef object version(self):
+        cdef const char* version = SSL_get_version(self.ssl)
+        return PyUnicode_FromString(version) if version != NULL else None
 
     cpdef tuple cipher(self):
         cdef const SSL_CIPHER* c = SSL_get_current_cipher(self.ssl)

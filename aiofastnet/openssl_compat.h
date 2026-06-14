@@ -123,6 +123,7 @@ extern int (*aiofn_SSL_write)(SSL *ssl, const void *buf, int num);
 extern ssize_t (*aiofn_SSL_sendfile)(SSL *ssl, int fd, off_t offset, size_t size, int flags);
 extern int (*aiofn_SSL_shutdown)(SSL *ssl);
 extern long (*aiofn_SSL_get_verify_result)(const SSL *ssl);
+extern const char *(*aiofn_SSL_get_version)(const SSL *ssl);
 extern X509 *(*aiofn_SSL_get_peer_certificate)(const SSL *ssl);
 extern void (*aiofn_SSL_get0_alpn_selected)(const SSL *ssl, const unsigned char **data,
                                             unsigned int *len);
@@ -211,6 +212,7 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define SSL_write aiofn_SSL_write
 #define SSL_shutdown aiofn_SSL_shutdown
 #define SSL_get_verify_result aiofn_SSL_get_verify_result
+#define SSL_get_version aiofn_SSL_get_version
 #define SSL_get_peer_certificate aiofn_SSL_get_peer_certificate
 #define SSL_get0_alpn_selected aiofn_SSL_get0_alpn_selected
 #define SSL_get_current_cipher aiofn_SSL_get_current_cipher

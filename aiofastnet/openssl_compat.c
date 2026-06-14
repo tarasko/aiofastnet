@@ -51,6 +51,7 @@ int (*aiofn_SSL_write)(SSL *ssl, const void *buf, int num) = NULL;
 ssize_t (*aiofn_SSL_sendfile)(SSL *ssl, int fd, off_t offset, size_t size, int flags) = NULL;
 int (*aiofn_SSL_shutdown)(SSL *ssl) = NULL;
 long (*aiofn_SSL_get_verify_result)(const SSL *ssl) = NULL;
+const char *(*aiofn_SSL_get_version)(const SSL *ssl) = NULL;
 X509 *(*aiofn_SSL_get_peer_certificate)(const SSL *ssl) = NULL;
 void (*aiofn_SSL_get0_alpn_selected)(const SSL *ssl, const unsigned char **data,
                                      unsigned int *len) = NULL;
@@ -265,6 +266,7 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
     LOAD_REQUIRED(aiofn_SSL_shutdown, "SSL_shutdown");
     LOAD_REQUIRED(aiofn_SSL_set_read_ahead, "SSL_set_read_ahead");
     LOAD_REQUIRED(aiofn_SSL_get_verify_result, "SSL_get_verify_result");
+    LOAD_REQUIRED(aiofn_SSL_get_version, "SSL_get_version");
     LOAD_REQUIRED(aiofn_SSL_get0_alpn_selected, "SSL_get0_alpn_selected");
     LOAD_REQUIRED(aiofn_SSL_get_current_cipher, "SSL_get_current_cipher");
     LOAD_REQUIRED(aiofn_SSL_CIPHER_get_name, "SSL_CIPHER_get_name");
