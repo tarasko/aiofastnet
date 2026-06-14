@@ -601,8 +601,6 @@ cdef class SSLObject:
             raise ssl.SSLError("i2d_X509 failed")
 
         der = PyBytes_FromStringAndSize(NULL, der_len)
-        if der is None:
-            raise MemoryError()
 
         p = <unsigned char*>PyBytes_AS_STRING(der)
         if i2d_X509(certificate, &p) != der_len:
@@ -635,14 +633,16 @@ cdef class SSLObject:
 
     cdef _decode_certificate(self, X509* certificate):
         cdef bytes der = self._certificate_to_der(certificate)
-        cdef str path = ""
+        cdef str path = None
 
         pem = ssl.DER_cert_to_PEM_cert(der)
-        tmp = tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="ascii")
         try:
-            tmp.write(pem)
-            tmp.close()
-            path = tmp.name
+            # _test_decode_cert() only accepts a path. Close the file before
+            # reopening it so this also works on Windows.
+            with tempfile.NamedTemporaryFile(
+                    mode="w", delete=False, encoding="ascii") as tmp:
+                path = tmp.name
+                tmp.write(pem)
             return ssl._ssl._test_decode_cert(path)
         finally:
             if path:
