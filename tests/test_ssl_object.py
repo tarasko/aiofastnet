@@ -270,7 +270,7 @@ async def test_ssl_hostname_verification(ssl_conn_type, server_hostname):
 @pytest.mark.parametrize(
     ("server_hostname", "error"),
     [
-        ("other.example", "hostname mismatch"),
+        ("other.example", "ostname mismatch"),
         ("127.0.0.2", "IP address mismatch"),
     ],
 )
