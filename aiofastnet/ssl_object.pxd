@@ -1,4 +1,4 @@
-from .openssl cimport SSL_CTX, BIO, SSL, X509
+from .openssl cimport SSL_CTX, BIO, SSL, X509, OPENSSL_STACK
 from libc.stdint cimport uint64_t
 
 
@@ -36,6 +36,8 @@ cdef class SSLObject:
     cpdef object version(self)
     cpdef tuple cipher(self)
     cpdef object getpeercert(self, binary_form=*)
+    cpdef list get_verified_chain(self)
+    cpdef list get_unverified_chain(self)
     cpdef object get_channel_binding(self, str cb_type=*)
     cpdef str compression(self)
     cpdef object selected_alpn_protocol(self)
@@ -70,6 +72,7 @@ cdef class SSLObject:
 
     # Implementation details
     cdef inline bytes _certificate_to_der(self, X509* certificate)
+    cdef inline list _certificate_chain_to_der(self, OPENSSL_STACK* chain)
     cdef inline _exc_from_err_last_error(self, str descr)
     cdef inline _copy_hostflags_from_ctx_to_ssl(self)
     cdef inline _configure_hostname(self)

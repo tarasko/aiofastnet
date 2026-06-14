@@ -42,7 +42,9 @@ from .openssl cimport (
     SSL_get_current_cipher,
     SSL_get_error,
     SSL_get_finished,
+    SSL_get0_verified_chain,
     SSL_get_peer_finished,
+    SSL_get_peer_cert_chain,
     SSL_get_peer_certificate,
     SSL_get_version,
     SSL_pending,
@@ -73,6 +75,9 @@ from .openssl cimport (
     X509_VERIFY_PARAM_set_hostflags,
     X509_free,
     X509_verify_cert_error_string,
+    OPENSSL_STACK,
+    OPENSSL_sk_num,
+    OPENSSL_sk_value,
     a2i_IPADDRESS,
     i2d_X509,
     init_openssl_compat,
@@ -358,6 +363,27 @@ cdef class SSLObject:
         finally:
             X509_free(peer_cert)
 
+    cpdef list get_verified_chain(self):
+        return self._certificate_chain_to_der(
+            SSL_get0_verified_chain(self.ssl))
+
+    cpdef list get_unverified_chain(self):
+        cdef:
+            OPENSSL_STACK* chain = SSL_get_peer_cert_chain(self.ssl)
+            X509* peer_cert = NULL
+            list result = self._certificate_chain_to_der(chain)
+
+        # OpenSSL omits the peer leaf from the server-side chain.
+        if self.server_side and chain != NULL:
+            peer_cert = SSL_get_peer_certificate(self.ssl)
+            if peer_cert != NULL:
+                try:
+                    result.insert(0, self._certificate_to_der(peer_cert))
+                finally:
+                    X509_free(peer_cert)
+
+        return result
+
     cpdef object get_channel_binding(self, str cb_type="tls-unique"):
         cdef:
             char buf[128]
@@ -583,6 +609,29 @@ cdef class SSLObject:
             raise ssl.SSLError("i2d_X509 produced invalid DER size")
 
         return der
+
+    cdef list _certificate_chain_to_der(
+            self, OPENSSL_STACK* chain):
+        cdef:
+            int index
+            int length
+            X509* certificate
+            list result = []
+
+        if chain == NULL:
+            return result
+
+        length = OPENSSL_sk_num(chain)
+        if length < 0:
+            raise ssl.SSLError("OPENSSL_sk_num failed")
+
+        for index in range(length):
+            certificate = <X509*>OPENSSL_sk_value(chain, index)
+            if certificate == NULL:
+                raise ssl.SSLError("OPENSSL_sk_value failed")
+            result.append(self._certificate_to_der(certificate))
+
+        return result
 
     cdef _decode_certificate(self, X509* certificate):
         cdef bytes der = self._certificate_to_der(certificate)
