@@ -33,7 +33,6 @@ from .openssl cimport (
     SSL_MODE_ENABLE_PARTIAL_WRITE,
     SSL_OP_ENABLE_KTLS,
     SSL_OP_IGNORE_UNEXPECTED_EOF,
-    SSL_VERIFY_PEER,
     SSL_clear_options,
     SSL_do_handshake,
     SSL_free,
@@ -41,7 +40,14 @@ from .openssl cimport (
     SSL_get0_param,
     SSL_get_current_cipher,
     SSL_get_error,
+    SSL_get_finished,
+    SSL_get0_verified_chain,
+    SSL_get_ciphers,
+    SSL_get_client_ciphers,
+    SSL_get_peer_finished,
+    SSL_get_peer_cert_chain,
     SSL_get_peer_certificate,
+    SSL_get_version,
     SSL_pending,
     SSL_get_rbio,
     SSL_get_verify_result,
@@ -60,6 +66,7 @@ from .openssl cimport (
     SSL_set_read_ahead,
     SSL_set_tlsext_host_name,
     SSL_shutdown,
+    SSL_session_reused,
     SSL_write,
     X509,
     X509_VERIFY_PARAM,
@@ -69,6 +76,9 @@ from .openssl cimport (
     X509_VERIFY_PARAM_set_hostflags,
     X509_free,
     X509_verify_cert_error_string,
+    OPENSSL_STACK,
+    OPENSSL_sk_num,
+    OPENSSL_sk_value,
     a2i_IPADDRESS,
     i2d_X509,
     init_openssl_compat,
@@ -95,6 +105,10 @@ import logging
 from pathlib import Path
 
 cdef object _logger = logging.getLogger('aiofastnet.ssl')
+
+
+def _set_sslobject_init_test_hook():
+    pass
 
 
 def _linux_kernel_at_least(major: int, minor: int) -> bool:
@@ -278,6 +292,12 @@ cdef class SSLObject:
 
                 BIO_set_nbio(incoming, 1)
                 BIO_set_nbio(outgoing, 1)
+
+                # Internal test hook: used to force an exception after SSL/BIO
+                # allocation so the constructor cleanup path stays covered.
+                _set_sslobject_init_test_hook()
+
+                # From this moment on SSL object owns BIOs and will deallocate them
                 SSL_set_bio(self.ssl, incoming, outgoing)
                 self.incoming = incoming
                 self.outgoing = outgoing
@@ -296,13 +316,8 @@ cdef class SSLObject:
         except:
             if incoming != NULL:
                 BIO_free(incoming)
-                incoming = NULL
             if outgoing != NULL:
                 BIO_free(outgoing)
-                outgoing = NULL
-            if self.ssl != NULL:
-                SSL_free(self.ssl)
-                self.ssl = NULL
 
             raise
 
@@ -318,7 +333,21 @@ cdef class SSLObject:
 
     def __dealloc__(self):
         # Free SSL and its BIO
-        SSL_free(self.ssl)
+        if self.ssl != NULL:
+            SSL_free(self.ssl)
+            self.ssl = NULL
+
+    @property
+    def context(self):
+        return self.ssl_ctx_py
+
+    @property
+    def session_reused(self):
+        return SSL_session_reused(self.ssl) != 0
+
+    cpdef object version(self):
+        cdef const char* version = SSL_get_version(self.ssl)
+        return PyUnicode_FromString(version) if version != NULL else None
 
     cpdef tuple cipher(self):
         cdef const SSL_CIPHER* c = SSL_get_current_cipher(self.ssl)
@@ -333,6 +362,41 @@ cdef class SSLObject:
 
         return (name_obj, protocol_obj, bits)
 
+    cpdef object shared_ciphers(self):
+        cdef:
+            OPENSSL_STACK* server_ciphers = SSL_get_ciphers(self.ssl)
+            OPENSSL_STACK* client_ciphers = SSL_get_client_ciphers(self.ssl)
+            const SSL_CIPHER* server_cipher
+            const SSL_CIPHER* client_cipher
+            int server_count
+            int client_count
+            int server_index
+            int client_index
+            list result
+
+        if server_ciphers == NULL or client_ciphers == NULL:
+            return None
+
+        server_count = OPENSSL_sk_num(server_ciphers)
+        client_count = OPENSSL_sk_num(client_ciphers)
+        result = []
+
+        for server_index in range(server_count):
+            server_cipher = <const SSL_CIPHER*>OPENSSL_sk_value(
+                server_ciphers, server_index)
+            for client_index in range(client_count):
+                client_cipher = <const SSL_CIPHER*>OPENSSL_sk_value(
+                    client_ciphers, client_index)
+                if server_cipher == client_cipher:
+                    result.append((
+                        PyUnicode_FromString(SSL_CIPHER_get_name(server_cipher)),
+                        PyUnicode_FromString(SSL_CIPHER_get_version(server_cipher)),
+                        SSL_CIPHER_get_bits(server_cipher, NULL),
+                    ))
+                    break
+
+        return result
+
     cpdef object getpeercert(self, binary_form=False):
         cdef X509* peer_cert = SSL_get_peer_certificate(self.ssl)
         if peer_cert == NULL:
@@ -342,9 +406,52 @@ cdef class SSLObject:
         try:
             if binary_form:
                 return self._certificate_to_der(peer_cert)
-            return self._decode_certificate(peer_cert) if verification & SSL_VERIFY_PEER else dict()
+            return self._decode_certificate(
+                peer_cert) if verification != ssl.CERT_NONE else dict()
         finally:
             X509_free(peer_cert)
+
+    cpdef list get_verified_chain(self):
+        return self._certificate_chain_to_der(
+            SSL_get0_verified_chain(self.ssl))
+
+    cpdef list get_unverified_chain(self):
+        cdef:
+            OPENSSL_STACK* chain = SSL_get_peer_cert_chain(self.ssl)
+            X509* peer_cert = NULL
+            list result = self._certificate_chain_to_der(chain)
+
+        # OpenSSL omits the peer leaf from the server-side chain.
+        if self.server_side and chain != NULL:
+            peer_cert = SSL_get_peer_certificate(self.ssl)
+            if peer_cert != NULL:
+                try:
+                    result.insert(0, self._certificate_to_der(peer_cert))
+                finally:
+                    X509_free(peer_cert)
+
+        return result
+
+    cpdef object get_channel_binding(self, str cb_type="tls-unique"):
+        cdef:
+            char buf[128]
+            size_t length
+            bint session_reused
+
+        if cb_type != "tls-unique":
+            raise ValueError(
+                f"'{cb_type}' channel binding type not implemented")
+
+        # Match CPython's RFC 5929 tls-unique selection rule.
+        session_reused = SSL_session_reused(self.ssl) != 0
+        if session_reused ^ (not self.server_side):
+            length = SSL_get_finished(self.ssl, buf, sizeof(buf))
+        else:
+            length = SSL_get_peer_finished(self.ssl, buf, sizeof(buf))
+
+        if length == 0:
+            return None
+        return PyBytes_FromStringAndSize(buf, length)
 
     # TODO: I don't think people would need this.
     # For now I return None but if somebody asks can be made compatible with
@@ -542,8 +649,6 @@ cdef class SSLObject:
             raise ssl.SSLError("i2d_X509 failed")
 
         der = PyBytes_FromStringAndSize(NULL, der_len)
-        if der is None:
-            raise MemoryError()
 
         p = <unsigned char*>PyBytes_AS_STRING(der)
         if i2d_X509(certificate, &p) != der_len:
@@ -551,16 +656,41 @@ cdef class SSLObject:
 
         return der
 
+    cdef list _certificate_chain_to_der(
+            self, OPENSSL_STACK* chain):
+        cdef:
+            int index
+            int length
+            X509* certificate
+            list result = []
+
+        if chain == NULL:
+            return result
+
+        length = OPENSSL_sk_num(chain)
+        if length < 0:
+            raise ssl.SSLError("OPENSSL_sk_num failed")
+
+        for index in range(length):
+            certificate = <X509*>OPENSSL_sk_value(chain, index)
+            if certificate == NULL:
+                raise ssl.SSLError("OPENSSL_sk_value failed")
+            result.append(self._certificate_to_der(certificate))
+
+        return result
+
     cdef _decode_certificate(self, X509* certificate):
         cdef bytes der = self._certificate_to_der(certificate)
-        cdef str path = ""
+        cdef str path = None
 
         pem = ssl.DER_cert_to_PEM_cert(der)
-        tmp = tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="ascii")
         try:
-            tmp.write(pem)
-            tmp.close()
-            path = tmp.name
+            # _test_decode_cert() only accepts a path. Close the file before
+            # reopening it so this also works on Windows.
+            with tempfile.NamedTemporaryFile(
+                    mode="w", delete=False, encoding="ascii") as tmp:
+                path = tmp.name
+                tmp.write(pem)
             return ssl._ssl._test_decode_cert(path)
         finally:
             if path:

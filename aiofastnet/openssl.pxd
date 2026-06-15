@@ -35,6 +35,9 @@ cdef extern from "openssl_compat.h":
     ctypedef struct ASN1_OCTET_STRING:
         pass
 
+    ctypedef struct OPENSSL_STACK:
+        pass
+
     enum:
         SSL_VERIFY_PEER
         SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER
@@ -76,6 +79,14 @@ cdef extern from "openssl_compat.h":
     int SSL_write(SSL *ssl, const void *buf, int num)
     int SSL_shutdown(SSL *ssl)
     long SSL_get_verify_result(const SSL *ssl)
+    const char *SSL_get_version(const SSL *ssl)
+    size_t SSL_get_finished(const SSL *ssl, void *buf, size_t count)
+    size_t SSL_get_peer_finished(const SSL *ssl, void *buf, size_t count)
+    int SSL_session_reused(const SSL *ssl)
+    OPENSSL_STACK *SSL_get_peer_cert_chain(const SSL *ssl)
+    OPENSSL_STACK *SSL_get0_verified_chain(const SSL *ssl)
+    OPENSSL_STACK *SSL_get_ciphers(const SSL *ssl)
+    OPENSSL_STACK *SSL_get_client_ciphers(const SSL *ssl)
     void SSL_get0_alpn_selected(const SSL *ssl, const unsigned char **data, unsigned int *len)
     void SSL_set_read_ahead(SSL *s, int yes)
 
@@ -95,6 +106,8 @@ cdef extern from "openssl_compat.h":
     const char *X509_verify_cert_error_string(long n)
     void X509_free(X509 *a)
     int i2d_X509(X509 *x, unsigned char **out)
+    int OPENSSL_sk_num(const OPENSSL_STACK *stack)
+    void *OPENSSL_sk_value(const OPENSSL_STACK *stack, int index)
 
     unsigned long ERR_peek_last_error()
     void ERR_clear_error()

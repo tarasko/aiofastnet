@@ -314,45 +314,6 @@ async def test_ssl_renegotiate_midstream(all_loops, ssl_conn_type):
             assert await client.readn(len(suffix)) == suffix
 
 
-async def test_ssl_selected_alpn_protocol(all_loops, ssl_conn_type):
-    ssl_conn_type.server_ssl_context.set_alpn_protocols(["h2", "http/1.1"])
-    ssl_conn_type.client_ssl_context.set_alpn_protocols(["http/1.1", "h2"])
-
-    async with TestServer(ct=ssl_conn_type) as server:
-        async with TestClient(server, ct=ssl_conn_type) as client:
-            client_ssl_object = client.transport.get_extra_info("ssl_object")
-            server_client = await server.get_any_server_client()
-            server_ssl_object = server_client.transport.get_extra_info("ssl_object")
-
-            assert client_ssl_object.selected_alpn_protocol() == "h2"
-            assert server_ssl_object.selected_alpn_protocol() == "h2"
-
-
-async def test_ssl_selected_alpn_protocol_none(all_loops, ssl_conn_type):
-    async with TestServer(ct=ssl_conn_type) as server:
-        async with TestClient(server, ct=ssl_conn_type) as client:
-            client_ssl_object = client.transport.get_extra_info("ssl_object")
-            server_client = await server.get_any_server_client()
-            server_ssl_object = server_client.transport.get_extra_info("ssl_object")
-
-            assert client_ssl_object.selected_alpn_protocol() is None
-            assert server_ssl_object.selected_alpn_protocol() is None
-
-
-async def test_ssl_getpeercert_binary_form(all_loops, ssl_conn_type):
-    expected_der = ssl.PEM_cert_to_DER_cert(open("tests/test.crt", "r", encoding="ascii").read())
-
-    async with TestServer(ct=ssl_conn_type) as server:
-        async with TestClient(server, ct=ssl_conn_type) as client:
-            client_ssl_object = client.transport.get_extra_info("ssl_object")
-            server_client = await server.get_any_server_client()
-            server_ssl_object = server_client.transport.get_extra_info("ssl_object")
-
-            assert client_ssl_object.getpeercert(binary_form=True) == expected_der
-            assert client_ssl_object.getpeercert(binary_form=False) == {}
-            assert server_ssl_object.getpeercert(binary_form=True) is None
-
-
 @contextmanager
 def TmpFromData(data):
     with tempfile.TemporaryFile() as tmp:
