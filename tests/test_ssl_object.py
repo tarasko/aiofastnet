@@ -1,8 +1,10 @@
+import asyncio
 import logging
 import ssl
 
 import pytest
 
+import aiofastnet
 from aiofastnet import ssl_object
 from tests.utils import TestServer, TestClient, ssl_conn_type
 
@@ -133,22 +135,27 @@ def test_ssl_certificate_chains_before_handshake():
     assert ssl_obj.get_unverified_chain() == []
 
 
-def test_ssl_object_init_cleans_up_on_internal_exception(monkeypatch):
+async def test_create_connection_propagates_ssl_object_init_exception(monkeypatch):
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
+    expected_error = RuntimeError("init hook boom")
 
     def boom():
-        raise RuntimeError("init hook boom")
+        raise expected_error
 
     monkeypatch.setattr(ssl_object, "_set_sslobject_init_test_hook", boom)
-    with pytest.raises(RuntimeError, match="init hook boom"):
-        ssl_object.SSLObject(
-            context,
-            False,
-            None,
-            1024,
-            1024,
-        )
+
+    async with TestServer() as server:
+        with pytest.raises(RuntimeError, match="init hook boom") as exc_info:
+            await aiofastnet.create_connection(
+                asyncio.get_running_loop(),
+                asyncio.Protocol,
+                server.host,
+                server.port,
+                ssl=context,
+            )
+
+    assert exc_info.value is expected_error
 
 
 @pytest.mark.parametrize("server_hostname", ["", ".aiofastnet.org"])
