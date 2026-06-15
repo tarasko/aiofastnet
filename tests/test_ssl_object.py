@@ -134,6 +134,7 @@ def test_ssl_certificate_chains_before_handshake():
     assert ssl_obj.get_verified_chain() == []
     assert ssl_obj.get_unverified_chain() == []
     assert ssl_obj.shared_ciphers() is None
+    assert ssl_obj.session_reused is False
 
 
 async def test_create_connection_propagates_ssl_object_init_exception(monkeypatch):
@@ -272,6 +273,8 @@ async def test_ssl_object_connection_attributes(ssl_conn_type):
             assert server_ssl_object.server_hostname is None
             assert client_ssl_object.server_side is False
             assert server_ssl_object.server_side is True
+            assert client_ssl_object.session_reused is False
+            assert server_ssl_object.session_reused is False
 
 
 async def test_ssl_shared_ciphers(ssl_conn_type):

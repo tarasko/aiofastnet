@@ -341,6 +341,10 @@ cdef class SSLObject:
     def context(self):
         return self.ssl_ctx_py
 
+    @property
+    def session_reused(self):
+        return SSL_session_reused(self.ssl) != 0
+
     cpdef object version(self):
         cdef const char* version = SSL_get_version(self.ssl)
         return PyUnicode_FromString(version) if version != NULL else None
