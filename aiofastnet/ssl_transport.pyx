@@ -88,7 +88,7 @@ cdef SendFileRequest _make_send_file_request(file, offset, count):
     self.fd = c_fd
     self.offset = c_offset
     self.count = c_count
-    self.waiter = asyncio.get_running_loop().create_future()
+    self.waiter = None
     return self
 
 
@@ -793,7 +793,7 @@ cdef class SSLTransportBase(Transport):
             if maybe_pause_protocol:
                 self._maybe_pause_protocol()
 
-    async def sendfile(self, file, offset, count):
+    def sendfile(self, file, offset, count) -> Optional[asyncio.Future[None]]:
         self._check_thread("sendfile")
 
         # This is an undocumented feature in asyncio and uvloop
@@ -809,8 +809,7 @@ cdef class SSLTransportBase(Transport):
         try:
             if not self._write_backlog:
                 if self._try_sendfile(req):
-                    req.waiter.set_result(None)
-                    return await req.waiter
+                    return None
 
             if unlikely(self._is_debug):
                 _logger.debug("%r: enqueue SendFileRequest(offset=%d,count=%d)",
@@ -820,7 +819,8 @@ cdef class SSLTransportBase(Transport):
             self._write_backlog_size += req.count
             self._maybe_pause_protocol()
 
-            return await req.waiter
+            req.waiter = self._loop.create_future()
+            return req.waiter
         except BaseException as ex:
             self._fatal_error(ex, 'Fatal error on TLS transport')
             raise

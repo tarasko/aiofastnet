@@ -4,6 +4,8 @@ import socket
 import sys
 import warnings
 import asyncio
+from typing import Optional
+
 import cython
 from asyncio.trsock import TransportSocket
 from logging import getLogger
@@ -695,7 +697,10 @@ cdef class SocketTransport(Transport):
     cdef inline _maybe_resume_protocol(self):
         self._write_watermarks.maybe_resume_protocol(self, self._protocol, self.get_write_buffer_size())
 
-    async def sendfile(self, file, offset, count):
+    def sendfile(self, file, offset, count) -> Optional[asyncio.Future[None]]:
+        # TODO: Add _fatal_error and terminate transport on exception
+        # TODO: Add relevant tests
+
         self._check_thread("sendfile")
 
         # This is an undocumented feature in asyncio and uvloop
@@ -716,12 +721,11 @@ cdef class SocketTransport(Transport):
             req.count = max(0, os.fstat(file.fileno()).st_size - offset)
         else:
             req.count = count
-        req.waiter = self._loop.create_future()
+        req.waiter = None
 
         if not self._write_backlog:
             if self._try_sendfile(req):
-                req.waiter.set_result(None)
-                return await req.waiter
+                return
 
         if unlikely(self._is_debug):
             _logger.debug("%r: enqueue SendFileRequest(offset=%d,count=%d)",
@@ -731,9 +735,10 @@ cdef class SocketTransport(Transport):
         self._write_backlog_size += req.count
         if len(self._write_backlog) == 1:
             self._loop.add_writer(self._sock_fd_obj, self._write_ready)
-            self._maybe_pause_protocol()
+        self._maybe_pause_protocol()
 
-        return await req.waiter
+        req.waiter = self._loop.create_future()
+        return req.waiter
 
     cdef inline bint _try_sendfile(self, SendFileRequest req) except -1:
         """
