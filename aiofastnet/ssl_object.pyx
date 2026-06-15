@@ -105,6 +105,10 @@ from pathlib import Path
 cdef object _logger = logging.getLogger('aiofastnet.ssl')
 
 
+def _set_sslobject_init_test_hook():
+    pass
+
+
 def _linux_kernel_at_least(major: int, minor: int) -> bool:
     if platform.system() != "Linux":
         return False
@@ -301,6 +305,10 @@ cdef class SSLObject:
                 SSL_set_read_ahead(self.ssl, 0)
 
             SSL_set_mode(self.ssl, SSL_MODE_AUTO_RETRY | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_ENABLE_PARTIAL_WRITE)
+
+            # Internal test hook: used to force an exception after SSL/BIO
+            # allocation so the constructor cleanup path stays covered.
+            _set_sslobject_init_test_hook()
         except:
             if incoming != NULL:
                 BIO_free(incoming)

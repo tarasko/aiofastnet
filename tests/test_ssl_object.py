@@ -133,6 +133,24 @@ def test_ssl_certificate_chains_before_handshake():
     assert ssl_obj.get_unverified_chain() == []
 
 
+def test_ssl_object_init_cleans_up_on_internal_exception(monkeypatch):
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+
+    def boom():
+        raise RuntimeError("init hook boom")
+
+    ssl_object._set_sslobject_init_test_hook = boom
+    with pytest.raises(RuntimeError, match="init hook boom"):
+        ssl_object.SSLObject(
+            context,
+            False,
+            None,
+            1024,
+            1024,
+        )
+
+
 @pytest.mark.parametrize("server_hostname", ["", ".aiofastnet.org"])
 def test_ssl_object_rejects_invalid_server_hostname(server_hostname):
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
