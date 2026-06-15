@@ -160,6 +160,7 @@ cdef class SocketTransport(Transport):
         object __weakref__
         unsigned long _thread_id
         object _loop
+        bytearray _data_received_buffer
         object _protocol
         bint _protocol_buffered
         bint _protocol_aiofn
@@ -171,7 +172,6 @@ cdef class SocketTransport(Transport):
         object _sock
         object _sock_fd_obj
         int _sock_fd
-        bytearray _data_received_buffer
 
         object _write_backlog
         Py_ssize_t _write_backlog_size
@@ -192,7 +192,10 @@ cdef class SocketTransport(Transport):
         self._thread_id = PyThread_get_thread_ident()
         assert loop is not None
         self._loop = loop
+
+        self._data_received_buffer = None
         self.set_protocol(protocol)
+
         self._write_watermarks = WriteWatermarks(loop)
         self._extra = {} if extra is None else extra
         self._extra['socket'] = TransportSocket(sock)
@@ -209,7 +212,6 @@ cdef class SocketTransport(Transport):
         self._sock = sock
         self._sock_fd_obj = sock.fileno()
         self._sock_fd = self._sock_fd_obj
-        self._data_received_buffer = None
         self._write_backlog = collections.deque()
         self._write_backlog_size = 0
         self._write_ready_registered = False
