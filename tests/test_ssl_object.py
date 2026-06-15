@@ -140,7 +140,7 @@ def test_ssl_object_init_cleans_up_on_internal_exception(monkeypatch):
     def boom():
         raise RuntimeError("init hook boom")
 
-    ssl_object._set_sslobject_init_test_hook = boom
+    monkeypatch.setattr(ssl_object, "_set_sslobject_init_test_hook", boom)
     with pytest.raises(RuntimeError, match="init hook boom"):
         ssl_object.SSLObject(
             context,
