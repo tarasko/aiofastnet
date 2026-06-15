@@ -10,6 +10,7 @@ import cython
 from asyncio.trsock import TransportSocket
 from logging import getLogger
 
+from cpython.bytearray cimport PyByteArray_AS_STRING, PyByteArray_GET_SIZE
 from cpython.memoryview cimport PyMemoryView_FromMemory
 from cpython.buffer cimport PyBUF_READ, PyBUF_WRITABLE
 from cpython.bytes cimport *
@@ -21,7 +22,7 @@ from .utils cimport *
 
 
 cdef object _logger = getLogger('aiofastnet')
-cdef object _DATA_RECEIVED_MAX_SIZE = 256 * 1024
+cdef object _DATA_RECEIVED_MAX_SIZE = 128 * 1024
 
 
 cdef class Transport:
@@ -170,6 +171,7 @@ cdef class SocketTransport(Transport):
         object _sock
         object _sock_fd_obj
         int _sock_fd
+        bytearray _data_received_buffer
 
         object _write_backlog
         Py_ssize_t _write_backlog_size
@@ -207,6 +209,7 @@ cdef class SocketTransport(Transport):
         self._sock = sock
         self._sock_fd_obj = sock.fileno()
         self._sock_fd = self._sock_fd_obj
+        self._data_received_buffer = None
         self._write_backlog = collections.deque()
         self._write_backlog_size = 0
         self._write_ready_registered = False
@@ -268,6 +271,12 @@ cdef class SocketTransport(Transport):
         self._protocol_aiofn = isinstance(protocol, Protocol)
         self._protocol_connected = True
 
+        if not self._protocol_buffered:
+            if self._data_received_buffer is None:
+                self._data_received_buffer = bytearray(_DATA_RECEIVED_MAX_SIZE)
+        else:
+            self._data_received_buffer = None
+
     cpdef get_protocol(self):
         self._check_thread("get_protocol")
         return self._protocol
@@ -295,14 +304,16 @@ cdef class SocketTransport(Transport):
 
     cpdef is_reading(self):
         self._check_thread("is_reading")
-        return not self.is_closing() and not self._read_paused
+        return not self._closing and not self._read_paused
 
     cpdef pause_reading(self):
         self._check_thread("pause_reading")
-        if not self.is_reading():
+        if self._closing or self._read_paused:
             return
-        self._read_paused = True
+
         self._loop.remove_reader(self._sock_fd_obj)
+        self._read_paused = True
+
         if unlikely(self._is_debug):
             _logger.debug("%r pauses reading", self)
 
@@ -310,11 +321,9 @@ cdef class SocketTransport(Transport):
         self._check_thread("resume_reading")
         if self._closing or not self._read_paused:
             return
-        self._read_paused = False
 
-        if not self.is_reading():
-            return
         self._loop.add_reader(self._sock_fd_obj, self._read_ready)
+        self._read_paused = False
 
         if unlikely(self._is_debug):
             _logger.debug("%r resumes reading", self)
@@ -401,26 +410,36 @@ cdef class SocketTransport(Transport):
                     exc, 'Fatal error: protocol.buffer_updated() call failed.')
 
     cdef inline _read_ready__data_received(self):
+        cdef:
+            char* buf_ptr
+            Py_ssize_t buf_len
+            Py_ssize_t bytes_read
+            object data
+
         if self._connection_lost_scheduled:
             return
+
+        buf_ptr = PyByteArray_AS_STRING(self._data_received_buffer)
+        buf_len = PyByteArray_GET_SIZE(self._data_received_buffer)
+
         try:
-            # Already a good wrapper, returns bytes object.
-            # Exactly what we need for non-buffered protocols
-            data = self._sock.recv(_DATA_RECEIVED_MAX_SIZE)
+            bytes_read = aiofn_recv(self._sock_fd, buf_ptr, buf_len)
             if unlikely(self._is_debug):
-                _logger.debug("%r: _sock.recv() = bytes(len=%d)",
-                              self, len(data))
+                _logger.debug("%r: aiofn_recv(...,len=%d)=%d", self, buf_len, bytes_read)
+            if bytes_read == -1:    # without exception this means EGAIN
+                return
         except (SystemExit, KeyboardInterrupt):
             raise
         except BaseException as exc:
             self._fatal_error(exc, 'Fatal read error on socket transport')
             return
 
-        if not data:
+        if bytes_read == 0:
             self._read_ready__on_eof()
             return
 
         try:
+            data = PyBytes_FromStringAndSize(buf_ptr, bytes_read)
             self._protocol.data_received(data)
         except (SystemExit, KeyboardInterrupt):
             raise
