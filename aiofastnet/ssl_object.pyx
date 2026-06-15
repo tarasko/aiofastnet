@@ -290,6 +290,12 @@ cdef class SSLObject:
 
                 BIO_set_nbio(incoming, 1)
                 BIO_set_nbio(outgoing, 1)
+
+                # Internal test hook: used to force an exception after SSL/BIO
+                # allocation so the constructor cleanup path stays covered.
+                _set_sslobject_init_test_hook()
+
+                # From this moment on SSL object owns BIOs and will deallocate them
                 SSL_set_bio(self.ssl, incoming, outgoing)
                 self.incoming = incoming
                 self.outgoing = outgoing
@@ -305,20 +311,11 @@ cdef class SSLObject:
                 SSL_set_read_ahead(self.ssl, 0)
 
             SSL_set_mode(self.ssl, SSL_MODE_AUTO_RETRY | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_ENABLE_PARTIAL_WRITE)
-
-            # Internal test hook: used to force an exception after SSL/BIO
-            # allocation so the constructor cleanup path stays covered.
-            _set_sslobject_init_test_hook()
         except:
             if incoming != NULL:
                 BIO_free(incoming)
-                incoming = NULL
             if outgoing != NULL:
                 BIO_free(outgoing)
-                outgoing = NULL
-            if self.ssl != NULL:
-                SSL_free(self.ssl)
-                self.ssl = NULL
 
             raise
 
@@ -334,7 +331,9 @@ cdef class SSLObject:
 
     def __dealloc__(self):
         # Free SSL and its BIO
-        SSL_free(self.ssl)
+        if self.ssl != NULL:
+            SSL_free(self.ssl)
+            self.ssl = NULL
 
     @property
     def context(self):
