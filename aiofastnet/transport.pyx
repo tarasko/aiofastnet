@@ -161,7 +161,8 @@ cdef class SocketTransport(Transport):
         int _sock_fd
 
         object _write_backlog
-        int _conn_lost
+        bint _connection_lost_scheduled
+        size_t _closed_write_count
         bint _closing
         bint _paused
 
@@ -194,7 +195,8 @@ cdef class SocketTransport(Transport):
         self._sock_fd_obj = sock.fileno()
         self._sock_fd = self._sock_fd_obj
         self._write_backlog = collections.deque()
-        self._conn_lost = 0  # Set when call to connection_lost scheduled.
+        self._connection_lost_scheduled = False
+        self._closed_write_count = 0
         self._closing = False  # Set when close() called.
         self._paused = False  # Set when pause_reading() called
 
@@ -309,7 +311,7 @@ cdef class SocketTransport(Transport):
         self._closing = True
         self._loop.remove_reader(self._sock_fd_obj)
         if not self._write_backlog:
-            self._conn_lost += 1
+            self._connection_lost_scheduled = True
             self._loop.remove_writer(self._sock_fd_obj)
             self._loop.call_soon(self._call_connection_lost, None)
 
@@ -338,7 +340,7 @@ cdef class SocketTransport(Transport):
             Py_ssize_t bytes_read
 
         while True:
-            if self._conn_lost:
+            if self._connection_lost_scheduled:
                 return
 
             if self._paused:
@@ -386,7 +388,7 @@ cdef class SocketTransport(Transport):
                     exc, 'Fatal error: protocol.buffer_updated() call failed.')
 
     cdef inline _read_ready__data_received(self):
-        if self._conn_lost:
+        if self._connection_lost_scheduled:
             return
         try:
             # Already a good wrapper, returns bytes object.
@@ -455,10 +457,10 @@ cdef class SocketTransport(Transport):
         if not data:
             return
 
-        if unlikely(self._conn_lost):
-            if self._conn_lost >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
+        if unlikely(self._connection_lost_scheduled):
+            if self._closed_write_count >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
                 _logger.warning('socket.send() raised exception.')
-            self._conn_lost += 1
+            self._closed_write_count += 1
             return
 
         cdef:
@@ -484,10 +486,10 @@ cdef class SocketTransport(Transport):
         if self._eof:
             raise RuntimeError('Cannot call writelines() after write_eof()')
 
-        if unlikely(self._conn_lost):
-            if self._conn_lost >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
+        if unlikely(self._connection_lost_scheduled):
+            if self._closed_write_count >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
                 _logger.warning('socket.send() raised exception.')
-            self._conn_lost += 1
+            self._closed_write_count += 1
             return
 
         if unlikely(self._write_backlog):
@@ -512,10 +514,10 @@ cdef class SocketTransport(Transport):
         if sz <= 0:
             return
 
-        if unlikely(self._conn_lost):
-            if self._conn_lost >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
+        if unlikely(self._connection_lost_scheduled):
+            if self._closed_write_count >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
                 _logger.warning('socket.send() raised exception.')
-            self._conn_lost += 1
+            self._closed_write_count += 1
             return
 
         if not self._write_backlog:
@@ -634,7 +636,7 @@ cdef class SocketTransport(Transport):
 
     cpdef _write_ready(self):
         assert self._write_backlog, 'Data should not be empty'
-        if self._conn_lost:
+        if self._connection_lost_scheduled:
             return
         try:
             if unlikely(self._is_debug):
@@ -649,7 +651,7 @@ cdef class SocketTransport(Transport):
             if not self._write_backlog:
                 self._loop.remove_writer(self._sock_fd_obj)
                 if self._closing:
-                    self._conn_lost += 1
+                    self._connection_lost_scheduled = True
                     self._call_connection_lost(None)
                 elif self._eof:
                     self._sock.shutdown(socket.SHUT_WR)
@@ -687,7 +689,7 @@ cdef class SocketTransport(Transport):
         if self._eof:
             raise RuntimeError('Cannot call sendfile() after write_eof()')
 
-        if self._closing or self._conn_lost:
+        if self._closing or self._connection_lost_scheduled:
             raise RuntimeError("Transport is closing")
 
         cdef SendFileRequest req = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
@@ -757,7 +759,7 @@ cdef class SocketTransport(Transport):
     # May be used by create_connection/create_server
     # Keep cpdef
     cpdef _force_close(self, exc):
-        if self._conn_lost:
+        if self._connection_lost_scheduled:
             return
         if self._write_backlog:
             self._clear_write_backlog(exc)
@@ -765,7 +767,7 @@ cdef class SocketTransport(Transport):
         if not self._closing:
             self._closing = True
             self._loop.remove_reader(self._sock_fd_obj)
-        self._conn_lost += 1
+        self._connection_lost_scheduled = True
         self._loop.call_soon(self._call_connection_lost, exc)
 
     cdef inline _clear_write_backlog(self, exc):
