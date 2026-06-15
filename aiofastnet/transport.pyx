@@ -484,7 +484,7 @@ cdef class SocketTransport(Transport):
 
         if not self._write_backlog:
             aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
-            data = self._write_one(data, data_ptr, data_len)
+            data = self._write_one_handle_exc(data, data_ptr, data_len)
             if data is None:
                 return
 
@@ -538,7 +538,7 @@ cdef class SocketTransport(Transport):
             return
 
         if not self._write_backlog:
-            data = self._write_one(None, ptr, sz)
+            data = self._write_one_handle_exc(None, ptr, sz)
             if data is None:
                 return
 
@@ -564,7 +564,7 @@ cdef class SocketTransport(Transport):
             if unlikely(self._is_debug):
                 _logger.debug("%r: shutdown(SHUT_WR) done", self)
 
-    cdef inline _write_one(self, object data, char* data_ptr, Py_ssize_t data_len):
+    cdef inline _write_one_handle_exc(self, object data, char* data_ptr, Py_ssize_t data_len):
         """
         Returns None if all data has been sent, or remaining data
         """
@@ -728,22 +728,26 @@ cdef class SocketTransport(Transport):
 
         cdef SendFileRequest req = _make_send_file_request(file, offset, count)
 
-        if not self._write_backlog:
-            if self._try_sendfile(req):
-                return None
+        try:
+            if not self._write_backlog:
+                if self._try_sendfile(req):
+                    return None
 
-        if unlikely(self._is_debug):
-            _logger.debug("%r: enqueue SendFileRequest(offset=%d,count=%d)",
-                          self, req.offset, req.count)
+            if unlikely(self._is_debug):
+                _logger.debug("%r: enqueue SendFileRequest(offset=%d,count=%d)",
+                              self, req.offset, req.count)
 
-        self._write_backlog.append(req)
-        self._write_backlog_size += req.count
-        if len(self._write_backlog) == 1:
-            self._loop.add_writer(self._sock_fd_obj, self._write_ready)
-        self._maybe_pause_protocol()
+            self._write_backlog.append(req)
+            self._write_backlog_size += req.count
+            if len(self._write_backlog) == 1:
+                self._loop.add_writer(self._sock_fd_obj, self._write_ready)
+            self._maybe_pause_protocol()
 
-        req.waiter = self._loop.create_future()
-        return req.waiter
+            req.waiter = self._loop.create_future()
+            return req.waiter
+        except BaseException as exc:
+            self._fatal_error(exc, 'Fatal write error on socket transport')
+            raise
 
     cdef inline bint _try_sendfile(self, SendFileRequest req) except -1:
         """
@@ -813,7 +817,7 @@ cdef class SocketTransport(Transport):
         for data in self._write_backlog:
             if isinstance(data, SendFileRequest):
                 req = <SendFileRequest>data
-                if not req.waiter.done():
+                if req.waiter is not None and not req.waiter.done():
                     req.waiter.set_exception(exc)
         self._write_backlog.clear()
         self._write_backlog_size = 0

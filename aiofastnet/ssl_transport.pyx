@@ -1007,9 +1007,8 @@ cdef class SSLTransportBase(Transport):
         cdef SendFileRequest req
         for data in self._write_backlog:
             if isinstance(data, SendFileRequest):
-                _logger.debug("Found SendFileRequest in write_backlog")
                 req = <SendFileRequest>data
-                if not req.waiter.done():
+                if req.waiter is not None and not req.waiter.done():
                     req.waiter.set_exception(exc)
         self._write_backlog.clear()
         self._write_backlog_size = 0
