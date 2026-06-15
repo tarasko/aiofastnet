@@ -28,6 +28,7 @@ typedef struct ssl_st SSL;
 typedef struct bio_st BIO;
 typedef struct bio_method_st BIO_METHOD;
 typedef struct ssl_cipher_st SSL_CIPHER;
+typedef struct comp_method_st COMP_METHOD;
 typedef struct x509_st X509;
 typedef struct X509_VERIFY_PARAM_st X509_VERIFY_PARAM;
 typedef struct asn1_string_st ASN1_OCTET_STRING;
@@ -125,6 +126,9 @@ extern ssize_t (*aiofn_SSL_sendfile)(SSL *ssl, int fd, off_t offset, size_t size
 extern int (*aiofn_SSL_shutdown)(SSL *ssl);
 extern long (*aiofn_SSL_get_verify_result)(const SSL *ssl);
 extern const char *(*aiofn_SSL_get_version)(const SSL *ssl);
+const COMP_METHOD *aiofn_SSL_get_current_compression(const SSL *ssl);
+int aiofn_COMP_get_type(const COMP_METHOD *method);
+const char *aiofn_OBJ_nid2sn(int nid);
 extern size_t (*aiofn_SSL_get_finished)(const SSL *ssl, void *buf, size_t count);
 extern size_t (*aiofn_SSL_get_peer_finished)(const SSL *ssl, void *buf, size_t count);
 extern int (*aiofn_SSL_session_reused)(const SSL *ssl);
@@ -223,6 +227,9 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define SSL_shutdown aiofn_SSL_shutdown
 #define SSL_get_verify_result aiofn_SSL_get_verify_result
 #define SSL_get_version aiofn_SSL_get_version
+#define SSL_get_current_compression aiofn_SSL_get_current_compression
+#define COMP_get_type aiofn_COMP_get_type
+#define OBJ_nid2sn aiofn_OBJ_nid2sn
 #define SSL_get_finished aiofn_SSL_get_finished
 #define SSL_get_peer_finished aiofn_SSL_get_peer_finished
 #define SSL_session_reused aiofn_SSL_session_reused

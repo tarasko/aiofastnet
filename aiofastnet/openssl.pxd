@@ -32,6 +32,9 @@ cdef extern from "openssl_compat.h":
     ctypedef struct SSL_CIPHER:
         pass
 
+    ctypedef struct COMP_METHOD:
+        pass
+
     ctypedef struct ASN1_OCTET_STRING:
         pass
 
@@ -80,6 +83,9 @@ cdef extern from "openssl_compat.h":
     int SSL_shutdown(SSL *ssl)
     long SSL_get_verify_result(const SSL *ssl)
     const char *SSL_get_version(const SSL *ssl)
+    const COMP_METHOD *SSL_get_current_compression(const SSL *ssl)
+    int COMP_get_type(const COMP_METHOD *method)
+    const char *OBJ_nid2sn(int nid)
     size_t SSL_get_finished(const SSL *ssl, void *buf, size_t count)
     size_t SSL_get_peer_finished(const SSL *ssl, void *buf, size_t count)
     int SSL_session_reused(const SSL *ssl)
