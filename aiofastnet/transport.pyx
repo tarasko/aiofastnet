@@ -497,6 +497,87 @@ cdef class SocketTransport(Transport):
         self._write_backlog_size += len(data)
         self._maybe_pause_protocol()
 
+    cdef inline Py_ssize_t _flush_iovecs(self, Py_ssize_t num_iovecs, Py_ssize_t* total_bytes_sent) except -2:
+        cdef Py_ssize_t bytes_sent = aiofn_writev(self._sock_fd, self._iovecs, num_iovecs)
+        if unlikely(self._is_debug):
+            _logger.debug("%r: aiofn_writev(..., len(iovecs)=%d)=%d", self, num_iovecs, bytes_sent)
+        if bytes_sent > 0:
+            total_bytes_sent[0] += bytes_sent
+        return bytes_sent
+
+    cdef inline bint _try_write_list_of_data(self, list_of_data, Py_ssize_t* total_bytes_sent) except -1:
+        """
+        Send as much data as possible from list_of_data, store actual number of bytes sent into total_bytes_sent.
+        Return True if all data from list_of_data were sent or False otherwise.
+        list_of_data may contain SendFileRequest object. If this is the case it will be treated as the actual end 
+        of the list. If all data before SendFileRequest is successfully sent then True is returned.
+        """
+
+        cdef:
+            char* data_ptr
+            Py_ssize_t data_len
+            Py_ssize_t bytes_sent = 0
+            Py_ssize_t bytes_to_send = 0
+            Py_ssize_t idx = 0
+
+        for data in list_of_data:
+            if isinstance(data, SendFileRequest):
+                break
+
+            aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
+            if data_len == 0:
+                continue
+            self._iovecs[idx].iov_base = data_ptr
+            self._iovecs[idx].iov_len = data_len
+            bytes_to_send += data_len
+            if idx < AIOFN_MAX_IOVEC - 1:
+                idx += 1
+                continue
+
+            # Intermediate flush, because we ran out of iovecs
+            bytes_sent = self._flush_iovecs(idx + 1, total_bytes_sent)
+            if bytes_sent != bytes_to_send:
+                return False
+
+            idx = 0
+            bytes_to_send = 0
+            bytes_sent = 0
+
+        # Final flush
+        if idx > 0:
+            bytes_sent = self._flush_iovecs(idx, total_bytes_sent)
+
+        return bytes_sent == bytes_to_send
+
+    cdef inline _add_list_of_data_tail_to_backlog(self, list_of_data, Py_ssize_t total_bytes_sent):
+        cdef:
+            char* data_ptr
+            Py_ssize_t data_len
+
+        for data in list_of_data:
+            aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
+            if data_len <= total_bytes_sent:
+                total_bytes_sent -= data_len
+                continue
+            elif total_bytes_sent <= 0:
+                data = aiofn_maybe_copy_buffer(data)
+                self._write_backlog.append(data)
+                self._write_backlog_size += len(data)
+            else:
+                data_ptr += total_bytes_sent
+                data_len -= total_bytes_sent
+                total_bytes_sent = 0
+                data = aiofn_maybe_copy_buffer_tail(
+                    data, data_ptr, data_len)
+                self._write_backlog.append(data)
+                self._write_backlog_size += len(data)
+
+        # If the entire buffer couldn't be written, register a write handler
+        # TODO: add _ensure_writer, do not re-register again
+        if self._write_backlog_size >= 0:
+            self._loop.add_writer(self._sock_fd_obj, self._write_ready)
+            self._maybe_pause_protocol()
+
     cpdef writelines_nocheck(self, list_of_data):
         if self._eof:
             raise RuntimeError('Cannot call writelines() after write_eof()')
@@ -507,25 +588,16 @@ cdef class SocketTransport(Transport):
             self._closed_write_count += 1
             return
 
-        if unlikely(self._write_backlog):
-            for data in list_of_data:
-                if not data:
-                    continue
-                data = aiofn_maybe_copy_buffer(data)
-                self._write_backlog.append(data)
-                self._write_backlog_size += len(data)
-            self._maybe_pause_protocol()
-            return
+        cdef Py_ssize_t total_bytes_sent = 0
 
         try:
-            self._write_many(list_of_data)
+            if self._write_backlog_size == 0:
+                if self._try_write_list_of_data(list_of_data, &total_bytes_sent):
+                    return
+
+            self._add_list_of_data_tail_to_backlog(list_of_data, total_bytes_sent)
         except BaseException as exc:
             self._fatal_error(exc, 'Fatal write error on socket transport')
-        else:
-            # If the entire buffer couldn't be written, register a write handler
-            if self._write_backlog:
-                self._loop.add_writer(self._sock_fd_obj, self._write_ready)
-                self._maybe_pause_protocol()
 
     cdef write_c(self, char* ptr, Py_ssize_t sz):
         if sz <= 0:
@@ -589,90 +661,64 @@ cdef class SocketTransport(Transport):
                 data_ptr += bytes_sent
                 data_len -= bytes_sent
 
-    cdef inline _adjust_leftover_buffer(self, list_of_data, Py_ssize_t bytes_sent):
+    cdef inline _adjust_write_backlog(self, Py_ssize_t bytes_sent):
         cdef:
             char* data_ptr
             Py_ssize_t data_len
 
-        if list_of_data is not self._write_backlog:
-            for data in list_of_data:
-                aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
-                if data_len <= bytes_sent:
-                    bytes_sent -= data_len
-                    continue
-                elif bytes_sent <= 0:
-                    data = aiofn_maybe_copy_buffer(data)
-                    self._write_backlog.append(data)
-                    self._write_backlog_size += len(data)
-                else:
-                    data_ptr += bytes_sent
-                    data_len -= bytes_sent
-                    bytes_sent = 0
-                    data = aiofn_maybe_copy_buffer_tail(
-                        data, data_ptr, data_len)
-                    self._write_backlog.append(data)
-                    self._write_backlog_size += len(data)
-        else:
-            if bytes_sent > 0:
-                self._write_backlog_size -= bytes_sent
-            while bytes_sent > 0:
-                data = self._write_backlog.popleft()
-                data_len = len(data)
-                if data_len <= bytes_sent:
-                    bytes_sent -= data_len
-                    if unlikely(self._is_debug):
-                        _logger.debug("%r: wrote item of size %d from backlog", self, data_len)
-                else:
-                    self._write_backlog.appendleft(data[bytes_sent:])
-                    if unlikely(self._is_debug):
-                        _logger.debug("%r: partially wrote %d out of %d from backlog item", self, bytes_sent, data_len)
-                    break
+        if bytes_sent > 0:
+            self._write_backlog_size -= bytes_sent
 
-    cdef inline _write_many(self, list_of_data):
+        while bytes_sent > 0:
+            data = self._write_backlog[0]
+            data_len = len(data)
+            if data_len <= bytes_sent:
+                bytes_sent -= data_len
+                self._write_backlog.popleft()
+                if unlikely(self._is_debug):
+                    _logger.debug("%r: wrote item of %d bytes from backlog item", self, data_len)
+            else:
+                self._write_backlog[0] = data[bytes_sent:]
+                if unlikely(self._is_debug):
+                    _logger.debug("%r: partially wrote %d bytes out of %d bytes from backlog item", self, bytes_sent, data_len)
+                break
+
+    cdef inline _try_sendfile_from_backlog_top(self):
         cdef:
-            Py_ssize_t idx = 0
-            char* data_ptr
-            Py_ssize_t data_len
+            SendFileRequest sendfile_req = <SendFileRequest>self._write_backlog[0]
+            Py_ssize_t orig_req_size = sendfile_req.count
+
+        cdef bint all_sent = self._try_sendfile(sendfile_req)
+        if all_sent:
+            self._write_backlog.popleft()
+            if not sendfile_req.waiter.done():
+                sendfile_req.waiter.set_result(None)
+        self._write_backlog_size -= orig_req_size - sendfile_req.count
+
+        return all_sent
+
+    cdef inline _flush_write_backlog(self):
+        cdef:
             Py_ssize_t bytes_sent
-            Py_ssize_t orig_req_size
-            SendFileRequest sendfile_req = None
+            bint all_sent = True
 
-        for data in list_of_data:
-            if isinstance(data, SendFileRequest):
-                sendfile_req = data
-                break
-            aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
-            if data_len == 0:
-                continue
-            self._iovecs[idx].iov_base = data_ptr
-            self._iovecs[idx].iov_len = data_len
-            idx += 1
-            if idx == AIOFN_MAX_IOVEC:
-                break
-
-        if idx == 0 and sendfile_req is not None:
-            orig_req_size = sendfile_req.count
-            if self._try_sendfile(sendfile_req):
-                list_of_data.popleft()
-                if not sendfile_req.waiter.done():
-                    sendfile_req.waiter.set_result(None)
-            if list_of_data is self._write_backlog:
-                self._write_backlog_size -= orig_req_size - sendfile_req.count
-        else:
-            bytes_sent = aiofn_writev(self._sock_fd, self._iovecs, idx)
-
-            if unlikely(self._is_debug):
-                _logger.debug("%r: aiofn_writev(..., len(iovecs)=%d)=%d", self, idx, bytes_sent)
-            self._adjust_leftover_buffer(list_of_data, bytes_sent)
+        while self._write_backlog_size != 0 and all_sent:
+            if isinstance(self._write_backlog[0], SendFileRequest):
+                all_sent = self._try_sendfile_from_backlog_top()
+            else:
+                bytes_sent = 0
+                all_sent = self._try_write_list_of_data(self._write_backlog, &bytes_sent)
+                self._adjust_write_backlog(bytes_sent)
 
     cpdef _write_ready(self):
         assert self._write_backlog, 'Data should not be empty'
         if self._connection_lost_scheduled:
             return
+
         try:
             if unlikely(self._is_debug):
                 _logger.debug("%r write_ready event, resume writing from backlog", self)
-            self._write_many(self._write_backlog)
+            self._flush_write_backlog()
         except BaseException as exc:
             self._loop.remove_writer(self._sock_fd_obj)
             self._clear_write_backlog(exc)
