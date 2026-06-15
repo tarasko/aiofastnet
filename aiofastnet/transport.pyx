@@ -176,6 +176,7 @@ cdef class SocketTransport(Transport):
 
         object _write_backlog
         Py_ssize_t _write_backlog_size
+        bint _write_ready_registered
         bint _connection_lost_scheduled
         size_t _closed_write_count
         bint _closing
@@ -211,6 +212,7 @@ cdef class SocketTransport(Transport):
         self._sock_fd = self._sock_fd_obj
         self._write_backlog = collections.deque()
         self._write_backlog_size = 0
+        self._write_ready_registered = False
         self._connection_lost_scheduled = False
         self._closed_write_count = 0
         self._closing = False  # Set when close() called.
@@ -328,7 +330,7 @@ cdef class SocketTransport(Transport):
         self._loop.remove_reader(self._sock_fd_obj)
         if not self._write_backlog:
             self._connection_lost_scheduled = True
-            self._loop.remove_writer(self._sock_fd_obj)
+            self._drop_writer()
             self._loop.call_soon(self._call_connection_lost, None)
 
     cpdef get_write_buffer_size(self):
@@ -489,7 +491,7 @@ cdef class SocketTransport(Transport):
                 return
 
             # Not all was written; register write handler.
-            self._loop.add_writer(self._sock_fd_obj, self._write_ready)
+            self._ensure_writer()
         else:
             data = aiofn_maybe_copy_buffer(data)
 
@@ -572,10 +574,8 @@ cdef class SocketTransport(Transport):
                 self._write_backlog.append(data)
                 self._write_backlog_size += len(data)
 
-        # If the entire buffer couldn't be written, register a write handler
-        # TODO: add _ensure_writer, do not re-register again
-        if self._write_backlog_size >= 0:
-            self._loop.add_writer(self._sock_fd_obj, self._write_ready)
+        if self._write_backlog_size > 0:
+            self._ensure_writer()
             self._maybe_pause_protocol()
 
     cpdef writelines_nocheck(self, list_of_data):
@@ -615,7 +615,7 @@ cdef class SocketTransport(Transport):
                 return
 
             # Not all was written; register write handler.
-            self._loop.add_writer(self._sock_fd_obj, self._write_ready)
+            self._ensure_writer()
         else:
             data = PyBytes_FromStringAndSize(ptr, sz)
 
@@ -676,11 +676,11 @@ cdef class SocketTransport(Transport):
                 bytes_sent -= data_len
                 self._write_backlog.popleft()
                 if unlikely(self._is_debug):
-                    _logger.debug("%r: wrote item of %d bytes from backlog item", self, data_len)
+                    _logger.debug("%r: wrote backlog item of %d bytes", self, data_len)
             else:
                 self._write_backlog[0] = data[bytes_sent:]
                 if unlikely(self._is_debug):
-                    _logger.debug("%r: partially wrote %d bytes out of %d bytes from backlog item", self, bytes_sent, data_len)
+                    _logger.debug("%r: partially wrote backlog item of %d bytes", self, bytes_sent, data_len)
                 break
 
     cdef inline _try_sendfile_from_backlog_top(self):
@@ -720,13 +720,13 @@ cdef class SocketTransport(Transport):
                 _logger.debug("%r write_ready event, resume writing from backlog", self)
             self._flush_write_backlog()
         except BaseException as exc:
-            self._loop.remove_writer(self._sock_fd_obj)
+            self._drop_writer()
             self._clear_write_backlog(exc)
             self._fatal_error(exc, 'Fatal write error on socket transport')
         else:
             self._maybe_resume_protocol()
             if not self._write_backlog:
-                self._loop.remove_writer(self._sock_fd_obj)
+                self._drop_writer()
                 if self._closing:
                     self._connection_lost_scheduled = True
                     self._call_connection_lost(None)
@@ -743,7 +743,6 @@ cdef class SocketTransport(Transport):
             self._sock.close()
             self._sock = None
             self._protocol = None
-            self._loop = None
             server = self._server
             if server is not None:
                 server._detach(self)
@@ -754,6 +753,24 @@ cdef class SocketTransport(Transport):
 
     cdef inline _maybe_resume_protocol(self):
         self._write_watermarks.maybe_resume_protocol(self, self._protocol, self.get_write_buffer_size())
+
+    cdef inline _ensure_writer(self):
+        if unlikely(self._is_debug):
+            _logger.debug("%r: _ensure_writer called", self)
+
+        if self._connection_lost_scheduled or self._write_ready_registered:
+            return
+        self._write_ready_registered = True
+        self._loop.add_writer(self._sock_fd_obj, self._write_ready)
+
+    cdef inline _drop_writer(self):
+        if unlikely(self._is_debug):
+            _logger.debug("%r: _drop_writer called", self)
+
+        if not self._write_ready_registered:
+            return
+        self._write_ready_registered = False
+        self._loop.remove_writer(self._sock_fd_obj)
 
     def sendfile(self, file, offset, count) -> Optional[asyncio.Future[None]]:
         # TODO: Add _fatal_error and terminate transport on exception
@@ -785,8 +802,7 @@ cdef class SocketTransport(Transport):
 
             self._write_backlog.append(req)
             self._write_backlog_size += req.count
-            if len(self._write_backlog) == 1:
-                self._loop.add_writer(self._sock_fd_obj, self._write_ready)
+            self._ensure_writer()
             self._maybe_pause_protocol()
 
             req.waiter = self._loop.create_future()
@@ -851,7 +867,7 @@ cdef class SocketTransport(Transport):
             return
         if self._write_backlog:
             self._clear_write_backlog(exc)
-            self._loop.remove_writer(self._sock_fd_obj)
+            self._drop_writer()
         if not self._closing:
             self._closing = True
             self._loop.remove_reader(self._sock_fd_obj)
