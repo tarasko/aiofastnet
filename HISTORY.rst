@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.13.0
+------------------
+
+* Added some missing attributes and methods to SSLObject
+
 0.12.0
 ------------------
 
