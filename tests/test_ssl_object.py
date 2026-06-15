@@ -281,10 +281,7 @@ async def test_ssl_hostname_verification(ssl_conn_type, server_hostname):
     ssl_conn_type.client_ssl_context.check_hostname = True
 
     async with TestServer(ct=ssl_conn_type) as server:
-        async with TestClient(
-                server,
-                ct=ssl_conn_type,
-                server_hostname=server_hostname):
+        async with TestClient(server, ct=ssl_conn_type, server_hostname=server_hostname):
             pass
 
 
@@ -301,11 +298,6 @@ async def test_ssl_hostname_verification_mismatch(
     ssl_conn_type.client_ssl_context.check_hostname = True
 
     async with TestServer(ct=ssl_conn_type) as server:
-        with pytest.raises(
-                ssl.SSLCertVerificationError,
-                match=error):
-            async with TestClient(
-                    server,
-                    ct=ssl_conn_type,
-                    server_hostname=server_hostname):
+        with pytest.raises(ssl.SSLCertVerificationError, match=error):
+            async with TestClient(server, ct=ssl_conn_type, server_hostname=server_hostname):
                 pass
