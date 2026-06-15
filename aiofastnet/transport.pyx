@@ -84,6 +84,18 @@ cdef class SendFileRequest:
         return self.count
 
 
+cdef _make_send_file_request(file, offset, count):
+    cdef SendFileRequest req = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
+    req.file = file
+    req.offset = offset
+    if count is None:
+        req.count = max(0, os.fstat(file.fileno()).st_size - offset)
+    else:
+        req.count = count
+    req.waiter = None
+    return req
+
+
 cdef class WriteWatermarks:
     def __init__(self, loop):
         self._loop = loop
@@ -714,18 +726,11 @@ cdef class SocketTransport(Transport):
         if self._closing or self._connection_lost_scheduled:
             raise RuntimeError("Transport is closing")
 
-        cdef SendFileRequest req = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
-        req.file = file
-        req.offset = offset
-        if count is None:
-            req.count = max(0, os.fstat(file.fileno()).st_size - offset)
-        else:
-            req.count = count
-        req.waiter = None
+        cdef SendFileRequest req = _make_send_file_request(file, offset, count)
 
         if not self._write_backlog:
             if self._try_sendfile(req):
-                return
+                return None
 
         if unlikely(self._is_debug):
             _logger.debug("%r: enqueue SendFileRequest(offset=%d,count=%d)",
