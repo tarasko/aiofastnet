@@ -112,6 +112,9 @@ class _WrappedProtocolBase(asyncio.BaseProtocol):
     def resume_writing(self):
         return self._protocol.resume_writing()
 
+    def eof_received(self):
+        return self._protocol.eof_received()
+
 
 class _WrappedProtocol(_WrappedProtocolBase, asyncio.Protocol):
     def data_received(self, data):
