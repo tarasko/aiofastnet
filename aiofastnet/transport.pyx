@@ -177,7 +177,7 @@ cdef class SocketTransport(Transport):
         bint _connection_lost_scheduled
         size_t _closed_write_count
         bint _closing
-        bint _paused
+        bint _read_paused
 
         public bint _sendfile_compatible
 
@@ -213,7 +213,7 @@ cdef class SocketTransport(Transport):
         self._connection_lost_scheduled = False
         self._closed_write_count = 0
         self._closing = False  # Set when close() called.
-        self._paused = False  # Set when pause_reading() called
+        self._read_paused = False  # Set when pause_reading() called
 
         if self._server is not None:
             self._server._attach(self)
@@ -295,22 +295,22 @@ cdef class SocketTransport(Transport):
 
     cpdef is_reading(self):
         self._check_thread("is_reading")
-        return not self.is_closing() and not self._paused
+        return not self.is_closing() and not self._read_paused
 
     cpdef pause_reading(self):
         self._check_thread("pause_reading")
         if not self.is_reading():
             return
-        self._paused = True
+        self._read_paused = True
         self._loop.remove_reader(self._sock_fd_obj)
         if unlikely(self._is_debug):
             _logger.debug("%r pauses reading", self)
 
     cpdef resume_reading(self):
         self._check_thread("resume_reading")
-        if self._closing or not self._paused:
+        if self._closing or not self._read_paused:
             return
-        self._paused = False
+        self._read_paused = False
 
         if not self.is_reading():
             return
@@ -356,7 +356,7 @@ cdef class SocketTransport(Transport):
             if self._connection_lost_scheduled:
                 return
 
-            if self._paused:
+            if self._read_paused:
                 return
 
             try:

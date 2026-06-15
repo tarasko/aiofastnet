@@ -292,6 +292,39 @@ async def test_pause_reading(all_loops, conn_type):
             client.transport.resume_reading()
 
 
+async def test_eof_received_keep_open(all_loops):
+    loop = asyncio.get_running_loop()
+    server_protocol_created = loop.create_future()
+    server_received = loop.create_future()
+
+    class HalfCloseServer(asyncio.Protocol):
+        def connection_made(self, transport):
+            self.transport = transport
+            server_protocol_created.set_result(self)
+
+        def data_received(self, data):
+            if not server_received.done():
+                server_received.set_result(data)
+
+    class KeepOpenClient(AsyncClient):
+        def eof_received(self):
+            super().eof_received()
+            self.transport.write(b"client-after-eof")
+            self.transport.close()
+            return True
+
+    async with TestServer(HalfCloseServer) as server:
+        async with TestClient(server, protocol_factory=KeepOpenClient) as client:
+            server_client = await server_protocol_created
+            server_client.transport.write(b"server-before-eof")
+            server_client.transport.write_eof()
+
+            assert await client.readn(len(b"server-before-eof")) == b"server-before-eof"
+            assert await asyncio.wait_for(server_received, timeout=1.0) == b"client-after-eof"
+            await client.wait_closed()
+            assert client.is_eof_received
+
+
 async def test_ssl_renegotiate_midstream(all_loops, ssl_conn_type):
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
         pytest.skip("aiofastnet doesn't work with ProactorEventLoop")
