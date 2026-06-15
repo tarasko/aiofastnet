@@ -9,6 +9,8 @@ aiofastnet Release History
 ------------------
 
 * Added some missing attributes and methods to SSLObject
+* Fixed sendfile(count=None) not sending file at all for TCP case, added test
+* Fixed sendfile infinite loop in case of oversized count value, added test
 
 0.12.0
 ------------------

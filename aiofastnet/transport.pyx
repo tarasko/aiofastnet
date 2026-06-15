@@ -161,6 +161,7 @@ cdef class SocketTransport(Transport):
         int _sock_fd
 
         object _write_backlog
+        Py_ssize_t _write_backlog_size
         bint _connection_lost_scheduled
         size_t _closed_write_count
         bint _closing
@@ -195,6 +196,7 @@ cdef class SocketTransport(Transport):
         self._sock_fd_obj = sock.fileno()
         self._sock_fd = self._sock_fd_obj
         self._write_backlog = collections.deque()
+        self._write_backlog_size = 0
         self._connection_lost_scheduled = False
         self._closed_write_count = 0
         self._closing = False  # Set when close() called.
@@ -317,9 +319,7 @@ cdef class SocketTransport(Transport):
 
     cpdef get_write_buffer_size(self):
         self._check_thread("get_write_buffer_size")
-        cdef Py_ssize_t total = 0
-        for data in self._write_backlog:
-            total += len(data)
+        cdef Py_ssize_t total = self._write_backlog_size
 
         if isinstance(self._protocol, Protocol):
             total += (<Protocol>self._protocol).get_local_write_buffer_size()
@@ -480,6 +480,7 @@ cdef class SocketTransport(Transport):
             data = aiofn_maybe_copy_buffer(data)
 
         self._write_backlog.append(data)
+        self._write_backlog_size += len(data)
         self._maybe_pause_protocol()
 
     cpdef writelines_nocheck(self, list_of_data):
@@ -496,7 +497,9 @@ cdef class SocketTransport(Transport):
             for data in list_of_data:
                 if not data:
                     continue
-                self._write_backlog.append(aiofn_maybe_copy_buffer(data))
+                data = aiofn_maybe_copy_buffer(data)
+                self._write_backlog.append(data)
+                self._write_backlog_size += len(data)
             self._maybe_pause_protocol()
             return
 
@@ -531,6 +534,7 @@ cdef class SocketTransport(Transport):
             data = PyBytes_FromStringAndSize(ptr, sz)
 
         self._write_backlog.append(data)
+        self._write_backlog_size += len(data)
         self._maybe_pause_protocol()
 
     cpdef can_write_eof(self):
@@ -583,13 +587,20 @@ cdef class SocketTransport(Transport):
                     bytes_sent -= data_len
                     continue
                 elif bytes_sent <= 0:
-                    self._write_backlog.append(aiofn_maybe_copy_buffer(data))
+                    data = aiofn_maybe_copy_buffer(data)
+                    self._write_backlog.append(data)
+                    self._write_backlog_size += len(data)
                 else:
                     data_ptr += bytes_sent
                     data_len -= bytes_sent
                     bytes_sent = 0
-                    self._write_backlog.append(aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len))
+                    data = aiofn_maybe_copy_buffer_tail(
+                        data, data_ptr, data_len)
+                    self._write_backlog.append(data)
+                    self._write_backlog_size += len(data)
         else:
+            if bytes_sent > 0:
+                self._write_backlog_size -= bytes_sent
             while bytes_sent > 0:
                 data = self._write_backlog.popleft()
                 data_len = len(data)
@@ -609,6 +620,7 @@ cdef class SocketTransport(Transport):
             char* data_ptr
             Py_ssize_t data_len
             Py_ssize_t bytes_sent
+            Py_ssize_t orig_req_size
             SendFileRequest sendfile_req = None
 
         for data in list_of_data:
@@ -625,8 +637,13 @@ cdef class SocketTransport(Transport):
                 break
 
         if idx == 0 and sendfile_req is not None:
+            orig_req_size = sendfile_req.count
             if self._try_sendfile(sendfile_req):
                 list_of_data.popleft()
+                if not sendfile_req.waiter.done():
+                    sendfile_req.waiter.set_result(None)
+            if list_of_data is self._write_backlog:
+                self._write_backlog_size -= orig_req_size - sendfile_req.count
         else:
             bytes_sent = aiofn_writev(self._sock_fd, self._iovecs, idx)
 
@@ -695,28 +712,37 @@ cdef class SocketTransport(Transport):
         cdef SendFileRequest req = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
         req.file = file
         req.offset = offset
-        req.count = count
+        if count is None:
+            req.count = max(0, os.fstat(file.fileno()).st_size - offset)
+        else:
+            req.count = count
         req.waiter = self._loop.create_future()
 
         if not self._write_backlog:
             if self._try_sendfile(req):
+                req.waiter.set_result(None)
                 return await req.waiter
 
         if unlikely(self._is_debug):
             _logger.debug("%r: enqueue SendFileRequest(offset=%d,count=%d)",
                           self, req.offset, req.count)
 
-        if self._write_backlog:
-            self._write_backlog.append(req)
-        else:
-            self._write_backlog.append(req)
+        self._write_backlog.append(req)
+        self._write_backlog_size += req.count
+        if len(self._write_backlog) == 1:
             self._loop.add_writer(self._sock_fd_obj, self._write_ready)
             self._maybe_pause_protocol()
 
         return await req.waiter
 
-    cdef inline _try_sendfile(self, SendFileRequest req):
-        """Return True if finished, False if must wait for write ready event"""
+    cdef inline bint _try_sendfile(self, SendFileRequest req) except -1:
+        """
+        Return True if finished, False if must wait for write ready event.
+
+        Caller is always responsible for:
+        * handling exceptions, including closing the transport when appropriate;
+        * completing req.waiter when the request finishes or fails.
+        """
         try:
             while req.count:
                 bytes_sent = os.sendfile(self._sock_fd_obj, req.file.fileno(),
@@ -724,10 +750,12 @@ cdef class SocketTransport(Transport):
                 if unlikely(self._is_debug):
                     _logger.debug("%r: os.sendfile(offset=%d,count=%d)=%d",
                                   self, req.offset, req.count, bytes_sent)
+                if bytes_sent == 0:
+                    req.count = 0
+                    break
                 req.offset += bytes_sent
                 req.count -= bytes_sent
 
-            req.waiter.set_result(None)
             return True
         except AttributeError:
             raise NotImplementedError()
@@ -778,3 +806,4 @@ cdef class SocketTransport(Transport):
                 if not req.waiter.done():
                     req.waiter.set_exception(exc)
         self._write_backlog.clear()
+        self._write_backlog_size = 0

@@ -364,6 +364,19 @@ async def test_sendfile(all_loops, conn_type, file_size, header_size, tail_size)
                     await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2)
 
 
+@pytest.mark.parametrize("count", [None, 1024])
+async def test_sendfile_to_eof(all_loops, conn_type, count):
+    conn_type.check_sendfile_supported()
+
+    loop = asyncio.get_running_loop()
+    payload = b"payload"
+    with TmpFromData(payload) as tmp:
+        async with TestServer(ct=conn_type) as server:
+            async with TestClient(server, ct=conn_type) as client:
+                await sendfile(loop, client.transport, tmp, offset=2, count=count)
+                assert await client.readn(len(payload) - 2, timeout=1.0) == payload[2:]
+
+
 async def test_sendfile_huge_error(all_loops, conn_type):
     conn_type.check_sendfile_supported()
 
