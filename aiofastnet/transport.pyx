@@ -80,9 +80,6 @@ cdef class SendFileRequest:
         object count
         object waiter
 
-    def __len__(self):
-        return self.count
-
 
 cdef _make_send_file_request(file, offset, count):
     cdef SendFileRequest req = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)

@@ -270,10 +270,17 @@ async def test_pause_reading(all_loops, conn_type):
         async with TestClient(server, ct=conn_type) as client:
             client.transport.write(payload)
             assert client.transport.is_reading()
+
+            # pause_reading is idempotent
+            client.transport.pause_reading()
             client.transport.pause_reading()
             assert not client.transport.is_reading()
+
             with pytest.raises(asyncio.TimeoutError):
                 await client.wait_new_data(0.3)
+
+            # resume_reading is idempotent
+            client.transport.resume_reading()
             client.transport.resume_reading()
 
             await client.wait_new_data(0.3)
