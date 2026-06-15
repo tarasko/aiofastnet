@@ -15,8 +15,6 @@ from .openssl cimport (
     BIO_static_mem_consume,
     BIO_static_mem_get_write_buf,
     BIO_static_mem_produce,
-    COMP_METHOD,
-    COMP_get_type,
     ERR_GET_LIB,
     ERR_clear_error,
     ERR_lib_error_string,
@@ -41,7 +39,6 @@ from .openssl cimport (
     SSL_get0_alpn_selected,
     SSL_get0_param,
     SSL_get_current_cipher,
-    SSL_get_current_compression,
     SSL_get_error,
     SSL_get_finished,
     SSL_get0_verified_chain,
@@ -82,7 +79,6 @@ from .openssl cimport (
     OPENSSL_STACK,
     OPENSSL_sk_num,
     OPENSSL_sk_value,
-    OBJ_nid2sn,
     a2i_IPADDRESS,
     i2d_X509,
     init_openssl_compat,
@@ -457,21 +453,11 @@ cdef class SSLObject:
             return None
         return PyBytes_FromStringAndSize(buf, length)
 
+    # TODO: I don't think people would need this.
+    # For now I return None but if somebody asks can be made compatible with
+    # python implementation
     cpdef str compression(self):
-        cdef:
-            const COMP_METHOD* method = SSL_get_current_compression(self.ssl)
-            const char* name
-            int method_type
-
-        if method == NULL:
-            return None
-
-        method_type = COMP_get_type(method)
-        if method_type == 0:
-            return None
-
-        name = OBJ_nid2sn(method_type)
-        return PyUnicode_FromString(name) if name != NULL else None
+        return None
 
     cpdef object selected_alpn_protocol(self):
         cdef const unsigned char* protocol = NULL

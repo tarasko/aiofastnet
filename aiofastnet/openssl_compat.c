@@ -52,9 +52,6 @@ ssize_t (*aiofn_SSL_sendfile)(SSL *ssl, int fd, off_t offset, size_t size, int f
 int (*aiofn_SSL_shutdown)(SSL *ssl) = NULL;
 long (*aiofn_SSL_get_verify_result)(const SSL *ssl) = NULL;
 const char *(*aiofn_SSL_get_version)(const SSL *ssl) = NULL;
-static const COMP_METHOD *(*aiofn_SSL_get_current_compression_sym)(const SSL *ssl) = NULL;
-static int (*aiofn_COMP_get_type_sym)(const COMP_METHOD *method) = NULL;
-static const char *(*aiofn_OBJ_nid2sn_sym)(int nid) = NULL;
 size_t (*aiofn_SSL_get_finished)(const SSL *ssl, void *buf, size_t count) = NULL;
 size_t (*aiofn_SSL_get_peer_finished)(const SSL *ssl, void *buf, size_t count) = NULL;
 int (*aiofn_SSL_session_reused)(const SSL *ssl) = NULL;
@@ -279,10 +276,6 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
     LOAD_REQUIRED(aiofn_SSL_set_read_ahead, "SSL_set_read_ahead");
     LOAD_REQUIRED(aiofn_SSL_get_verify_result, "SSL_get_verify_result");
     LOAD_REQUIRED(aiofn_SSL_get_version, "SSL_get_version");
-    aiofn_SSL_get_current_compression_sym =
-        resolve_symbol("SSL_get_current_compression");
-    aiofn_COMP_get_type_sym = resolve_symbol("COMP_get_type");
-    aiofn_OBJ_nid2sn_sym = resolve_symbol("OBJ_nid2sn");
     LOAD_REQUIRED(aiofn_SSL_get_finished, "SSL_get_finished");
     LOAD_REQUIRED(aiofn_SSL_get_peer_finished, "SSL_get_peer_finished");
     LOAD_REQUIRED(aiofn_SSL_session_reused, "SSL_session_reused");
@@ -378,27 +371,6 @@ int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path) {
 }
 
 #undef LOAD_REQUIRED
-
-const COMP_METHOD *aiofn_SSL_get_current_compression(const SSL *ssl) {
-    if (aiofn_SSL_get_current_compression_sym == NULL) {
-        return NULL;
-    }
-    return aiofn_SSL_get_current_compression_sym(ssl);
-}
-
-int aiofn_COMP_get_type(const COMP_METHOD *method) {
-    if (aiofn_COMP_get_type_sym == NULL) {
-        return 0;
-    }
-    return aiofn_COMP_get_type_sym(method);
-}
-
-const char *aiofn_OBJ_nid2sn(int nid) {
-    if (aiofn_OBJ_nid2sn_sym == NULL) {
-        return NULL;
-    }
-    return aiofn_OBJ_nid2sn_sym(nid);
-}
 
 int aiofn_BIO_pending(BIO *b) {
     long n = aiofn_BIO_ctrl(b, BIO_CTRL_PENDING, 0, NULL);
