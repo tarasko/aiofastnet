@@ -130,6 +130,8 @@ extern size_t (*aiofn_SSL_get_peer_finished)(const SSL *ssl, void *buf, size_t c
 extern int (*aiofn_SSL_session_reused)(const SSL *ssl);
 extern OPENSSL_STACK *(*aiofn_SSL_get_peer_cert_chain)(const SSL *ssl);
 extern OPENSSL_STACK *(*aiofn_SSL_get0_verified_chain)(const SSL *ssl);
+extern OPENSSL_STACK *(*aiofn_SSL_get_ciphers)(const SSL *ssl);
+extern OPENSSL_STACK *(*aiofn_SSL_get_client_ciphers)(const SSL *ssl);
 extern X509 *(*aiofn_SSL_get_peer_certificate)(const SSL *ssl);
 extern void (*aiofn_SSL_get0_alpn_selected)(const SSL *ssl, const unsigned char **data,
                                             unsigned int *len);
@@ -226,6 +228,8 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define SSL_session_reused aiofn_SSL_session_reused
 #define SSL_get_peer_cert_chain aiofn_SSL_get_peer_cert_chain
 #define SSL_get0_verified_chain aiofn_SSL_get0_verified_chain
+#define SSL_get_ciphers aiofn_SSL_get_ciphers
+#define SSL_get_client_ciphers aiofn_SSL_get_client_ciphers
 #define SSL_get_peer_certificate aiofn_SSL_get_peer_certificate
 #define SSL_get0_alpn_selected aiofn_SSL_get0_alpn_selected
 #define SSL_get_current_cipher aiofn_SSL_get_current_cipher

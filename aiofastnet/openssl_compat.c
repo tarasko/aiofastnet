@@ -57,6 +57,8 @@ size_t (*aiofn_SSL_get_peer_finished)(const SSL *ssl, void *buf, size_t count) =
 int (*aiofn_SSL_session_reused)(const SSL *ssl) = NULL;
 OPENSSL_STACK *(*aiofn_SSL_get_peer_cert_chain)(const SSL *ssl) = NULL;
 OPENSSL_STACK *(*aiofn_SSL_get0_verified_chain)(const SSL *ssl) = NULL;
+OPENSSL_STACK *(*aiofn_SSL_get_ciphers)(const SSL *ssl) = NULL;
+OPENSSL_STACK *(*aiofn_SSL_get_client_ciphers)(const SSL *ssl) = NULL;
 X509 *(*aiofn_SSL_get_peer_certificate)(const SSL *ssl) = NULL;
 void (*aiofn_SSL_get0_alpn_selected)(const SSL *ssl, const unsigned char **data,
                                      unsigned int *len) = NULL;
@@ -279,6 +281,8 @@ static int init_openssl_compat_impl(const char *ssl_lib_path, const char *crypto
     LOAD_REQUIRED(aiofn_SSL_session_reused, "SSL_session_reused");
     LOAD_REQUIRED(aiofn_SSL_get_peer_cert_chain, "SSL_get_peer_cert_chain");
     LOAD_REQUIRED(aiofn_SSL_get0_verified_chain, "SSL_get0_verified_chain");
+    LOAD_REQUIRED(aiofn_SSL_get_ciphers, "SSL_get_ciphers");
+    LOAD_REQUIRED(aiofn_SSL_get_client_ciphers, "SSL_get_client_ciphers");
     LOAD_REQUIRED(aiofn_SSL_get0_alpn_selected, "SSL_get0_alpn_selected");
     LOAD_REQUIRED(aiofn_SSL_get_current_cipher, "SSL_get_current_cipher");
     LOAD_REQUIRED(aiofn_SSL_CIPHER_get_name, "SSL_CIPHER_get_name");

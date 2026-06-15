@@ -35,6 +35,7 @@ cdef class SSLObject:
     # Exposed to the end user
     cpdef object version(self)
     cpdef tuple cipher(self)
+    cpdef object shared_ciphers(self)
     cpdef object getpeercert(self, binary_form=*)
     cpdef list get_verified_chain(self)
     cpdef list get_unverified_chain(self)

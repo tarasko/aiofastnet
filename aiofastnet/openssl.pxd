@@ -85,6 +85,8 @@ cdef extern from "openssl_compat.h":
     int SSL_session_reused(const SSL *ssl)
     OPENSSL_STACK *SSL_get_peer_cert_chain(const SSL *ssl)
     OPENSSL_STACK *SSL_get0_verified_chain(const SSL *ssl)
+    OPENSSL_STACK *SSL_get_ciphers(const SSL *ssl)
+    OPENSSL_STACK *SSL_get_client_ciphers(const SSL *ssl)
     void SSL_get0_alpn_selected(const SSL *ssl, const unsigned char **data, unsigned int *len)
     void SSL_set_read_ahead(SSL *s, int yes)
 

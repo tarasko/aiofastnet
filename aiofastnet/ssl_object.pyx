@@ -42,6 +42,8 @@ from .openssl cimport (
     SSL_get_error,
     SSL_get_finished,
     SSL_get0_verified_chain,
+    SSL_get_ciphers,
+    SSL_get_client_ciphers,
     SSL_get_peer_finished,
     SSL_get_peer_cert_chain,
     SSL_get_peer_certificate,
@@ -355,6 +357,41 @@ cdef class SSLObject:
         cdef int bits = SSL_CIPHER_get_bits(c, NULL)
 
         return (name_obj, protocol_obj, bits)
+
+    cpdef object shared_ciphers(self):
+        cdef:
+            OPENSSL_STACK* server_ciphers = SSL_get_ciphers(self.ssl)
+            OPENSSL_STACK* client_ciphers = SSL_get_client_ciphers(self.ssl)
+            const SSL_CIPHER* server_cipher
+            const SSL_CIPHER* client_cipher
+            int server_count
+            int client_count
+            int server_index
+            int client_index
+            list result
+
+        if server_ciphers == NULL or client_ciphers == NULL:
+            return None
+
+        server_count = OPENSSL_sk_num(server_ciphers)
+        client_count = OPENSSL_sk_num(client_ciphers)
+        result = []
+
+        for server_index in range(server_count):
+            server_cipher = <const SSL_CIPHER*>OPENSSL_sk_value(
+                server_ciphers, server_index)
+            for client_index in range(client_count):
+                client_cipher = <const SSL_CIPHER*>OPENSSL_sk_value(
+                    client_ciphers, client_index)
+                if server_cipher == client_cipher:
+                    result.append((
+                        PyUnicode_FromString(SSL_CIPHER_get_name(server_cipher)),
+                        PyUnicode_FromString(SSL_CIPHER_get_version(server_cipher)),
+                        SSL_CIPHER_get_bits(server_cipher, NULL),
+                    ))
+                    break
+
+        return result
 
     cpdef object getpeercert(self, binary_form=False):
         cdef X509* peer_cert = SSL_get_peer_certificate(self.ssl)
