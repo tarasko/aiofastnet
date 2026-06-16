@@ -233,6 +233,8 @@ class Server(asyncio.AbstractServer):
 
     def _wakeup(self):
         waiters = self._waiters
+        if waiters is None:
+            return
         self._waiters = None
         for waiter in waiters:
             if not waiter.done():
