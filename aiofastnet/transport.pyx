@@ -324,7 +324,7 @@ cdef class SocketTransport(Transport):
             return
         self._closing = True
         self._loop.remove_reader(self._sock_fd_obj)
-        if not self._write_backlog:
+        if self._write_backlog_size == 0:
             self._connection_lost_scheduled = True
             self._drop_writer()
             self._loop.call_soon(self._call_connection_lost, None)
@@ -495,7 +495,7 @@ cdef class SocketTransport(Transport):
             Py_ssize_t data_len, data_len_init = 0
             Py_ssize_t bytes_sent
 
-        if not self._write_backlog:
+        if self._write_backlog_size == 0:
             aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
             data = self._write_one_handle_exc(data, data_ptr, data_len)
             if data is None:
@@ -620,7 +620,7 @@ cdef class SocketTransport(Transport):
             self._closed_write_count += 1
             return
 
-        if not self._write_backlog:
+        if self._write_backlog_size == 0:
             data = self._write_one_handle_exc(None, ptr, sz)
             if data is None:
                 return
@@ -642,7 +642,7 @@ cdef class SocketTransport(Transport):
         if self._closing or self._eof:
             return
         self._eof = True
-        if not self._write_backlog:
+        if self._write_backlog_size == 0:
             self._sock.shutdown(socket.SHUT_WR)
             if unlikely(self._is_debug):
                 _logger.debug("%r: shutdown(SHUT_WR) done", self)
@@ -801,7 +801,7 @@ cdef class SocketTransport(Transport):
         cdef SendFileRequest req = _make_send_file_request(file, offset, count)
 
         try:
-            if not self._write_backlog:
+            if self._write_backlog_size == 0:
                 if self._try_sendfile(req):
                     return None
 
