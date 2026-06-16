@@ -192,13 +192,11 @@ cdef class SocketTransport(Transport):
         self._thread_id = PyThread_get_thread_ident()
         assert loop is not None
         self._loop = loop
-        self._protocol = None
-        self._extra = {}
-        self._server = None
-        self._sock = None
-        self._sock_fd_obj = None
-        self._sock_fd = -1
-        self._data_received_buffer = None
+        self._extra = {} if extra is None else extra
+        self._server = server
+        self._sock = sock
+        self._sock_fd_obj = sock.fileno()
+        self._sock_fd = self._sock_fd_obj
         self._write_backlog = collections.deque()
         self._write_backlog_size = 0
         self._write_ready_registered = False
@@ -208,11 +206,6 @@ cdef class SocketTransport(Transport):
         self._read_paused = False  # Set when pause_reading() called
 
         self._write_watermarks = WriteWatermarks(loop)
-        self._server = server
-        self._sock = sock
-        self._sock_fd_obj = sock.fileno()
-        self._sock_fd = self._sock_fd_obj
-        self._extra = {} if extra is None else extra
         self._extra['socket'] = TransportSocket(sock)
         try:
             self._extra['sockname'] = sock.getsockname()

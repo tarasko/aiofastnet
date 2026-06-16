@@ -279,8 +279,7 @@ cdef class SSLTransportBase(Transport):
         else:
             if self.is_closing():
                 info.append('closing')
-            wbuf_size = self.get_local_write_buffer_size()
-            info.append(f'wbuf_size={wbuf_size}')
+            info.append(f'wbuf_size={self._write_backlog_size}')
         return '[{}]'.format(' '.join(info))
 
     cdef inline _set_protocol(self, protocol):

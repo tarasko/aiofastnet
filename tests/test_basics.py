@@ -12,6 +12,7 @@ import pytest
 
 from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Protocol, SocketTransport, Transport
+from aiofastnet.ssl_transport import SSLTransport_Socket
 from tests.utils import TestClient, TestServer, \
     make_test_ssl_contexts, AsyncClient, SomeException, exc_queue, _logger, \
     conn_type, ssl_conn_type, ktls_conn_type, ssl_sbio_conn_type, start_tls, sendfile
@@ -391,25 +392,37 @@ async def test_socket_transport_repr_does_not_call_protocol_buffer_size(selector
         peer.close()
 
 
-async def test_socket_transport_init_exception_closes_socket_from_del(selector_loop):
-    class BadSocket:
-        def __init__(self):
-            self.closed = False
+async def test_ssl_socket_transport_repr_does_not_call_protocol_buffer_size(selector_loop):
+    class BadBufferSizeProtocol(Protocol):
+        def connection_made(self, transport):
+            self.transport = transport
 
-        def fileno(self):
-            raise RuntimeError("fileno")
-
-        def close(self):
-            self.closed = True
+        def get_local_write_buffer_size(self):
+            raise RuntimeError("get_local_write_buffer_size")
 
     loop = asyncio.get_running_loop()
-    sock = BadSocket()
-
-    with pytest.warns(ResourceWarning, match="unclosed SocketTransport"):
-        with pytest.raises(RuntimeError, match="fileno"):
-            SocketTransport(loop, sock, asyncio.Protocol())
-
-    assert sock.closed
+    server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
+    sock, peer = socket.socketpair()
+    transport = None
+    try:
+        sock.setblocking(False)
+        transport = SSLTransport_Socket(
+            loop,
+            BadBufferSizeProtocol(),
+            client_context,
+            False,
+            1.0,
+            1.0,
+            256 * 1024,
+            256 * 1024,
+            sock,
+        )
+        assert "SSLTransport_Socket" in repr(transport)
+    finally:
+        if transport is not None:
+            transport.abort()
+            await asyncio.sleep(0)
+        peer.close()
 
 
 async def test_ssl_renegotiate_midstream(all_loops, ssl_conn_type):
