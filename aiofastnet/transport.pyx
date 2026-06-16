@@ -651,24 +651,26 @@ cdef class SocketTransport(Transport):
         """
         Returns None if all data has been sent, or remaining data
         """
-        cdef Py_ssize_t bytes_sent = -1
+        cdef Py_ssize_t bytes_sent
 
-        try:
-            bytes_sent = aiofn_send(self._sock_fd, data_ptr, data_len)
-            if unlikely(self._is_debug):
-                _logger.debug("%r aiofn_send(...,len=%d)=%d", self,
-                              data_len, bytes_sent)
-        except BaseException as exc:
-            self._fatal_error(exc, 'Fatal write error on socket transport')
-            return None
+        while True:
+            try:
+                bytes_sent = aiofn_send(self._sock_fd, data_ptr, data_len)
+                if unlikely(self._is_debug):
+                    _logger.debug("%r aiofn_send(...,len=%d)=%d", self,
+                                  data_len, bytes_sent)
+            except BaseException as exc:
+                self._fatal_error(exc, 'Fatal write error on socket transport')
+                return None
 
-        if bytes_sent == data_len:
-            return None
+            if bytes_sent == data_len:
+                return None
 
-        if bytes_sent == -1:
-            return aiofn_maybe_copy_buffer(data)
+            if bytes_sent == -1:
+                return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
 
-        return aiofn_maybe_copy_buffer_tail(data, data_ptr + bytes_sent, data_len - bytes_sent)
+            data_ptr += bytes_sent
+            data_len -= bytes_sent
 
     cdef inline _adjust_write_backlog(self, Py_ssize_t bytes_sent):
         cdef:
