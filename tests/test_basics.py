@@ -11,7 +11,8 @@ from contextlib import contextmanager
 import pytest
 
 from aiofastnet.utils import aiofn_maybe_copy_buffer
-from aiofastnet.transport import Transport
+from aiofastnet.transport import Protocol, SocketTransport, Transport
+from aiofastnet.ssl_transport import SSLTransport_Socket
 from tests.utils import TestClient, TestServer, \
     make_test_ssl_contexts, AsyncClient, SomeException, exc_queue, _logger, \
     conn_type, ssl_conn_type, ktls_conn_type, ssl_sbio_conn_type, start_tls, sendfile
@@ -270,10 +271,17 @@ async def test_pause_reading(all_loops, conn_type):
         async with TestClient(server, ct=conn_type) as client:
             client.transport.write(payload)
             assert client.transport.is_reading()
+
+            # pause_reading is idempotent
+            client.transport.pause_reading()
             client.transport.pause_reading()
             assert not client.transport.is_reading()
+
             with pytest.raises(asyncio.TimeoutError):
                 await client.wait_new_data(0.3)
+
+            # resume_reading is idempotent
+            client.transport.resume_reading()
             client.transport.resume_reading()
 
             await client.wait_new_data(0.3)
@@ -283,6 +291,138 @@ async def test_pause_reading(all_loops, conn_type):
                 await client.wait_new_data(0.3)
 
             client.transport.resume_reading()
+
+
+async def test_pause_reading_from_read_callback(all_loops, conn_type, buffered_protocol):
+    payload = b"x" * (3 * 256 * 1024)
+
+    class PauseFromReadCallbackClient(AsyncClient):
+        def __init__(self, is_buffered):
+            super().__init__(is_buffered)
+            self.first_read = asyncio.get_running_loop().create_future()
+            self.read_callback_count = 0
+
+        def _pause_once(self):
+            self.read_callback_count += 1
+            if self.read_callback_count == 1:
+                self.transport.pause_reading()
+                self.first_read.set_result(len(self._data))
+
+        def data_received(self, data):
+            super().data_received(data)
+            self._pause_once()
+
+        def buffer_updated(self, bytes_read):
+            super().buffer_updated(bytes_read)
+            self._pause_once()
+
+    async with TestServer(ct=conn_type) as server:
+        async with TestClient(server, ct=conn_type, protocol_factory=PauseFromReadCallbackClient, is_buffered=buffered_protocol) as client:
+            client.write(payload)
+
+            first_read_size = await asyncio.wait_for(client.first_read, timeout=1.0)
+            assert 0 < first_read_size < len(payload)
+            assert not client.transport.is_reading()
+
+            # The socket should still have data ready. Even if _read_ready() is
+            # invoked directly while paused, it must not read more data.
+            # client.transport._read_ready()
+            await asyncio.sleep(0.1)
+            assert len(client._data) == first_read_size
+            assert client.read_callback_count == 1
+
+            client.transport.resume_reading()
+            assert await client.readn(len(payload), timeout=2.0) == payload
+            assert client.read_callback_count > 1
+
+
+async def test_eof_received_keep_open(all_loops):
+    loop = asyncio.get_running_loop()
+    server_protocol_created = loop.create_future()
+    server_received = loop.create_future()
+
+    class HalfCloseServer(asyncio.Protocol):
+        def connection_made(self, transport):
+            self.transport = transport
+            server_protocol_created.set_result(self)
+
+        def data_received(self, data):
+            if not server_received.done():
+                server_received.set_result(data)
+
+    class KeepOpenClient(AsyncClient):
+        def eof_received(self):
+            super().eof_received()
+            self.transport.write(b"client-after-eof")
+            self.transport.close()
+            return True
+
+    async with TestServer(HalfCloseServer) as server:
+        async with TestClient(server, protocol_factory=KeepOpenClient) as client:
+            server_client = await server_protocol_created
+            server_client.transport.write(b"server-before-eof")
+            server_client.transport.write_eof()
+
+            assert await client.readn(len(b"server-before-eof")) == b"server-before-eof"
+            assert await asyncio.wait_for(server_received, timeout=1.0) == b"client-after-eof"
+            await client.wait_closed()
+            assert client.is_eof_received
+
+
+async def test_socket_transport_repr_does_not_call_protocol_buffer_size(selector_loop):
+    class BadBufferSizeProtocol(Protocol):
+        def connection_made(self, transport):
+            self.transport = transport
+
+        def get_local_write_buffer_size(self):
+            raise RuntimeError("get_local_write_buffer_size")
+
+    loop = asyncio.get_running_loop()
+    sock, peer = socket.socketpair()
+    transport = None
+    try:
+        sock.setblocking(False)
+        transport = SocketTransport(loop, sock, BadBufferSizeProtocol())
+        assert "SocketTransport" in repr(transport)
+        await asyncio.sleep(0)
+    finally:
+        if transport is not None:
+            transport.abort()
+            await asyncio.sleep(0)
+        peer.close()
+
+
+async def test_ssl_socket_transport_repr_does_not_call_protocol_buffer_size(selector_loop):
+    class BadBufferSizeProtocol(Protocol):
+        def connection_made(self, transport):
+            self.transport = transport
+
+        def get_local_write_buffer_size(self):
+            raise RuntimeError("get_local_write_buffer_size")
+
+    loop = asyncio.get_running_loop()
+    server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
+    sock, peer = socket.socketpair()
+    transport = None
+    try:
+        sock.setblocking(False)
+        transport = SSLTransport_Socket(
+            loop,
+            BadBufferSizeProtocol(),
+            client_context,
+            False,
+            1.0,
+            1.0,
+            256 * 1024,
+            256 * 1024,
+            sock,
+        )
+        assert "SSLTransport_Socket" in repr(transport)
+    finally:
+        if transport is not None:
+            transport.abort()
+            await asyncio.sleep(0)
+        peer.close()
 
 
 async def test_ssl_renegotiate_midstream(all_loops, ssl_conn_type):
@@ -362,6 +502,19 @@ async def test_sendfile(all_loops, conn_type, file_size, header_size, tail_size)
                 client.transport._sendfile_compatible = False
                 with pytest.raises(NotImplementedError):
                     await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2)
+
+
+@pytest.mark.parametrize("count", [None, 1024])
+async def test_sendfile_to_eof(all_loops, conn_type, count):
+    conn_type.check_sendfile_supported()
+
+    loop = asyncio.get_running_loop()
+    payload = b"payload"
+    with TmpFromData(payload) as tmp:
+        async with TestServer(ct=conn_type) as server:
+            async with TestClient(server, ct=conn_type) as client:
+                await sendfile(loop, client.transport, tmp, offset=2, count=count)
+                assert await client.readn(len(payload) - 2, timeout=1.0) == payload[2:]
 
 
 async def test_sendfile_huge_error(all_loops, conn_type):

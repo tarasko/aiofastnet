@@ -88,7 +88,7 @@ cdef SendFileRequest _make_send_file_request(file, offset, count):
     self.fd = c_fd
     self.offset = c_offset
     self.count = c_count
-    self.waiter = asyncio.get_running_loop().create_future()
+    self.waiter = None
     return self
 
 
@@ -156,7 +156,7 @@ cdef class SSLTransportBase(Transport):
     cdef bint _try_sendfile(self, SendFileRequest req) except -1:
         """
         Immediately try sendfile. Update req.offset and count if succeed.
-        In case of error complete req.waiter with exception. Re-raise exception.
+        Re-raise any sendfile exception.
         Return True if the whole file has been sent. False - if sendfile has sent
         only part of the file and we need to wait until socket is ready for writing
         again.
@@ -279,8 +279,7 @@ cdef class SSLTransportBase(Transport):
         else:
             if self.is_closing():
                 info.append('closing')
-            wbuf_size = self.get_local_write_buffer_size()
-            info.append(f'wbuf_size={wbuf_size}')
+            info.append(f'wbuf_size={self._write_backlog_size}')
         return '[{}]'.format(' '.join(info))
 
     cdef inline _set_protocol(self, protocol):
@@ -793,7 +792,7 @@ cdef class SSLTransportBase(Transport):
             if maybe_pause_protocol:
                 self._maybe_pause_protocol()
 
-    async def sendfile(self, file, offset, count):
+    def sendfile(self, file, offset, count) -> Optional[asyncio.Future[None]]:
         self._check_thread("sendfile")
 
         # This is an undocumented feature in asyncio and uvloop
@@ -809,7 +808,7 @@ cdef class SSLTransportBase(Transport):
         try:
             if not self._write_backlog:
                 if self._try_sendfile(req):
-                    return await req.waiter
+                    return None
 
             if unlikely(self._is_debug):
                 _logger.debug("%r: enqueue SendFileRequest(offset=%d,count=%d)",
@@ -819,7 +818,8 @@ cdef class SSLTransportBase(Transport):
             self._write_backlog_size += req.count
             self._maybe_pause_protocol()
 
-            return await req.waiter
+            req.waiter = self._loop.create_future()
+            return req.waiter
         except BaseException as ex:
             self._fatal_error(ex, 'Fatal error on TLS transport')
             raise
@@ -929,6 +929,8 @@ cdef class SSLTransportBase(Transport):
                 self._write_backlog_size += (<SendFileRequest>data).count
                 if not sendfile_completed:
                     break
+                if not (<SendFileRequest>data).waiter.done():
+                    (<SendFileRequest>data).waiter.set_result(None)
             else:
                 aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
                 tail = self._write_impl(data, data_ptr, data_len)
@@ -1004,9 +1006,8 @@ cdef class SSLTransportBase(Transport):
         cdef SendFileRequest req
         for data in self._write_backlog:
             if isinstance(data, SendFileRequest):
-                _logger.debug("Found SendFileRequest in write_backlog")
                 req = <SendFileRequest>data
-                if not req.waiter.done():
+                if req.waiter is not None and not req.waiter.done():
                     req.waiter.set_exception(exc)
         self._write_backlog.clear()
         self._write_backlog_size = 0
@@ -1301,6 +1302,14 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             self._fatal_error(exc, "Error occurred during write")
 
     cdef bint _try_sendfile(self, SendFileRequest req) except -1:
+        """
+        Return True if finished, False if must wait for write ready event.
+
+        Caller is always responsible for:
+        * handling exceptions, including closing the transport when appropriate;
+        * completing req.waiter when the request finishes or fails.
+        """
+
         cdef Py_ssize_t bytes_written
 
         while True:
@@ -1313,8 +1322,6 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                 req.offset += bytes_written
                 req.count -= bytes_written
                 if req.count == 0:
-                    if not req.waiter.done():
-                        req.waiter.set_result(None)
                     return True
                 else:
                     continue
@@ -1335,9 +1342,6 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                 # Treat it as lost connection.
                 exc = ConnectionResetError() if ssl_error == SSLError.SSL_ERROR_SYSCALL else \
                     self._ssl_object.make_exc_from_ssl_error("SSL_sendfile failed", ssl_error)
-                if not req.waiter.done():
-                    req.waiter.set_exception(exc)
-
                 raise exc
 
     cdef _read_ready(self):
