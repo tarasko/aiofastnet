@@ -11,7 +11,7 @@ from contextlib import contextmanager
 import pytest
 
 from aiofastnet.utils import aiofn_maybe_copy_buffer
-from aiofastnet.transport import Transport
+from aiofastnet.transport import Protocol, SocketTransport, Transport
 from tests.utils import TestClient, TestServer, \
     make_test_ssl_contexts, AsyncClient, SomeException, exc_queue, _logger, \
     conn_type, ssl_conn_type, ktls_conn_type, ssl_sbio_conn_type, start_tls, sendfile
@@ -366,6 +366,50 @@ async def test_eof_received_keep_open(all_loops):
             assert await asyncio.wait_for(server_received, timeout=1.0) == b"client-after-eof"
             await client.wait_closed()
             assert client.is_eof_received
+
+
+async def test_socket_transport_repr_does_not_call_protocol_buffer_size(selector_loop):
+    class BadBufferSizeProtocol(Protocol):
+        def connection_made(self, transport):
+            self.transport = transport
+
+        def get_local_write_buffer_size(self):
+            raise RuntimeError("get_local_write_buffer_size")
+
+    loop = asyncio.get_running_loop()
+    sock, peer = socket.socketpair()
+    transport = None
+    try:
+        sock.setblocking(False)
+        transport = SocketTransport(loop, sock, BadBufferSizeProtocol())
+        assert "SocketTransport" in repr(transport)
+        await asyncio.sleep(0)
+    finally:
+        if transport is not None:
+            transport.abort()
+            await asyncio.sleep(0)
+        peer.close()
+
+
+async def test_socket_transport_init_exception_closes_socket_from_del(selector_loop):
+    class BadSocket:
+        def __init__(self):
+            self.closed = False
+
+        def fileno(self):
+            raise RuntimeError("fileno")
+
+        def close(self):
+            self.closed = True
+
+    loop = asyncio.get_running_loop()
+    sock = BadSocket()
+
+    with pytest.warns(ResourceWarning, match="unclosed SocketTransport"):
+        with pytest.raises(RuntimeError, match="fileno"):
+            SocketTransport(loop, sock, asyncio.Protocol())
+
+    assert sock.closed
 
 
 async def test_ssl_renegotiate_midstream(all_loops, ssl_conn_type):

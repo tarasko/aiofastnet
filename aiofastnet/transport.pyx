@@ -192,11 +192,26 @@ cdef class SocketTransport(Transport):
         self._thread_id = PyThread_get_thread_ident()
         assert loop is not None
         self._loop = loop
-
+        self._protocol = None
+        self._extra = {}
+        self._server = None
+        self._sock = None
+        self._sock_fd_obj = None
+        self._sock_fd = -1
         self._data_received_buffer = None
-        self.set_protocol(protocol)
+        self._write_backlog = collections.deque()
+        self._write_backlog_size = 0
+        self._write_ready_registered = False
+        self._connection_lost_scheduled = False
+        self._closed_write_count = 0
+        self._closing = False  # Set when close() called.
+        self._read_paused = False  # Set when pause_reading() called
 
         self._write_watermarks = WriteWatermarks(loop)
+        self._server = server
+        self._sock = sock
+        self._sock_fd_obj = sock.fileno()
+        self._sock_fd = self._sock_fd_obj
         self._extra = {} if extra is None else extra
         self._extra['socket'] = TransportSocket(sock)
         try:
@@ -208,17 +223,8 @@ cdef class SocketTransport(Transport):
                 self._extra['peername'] = sock.getpeername()
             except socket.error:
                 self._extra['peername'] = None
-        self._server = server
-        self._sock = sock
-        self._sock_fd_obj = sock.fileno()
-        self._sock_fd = self._sock_fd_obj
-        self._write_backlog = collections.deque()
-        self._write_backlog_size = 0
-        self._write_ready_registered = False
-        self._connection_lost_scheduled = False
-        self._closed_write_count = 0
-        self._closing = False  # Set when close() called.
-        self._read_paused = False  # Set when pause_reading() called
+
+        self.set_protocol(protocol)
 
         if self._server is not None:
             self._server._attach(self)
@@ -244,15 +250,12 @@ cdef class SocketTransport(Transport):
             info.append('closed')
         elif self._closing:
             info.append('closing')
-        # test if the transport was closed
-        if self._loop is not None and not self._loop.is_closed():
-            bufsize = self.get_write_buffer_size()
-            info.append(f'wbuf_size={bufsize}')
+        info.append(f'wbuf_size={self._write_backlog_size}')
         return '[{}]'.format(' '.join(info))
 
     def __del__(self):
         if self._sock is not None:
-            warnings.warn(f"unclosed transport {self!r}", ResourceWarning, source=self)
+            warnings.warn(f"unclosed SocketTransport for {self._sock}", ResourceWarning, source=self)
             self._sock.close()
             if self._server is not None:
                 self._server._detach(self)
