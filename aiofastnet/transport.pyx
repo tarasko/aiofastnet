@@ -81,7 +81,7 @@ cdef class SendFileRequest:
         object waiter
 
 
-cdef _make_send_file_request(file, offset, count):
+cdef SendFileRequest _make_send_file_request(file, offset, count):
     cdef SendFileRequest req = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
     req.file = file
     req.offset = offset
@@ -692,17 +692,17 @@ cdef class SocketTransport(Transport):
                     _logger.debug("%r: partially wrote backlog item of %d bytes", self, bytes_sent)
                 break
 
-    cdef inline _try_sendfile_from_backlog_top(self):
-        cdef:
-            SendFileRequest sendfile_req = <SendFileRequest>self._write_backlog[0]
-            Py_ssize_t orig_req_size = sendfile_req.count
+    cdef inline bint _try_sendfile_from_backlog_top(self) except -1:
+        cdef SendFileRequest sendfile_req = <SendFileRequest>self._write_backlog[0]
+
+        orig_req_size = sendfile_req.count
 
         cdef bint all_sent = self._try_sendfile(sendfile_req)
         if all_sent:
             self._write_backlog.popleft()
             if not sendfile_req.waiter.done():
                 sendfile_req.waiter.set_result(None)
-        self._write_backlog_size -= orig_req_size - sendfile_req.count
+        self._write_backlog_size -= <Py_ssize_t>(orig_req_size - sendfile_req.count)
 
         return all_sent
 
