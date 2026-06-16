@@ -6,11 +6,10 @@ import warnings
 import asyncio
 from typing import Optional
 
-import cython
 from asyncio.trsock import TransportSocket
 from logging import getLogger
 
-from cpython.bytearray cimport PyByteArray_AS_STRING, PyByteArray_GET_SIZE
+from cpython.ref cimport Py_XDECREF, Py_DECREF
 from cpython.memoryview cimport PyMemoryView_FromMemory
 from cpython.buffer cimport PyBUF_READ, PyBUF_WRITABLE
 from cpython.bytes cimport *
@@ -22,7 +21,7 @@ from .utils cimport *
 
 
 cdef object _logger = getLogger('aiofastnet')
-cdef object _DATA_RECEIVED_MAX_SIZE = 128 * 1024
+cdef Py_ssize_t _DATA_RECEIVED_MAX_SIZE = 128 * 1024
 
 
 cdef class Transport:
@@ -160,7 +159,6 @@ cdef class SocketTransport(Transport):
         object __weakref__
         unsigned long _thread_id
         object _loop
-        bytearray _data_received_buffer
         object _protocol
         bint _protocol_buffered
         bint _protocol_aiofn
@@ -197,7 +195,6 @@ cdef class SocketTransport(Transport):
         self._sock = sock
         self._sock_fd_obj = sock.fileno()
         self._sock_fd = self._sock_fd_obj
-        self._data_received_buffer = None
         self._write_backlog = collections.deque()
         self._write_backlog_size = 0
         self._write_ready_registered = False
@@ -269,12 +266,6 @@ cdef class SocketTransport(Transport):
         self._protocol_buffered = aiofn_is_buffered_protocol(protocol)
         self._protocol_aiofn = isinstance(protocol, Protocol)
         self._protocol_connected = True
-
-        if not self._protocol_buffered:
-            if self._data_received_buffer is None:
-                self._data_received_buffer = bytearray(_DATA_RECEIVED_MAX_SIZE)
-        else:
-            self._data_received_buffer = None
 
     cpdef get_protocol(self):
         self._check_thread("get_protocol")
@@ -410,14 +401,11 @@ cdef class SocketTransport(Transport):
 
     cdef inline _read_ready__data_received(self):
         cdef:
+            PyObject* buffer
             char* buf_ptr
-            Py_ssize_t buf_len
             Py_ssize_t bytes_read
             object data
             str error_stage
-
-        buf_ptr = PyByteArray_AS_STRING(self._data_received_buffer)
-        buf_len = PyByteArray_GET_SIZE(self._data_received_buffer)
 
         while True:
             if self._connection_lost_scheduled:
@@ -429,9 +417,17 @@ cdef class SocketTransport(Transport):
             try:
                 error_stage = "socket read failed."
 
-                bytes_read = aiofn_recv(self._sock_fd, buf_ptr, buf_len)
+                buffer = aiofn_allocate_bytes(_DATA_RECEIVED_MAX_SIZE, &buf_ptr)
+                try:
+                    bytes_read = aiofn_recv(self._sock_fd, buf_ptr, _DATA_RECEIVED_MAX_SIZE)
+                except:
+                    # Use XDECREF because it accepts raw PyObject* pointer
+                    Py_XDECREF(buffer)
+                    raise
+                data = aiofn_finalize_bytes(buffer, max(bytes_read, 0))
+
                 if unlikely(self._is_debug):
-                    _logger.debug("%r: aiofn_recv(...,len=%d)=%d", self, buf_len, bytes_read)
+                    _logger.debug("%r: aiofn_recv(...,len=%d)=%d", self, _DATA_RECEIVED_MAX_SIZE, bytes_read)
                 if bytes_read == -1:    # without exception this means EGAIN
                     return
 
@@ -441,7 +437,6 @@ cdef class SocketTransport(Transport):
 
                 error_stage = "protocol.data_received() call failed."
 
-                data = PyBytes_FromStringAndSize(buf_ptr, bytes_read)
                 self._protocol.data_received(data)
             except (SystemExit, KeyboardInterrupt):
                 raise

@@ -12,6 +12,7 @@ from cpython.object cimport PyObject
 from cpython.buffer cimport PyBUF_WRITE, PyBUF_WRITABLE
 from cpython.memoryview cimport PyMemoryView_FromMemory
 from cpython.pythread cimport PyThread_get_thread_ident
+from cpython.ref cimport Py_XDECREF
 from posix.types cimport off_t
 
 from . import constants
@@ -570,30 +571,34 @@ cdef class SSLTransportBase(Transport):
             bytes_obj = aiofn_allocate_bytes(capacity, &bytes_buffer_ptr)
             total_bytes_read = 0
 
-            while True:
-                available = capacity - total_bytes_read
-                if available == 0:
-                    capacity += max(capacity, max_ssl_read_size)
-                    aiofn_resize_bytes(&bytes_obj, capacity, &bytes_buffer_ptr)
+            try:
+                while True:
+                    available = capacity - total_bytes_read
+                    if available == 0:
+                        capacity += max(capacity, max_ssl_read_size)
+                        aiofn_resize_bytes(&bytes_obj, capacity, &bytes_buffer_ptr)
 
-                bytes_read = self._ssl_object.read(
-                    bytes_buffer_ptr + total_bytes_read,
-                    min(capacity - total_bytes_read, max_ssl_read_size)
-                )
+                    bytes_read = self._ssl_object.read(
+                        bytes_buffer_ptr + total_bytes_read,
+                        min(capacity - total_bytes_read, max_ssl_read_size)
+                    )
 
-                if bytes_read <= 0:
-                    last_error = self._ssl_object.get_error(bytes_read)
+                    if bytes_read <= 0:
+                        last_error = self._ssl_object.get_error(bytes_read)
+                        if unlikely(self._is_debug):
+                            _logger.debug("%r: SSL_read(buf_len=%d)=%d, %s",
+                                          self, capacity - total_bytes_read, bytes_read,
+                                          ssl_error_name(last_error))
+                        break
+
+                    total_bytes_read += bytes_read
                     if unlikely(self._is_debug):
-                        _logger.debug("%r: SSL_read(buf_len=%d)=%d, %s",
-                                      self, capacity - total_bytes_read, bytes_read,
-                                      ssl_error_name(last_error))
-                    break
-
-                total_bytes_read += bytes_read
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_read(buf_len=%d)=%d, total=%d",
-                                  self, capacity - total_bytes_read + bytes_read,
-                                  bytes_read, total_bytes_read)
+                        _logger.debug("%r: SSL_read(buf_len=%d)=%d, total=%d",
+                                      self, capacity - total_bytes_read + bytes_read,
+                                      bytes_read, total_bytes_read)
+            except:
+                Py_XDECREF(bytes_obj)
+                raise
 
             user_data = aiofn_finalize_bytes(bytes_obj, total_bytes_read)
             if user_data is not None:

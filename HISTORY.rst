@@ -5,6 +5,12 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.14.0
+------------------
+
+* Optimized simple buffer read path in SocketTransport, do not copy memory
+* Harden logic against rare exceptions
+
 0.13.0
 ------------------
 
