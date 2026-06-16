@@ -292,6 +292,49 @@ async def test_pause_reading(all_loops, conn_type):
             client.transport.resume_reading()
 
 
+async def test_pause_reading_from_read_callback(all_loops, conn_type, buffered_protocol):
+    payload = b"x" * (3 * 256 * 1024)
+
+    class PauseFromReadCallbackClient(AsyncClient):
+        def __init__(self, is_buffered):
+            super().__init__(is_buffered)
+            self.first_read = asyncio.get_running_loop().create_future()
+            self.read_callback_count = 0
+
+        def _pause_once(self):
+            self.read_callback_count += 1
+            if self.read_callback_count == 1:
+                self.transport.pause_reading()
+                self.first_read.set_result(len(self._data))
+
+        def data_received(self, data):
+            super().data_received(data)
+            self._pause_once()
+
+        def buffer_updated(self, bytes_read):
+            super().buffer_updated(bytes_read)
+            self._pause_once()
+
+    async with TestServer(ct=conn_type) as server:
+        async with TestClient(server, ct=conn_type, protocol_factory=PauseFromReadCallbackClient, is_buffered=buffered_protocol) as client:
+            client.write(payload)
+
+            first_read_size = await asyncio.wait_for(client.first_read, timeout=1.0)
+            assert 0 < first_read_size < len(payload)
+            assert not client.transport.is_reading()
+
+            # The socket should still have data ready. Even if _read_ready() is
+            # invoked directly while paused, it must not read more data.
+            # client.transport._read_ready()
+            await asyncio.sleep(0.1)
+            assert len(client._data) == first_read_size
+            assert client.read_callback_count == 1
+
+            client.transport.resume_reading()
+            assert await client.readn(len(payload), timeout=2.0) == payload
+            assert client.read_callback_count > 1
+
+
 async def test_eof_received_keep_open(all_loops):
     loop = asyncio.get_running_loop()
     server_protocol_created = loop.create_future()

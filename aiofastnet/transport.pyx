@@ -417,37 +417,39 @@ cdef class SocketTransport(Transport):
             Py_ssize_t buf_len
             Py_ssize_t bytes_read
             object data
-
-        if self._connection_lost_scheduled:
-            return
+            str error_stage
 
         buf_ptr = PyByteArray_AS_STRING(self._data_received_buffer)
         buf_len = PyByteArray_GET_SIZE(self._data_received_buffer)
 
-        try:
-            bytes_read = aiofn_recv(self._sock_fd, buf_ptr, buf_len)
-            if unlikely(self._is_debug):
-                _logger.debug("%r: aiofn_recv(...,len=%d)=%d", self, buf_len, bytes_read)
-            if bytes_read == -1:    # without exception this means EGAIN
+        while True:
+            if self._connection_lost_scheduled:
                 return
-        except (SystemExit, KeyboardInterrupt):
-            raise
-        except BaseException as exc:
-            self._fatal_error(exc, 'Fatal read error on socket transport')
-            return
 
-        if bytes_read == 0:
-            self._read_ready__on_eof()
-            return
+            if self._read_paused:
+                return
 
-        try:
-            data = PyBytes_FromStringAndSize(buf_ptr, bytes_read)
-            self._protocol.data_received(data)
-        except (SystemExit, KeyboardInterrupt):
-            raise
-        except BaseException as exc:
-            self._fatal_error(
-                exc, 'Fatal error: protocol.data_received() call failed.')
+            try:
+                error_stage = "socket read failed."
+
+                bytes_read = aiofn_recv(self._sock_fd, buf_ptr, buf_len)
+                if unlikely(self._is_debug):
+                    _logger.debug("%r: aiofn_recv(...,len=%d)=%d", self, buf_len, bytes_read)
+                if bytes_read == -1:    # without exception this means EGAIN
+                    return
+
+                if bytes_read == 0:
+                    self._read_ready__on_eof()
+                    return
+
+                error_stage = "protocol.data_received() call failed."
+
+                data = PyBytes_FromStringAndSize(buf_ptr, bytes_read)
+                self._protocol.data_received(data)
+            except (SystemExit, KeyboardInterrupt):
+                raise
+            except BaseException as exc:
+                self._fatal_error(exc, f'Fatal error: {error_stage}')
 
     cdef inline _read_ready__on_eof(self):
         if self._loop.get_debug():
