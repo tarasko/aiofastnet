@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.16.0
+------------------
+
+* Optimize syscall usage, tune SocketTransport performance for simple protocols
+
 0.15.0
 ------------------
 

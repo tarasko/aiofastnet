@@ -407,41 +407,40 @@ cdef class SocketTransport(Transport):
             object data
             str error_stage
 
-        while True:
-            if self._connection_lost_scheduled:
+        if self._connection_lost_scheduled:
+            return
+
+        if self._read_paused:
+            return
+
+        error_stage = "socket read failed."
+        buffer = aiofn_allocate_bytes(_DATA_RECEIVED_MAX_SIZE, &buf_ptr)
+
+        try:
+            bytes_read = aiofn_recv(self._sock_fd, buf_ptr, _DATA_RECEIVED_MAX_SIZE)
+            data = aiofn_finalize_bytes(buffer, max(bytes_read, 0))
+            buffer = NULL
+
+            if unlikely(self._is_debug):
+                _logger.debug("%r: aiofn_recv(...,len=%d)=%d", self, _DATA_RECEIVED_MAX_SIZE, bytes_read)
+
+            if bytes_read == -1:    # without exception this means EGAIN
                 return
 
-            if self._read_paused:
+            if bytes_read == 0:
+                self._read_ready__on_eof()
                 return
 
-            try:
-                error_stage = "socket read failed."
+            error_stage = "protocol.data_received() call failed."
 
-                buffer = aiofn_allocate_bytes(_DATA_RECEIVED_MAX_SIZE, &buf_ptr)
-                try:
-                    bytes_read = aiofn_recv(self._sock_fd, buf_ptr, _DATA_RECEIVED_MAX_SIZE)
-                except:
-                    # Use XDECREF because it accepts raw PyObject* pointer
-                    Py_XDECREF(buffer)
-                    raise
-                data = aiofn_finalize_bytes(buffer, max(bytes_read, 0))
+            self._protocol.data_received(data)
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except BaseException as exc:
+            self._fatal_error(exc, f'Fatal error: {error_stage}')
+        finally:
+            Py_XDECREF(buffer)
 
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: aiofn_recv(...,len=%d)=%d", self, _DATA_RECEIVED_MAX_SIZE, bytes_read)
-                if bytes_read == -1:    # without exception this means EGAIN
-                    return
-
-                if bytes_read == 0:
-                    self._read_ready__on_eof()
-                    return
-
-                error_stage = "protocol.data_received() call failed."
-
-                self._protocol.data_received(data)
-            except (SystemExit, KeyboardInterrupt):
-                raise
-            except BaseException as exc:
-                self._fatal_error(exc, f'Fatal error: {error_stage}')
 
     cdef inline _read_ready__on_eof(self):
         if self._loop.get_debug():
@@ -652,26 +651,24 @@ cdef class SocketTransport(Transport):
         """
         Returns None if all data has been sent, or remaining data
         """
-        cdef Py_ssize_t bytes_sent
+        cdef Py_ssize_t bytes_sent = -1
 
-        while True:
-            try:
-                bytes_sent = aiofn_send(self._sock_fd, data_ptr, data_len)
-                if unlikely(self._is_debug):
-                    _logger.debug("%r aiofn_send(...,len=%d)=%d", self,
-                                  data_len, bytes_sent)
-            except BaseException as exc:
-                self._fatal_error(exc, 'Fatal write error on socket transport')
-                return
-            else:
-                if bytes_sent == data_len:
-                    return None
+        try:
+            bytes_sent = aiofn_send(self._sock_fd, data_ptr, data_len)
+            if unlikely(self._is_debug):
+                _logger.debug("%r aiofn_send(...,len=%d)=%d", self,
+                              data_len, bytes_sent)
+        except BaseException as exc:
+            self._fatal_error(exc, 'Fatal write error on socket transport')
+            return None
 
-                if bytes_sent == -1:
-                    return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
+        if bytes_sent == data_len:
+            return None
 
-                data_ptr += bytes_sent
-                data_len -= bytes_sent
+        if bytes_sent == -1:
+            return aiofn_maybe_copy_buffer(data)
+
+        return aiofn_maybe_copy_buffer_tail(data, data_ptr + bytes_sent, data_len - bytes_sent)
 
     cdef inline _adjust_write_backlog(self, Py_ssize_t bytes_sent):
         cdef:
