@@ -21,7 +21,7 @@ from .utils cimport *
 
 
 cdef object _logger = getLogger('aiofastnet')
-cdef Py_ssize_t _DATA_RECEIVED_MAX_SIZE = 128 * 1024
+cdef Py_ssize_t _DATA_RECEIVED_MAX_SIZE = 256 * 1024
 
 
 cdef class Transport:
@@ -692,7 +692,7 @@ cdef class SocketTransport(Transport):
             else:
                 self._write_backlog[0] = data[bytes_sent:]
                 if unlikely(self._is_debug):
-                    _logger.debug("%r: partially wrote backlog item of %d bytes", self, bytes_sent, data_len)
+                    _logger.debug("%r: partially wrote backlog item of %d bytes", self, bytes_sent)
                 break
 
     cdef inline _try_sendfile_from_backlog_top(self):

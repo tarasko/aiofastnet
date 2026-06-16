@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.15.0
+------------------
+
+* Tune simple buffer read path in SocketTransport for better performance
+
 0.14.0
 ------------------
 
