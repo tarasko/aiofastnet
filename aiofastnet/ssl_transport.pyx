@@ -1429,11 +1429,16 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         return True
 
     cpdef connection_made(self, transport):
-        return self._ssl_transport.connection_made(transport)
+        cdef SSLTransport_Transport ssl_transport = self._ssl_transport
+        if ssl_transport is None:
+            return
+        return ssl_transport.connection_made(transport)
 
     cpdef connection_lost(self, exc):
         # Break cyclic dependency
-        ssl_transport = self._ssl_transport
+        cdef SSLTransport_Transport ssl_transport = self._ssl_transport
+        if ssl_transport is None:
+            return
         self._ssl_transport = None
         return ssl_transport.connection_lost(exc)
 
@@ -1489,6 +1494,7 @@ cdef class SSLTransport_Transport(SSLTransportBase):
                                   waiter,
                                   server_hostname,
                                   server)
+
         self._transport = None
         self._is_aiofn_transport = False
 

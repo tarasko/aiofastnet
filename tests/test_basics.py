@@ -12,7 +12,7 @@ import pytest
 
 from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Protocol, SocketTransport, Transport
-from aiofastnet.ssl_transport import SSLTransport_Socket
+from aiofastnet.ssl_transport import SSLTransport_Socket, SSLTransport_Transport
 from tests.utils import TestClient, TestServer, \
     make_test_ssl_contexts, AsyncClient, SomeException, exc_queue, _logger, \
     conn_type, ssl_conn_type, ktls_conn_type, ssl_sbio_conn_type, start_tls, sendfile
@@ -423,6 +423,42 @@ async def test_ssl_socket_transport_repr_does_not_call_protocol_buffer_size(sele
             transport.abort()
             await asyncio.sleep(0)
         peer.close()
+
+
+async def test_ssl_protocol_ignores_late_connection_made_after_connection_lost(selector_loop):
+    class DummyProtocol(asyncio.Protocol):
+        pass
+
+    class DummySocket:
+        def fileno(self):
+            return -1
+
+    class DummyTransport(asyncio.Transport):
+        def get_extra_info(self, name, default=None):
+            if name == "socket":
+                return DummySocket()
+            return default
+
+    loop = asyncio.get_running_loop()
+    _, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
+    waiter = loop.create_future()
+    ssl_transport = SSLTransport_Transport(
+        loop,
+        DummyProtocol(),
+        client_context,
+        False,
+        1.0,
+        1.0,
+        256 * 1024,
+        256 * 1024,
+        waiter=waiter,
+        server_hostname="aiofastnet.org",
+        call_connection_made=False,
+    )
+    ssl_protocol = ssl_transport.get_tls_protocol()
+
+    ssl_protocol.connection_lost(ConnectionResetError())
+    ssl_protocol.connection_made(DummyTransport())
 
 
 async def test_ssl_renegotiate_midstream(all_loops, ssl_conn_type):

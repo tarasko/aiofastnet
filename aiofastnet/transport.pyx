@@ -197,6 +197,7 @@ cdef class SocketTransport(Transport):
         self._sock = sock
         self._sock_fd_obj = sock.fileno()
         self._sock_fd = self._sock_fd_obj
+        self._data_received_buffer = None
         self._write_backlog = collections.deque()
         self._write_backlog_size = 0
         self._write_ready_registered = False
