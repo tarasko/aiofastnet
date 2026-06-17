@@ -29,6 +29,7 @@ from .utils cimport (
     aiofn_finalize_bytes,
     aiofn_resize_bytes,
     aiofn_set_nodelay,
+    aiofn_add_info_and_reraise,
     unlikely
 )
 from .ssl_object cimport (SSLObject, SSLError, ssl_error_name)
@@ -324,7 +325,10 @@ cdef class SSLTransportBase(Transport):
         self._check_thread("close")
         if unlikely(self._is_debug):
             _logger.debug("%r: user called close()", self)
-        self._start_shutdown()
+        try:
+            self._start_shutdown()
+        except BaseException as exc:
+            self._handle_error(exc, "Error occurred during shutdown")
 
     cpdef abort(self):
         self._check_thread("abort")
@@ -404,7 +408,7 @@ cdef class SSLTransportBase(Transport):
         try:
             self._incoming_bio_updated()
         except BaseException as exc:
-            self._fatal_error(exc, "Error occurred during read")
+            self._handle_error(exc, "Error occurred during read")
 
     cdef inline _do_handshake(self):
         cdef:
@@ -509,14 +513,17 @@ cdef class SSLTransportBase(Transport):
             int last_error = 0
 
         while True:
-            if self._app_protocol_aiofn:
-                app_buffer = (<Protocol>self._app_protocol).get_buffer_c(-1, &buf_ptr, &buf_len)
-            else:
-                app_buffer = self._app_protocol.get_buffer(-1)
-                aiofn_unpack_simple_buffer(app_buffer, &buf_ptr, &buf_len, PyBUF_WRITABLE)
+            try:
+                if self._app_protocol_aiofn:
+                    app_buffer = (<Protocol>self._app_protocol).get_buffer_c(-1, &buf_ptr, &buf_len)
+                else:
+                    app_buffer = self._app_protocol.get_buffer(-1)
+                    aiofn_unpack_simple_buffer(app_buffer, &buf_ptr, &buf_len, PyBUF_WRITABLE)
 
-            if buf_len == 0:
-                raise RuntimeError('get_buffer() returned an empty buffer')
+                if buf_len == 0:
+                    raise RuntimeError('get_buffer() returned an empty buffer')
+            except:
+                aiofn_add_info_and_reraise('Fatal error: protocol.get_buffer() call failed.', True)
 
             while buf_len > 0:
                 last_bytes_read = self._ssl_object.read(buf_ptr, buf_len)
@@ -537,10 +544,13 @@ cdef class SSLTransportBase(Transport):
                 total_bytes_read += last_bytes_read
 
             if total_bytes_read > 0:
-                if self._app_protocol_aiofn:
-                    (<Protocol>self._app_protocol).buffer_updated(total_bytes_read)
-                else:
-                    self._app_protocol.buffer_updated(total_bytes_read)
+                try:
+                    if self._app_protocol_aiofn:
+                        (<Protocol>self._app_protocol).buffer_updated(total_bytes_read)
+                    else:
+                        self._app_protocol.buffer_updated(total_bytes_read)
+                except:
+                    aiofn_add_info_and_reraise('Fatal error: protocol.buffer_updated() call failed.', True)
                 total_bytes_read = 0
 
             if buf_len == 0:
@@ -602,7 +612,10 @@ cdef class SSLTransportBase(Transport):
 
             user_data = aiofn_finalize_bytes(bytes_obj, total_bytes_read)
             if user_data is not None:
-                self._app_protocol.data_received(user_data)
+                try:
+                    self._app_protocol.data_received(user_data)
+                except:
+                    aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.', True)
 
             if not self._should_retry_read(last_error) or self._read_paused:
                 return
@@ -654,6 +667,17 @@ cdef class SSLTransportBase(Transport):
         if self._state in (SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN):
             self._abort(asyncio.TimeoutError('SSL shutdown timed out'))
 
+    cdef inline _handle_error(self, exc, message):
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise exc
+
+        if self._state in (SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN):
+            self._on_shutdown_complete(exc)
+            return
+
+        message = getattr(exc, constants.EXC_INFO_ATTR, message)
+        self._fatal_error(exc, message)
+
     cdef inline _do_read_into_void(self):
         cdef:
             bytearray buffer = bytearray(16 * 1024)
@@ -682,67 +706,61 @@ cdef class SSLTransportBase(Transport):
                 return
 
     cdef inline _do_flush(self):
-        try:
-            self._do_read_into_void()
-        except BaseException as ex:
-            self._on_shutdown_complete(ex)
-        else:
-            if self._write_backlog_size:
-                self._flush_write_backlog()
+        self._do_read_into_void()
+        if self._write_backlog_size:
+            self._flush_write_backlog()
 
-            if self.get_local_write_buffer_size() == 0:
-                self._set_state(SSLProtocolState.SHUTDOWN)
-                self._do_shutdown()
+        if self.get_local_write_buffer_size() == 0:
+            self._set_state(SSLProtocolState.SHUTDOWN)
+            self._do_shutdown()
 
     cdef inline _do_shutdown(self):
         cdef:
             int rc
             int ssl_error
 
-        try:
-            self._do_read_into_void()
+        self._do_read_into_void()
 
-            while True:
-                rc = self._ssl_object.shutdown()
+        while True:
+            rc = self._ssl_object.shutdown()
 
-                # From openssl docs
-                # Unlike most other function, returning 0 does not indicate an
-                # error. SSL_get_error(3) should not get called, it may
-                # misleadingly indicate an error even though no error occurred.
-                # 0 - means we have successfully sent close_notify, but we still
-                # expect peer to reply.
+            # From openssl docs
+            # Unlike most other function, returning 0 does not indicate an
+            # error. SSL_get_error(3) should not get called, it may
+            # misleadingly indicate an error even though no error occurred.
+            # 0 - means we have successfully sent close_notify, but we still
+            # expect peer to reply.
 
-                if rc in (1, 0):
-                    if unlikely(self._is_debug):
-                        _logger.debug("%r: SSL_shutdown()=%d", self, rc)
+            if rc in (1, 0):
+                if unlikely(self._is_debug):
+                    _logger.debug("%r: SSL_shutdown()=%d", self, rc)
 
-                    self._flush_outgoing_bio()
+                self._flush_outgoing_bio()
 
-                    if rc == 1:
-                        self._on_shutdown_complete(None)
+                if rc == 1:
+                    self._on_shutdown_complete(None)
+                return
+
+            ssl_error = self._ssl_object.get_error(rc)
+            if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
+                if self._should_retry_after_want_write():
+                    continue
+                else:
                     return
 
-                ssl_error = self._ssl_object.get_error(rc)
-                if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
-                    if self._should_retry_after_want_write():
-                        continue
-                    else:
-                        return
+            if ssl_error == SSLError.SSL_ERROR_WANT_READ:
+                return
 
-                if ssl_error == SSLError.SSL_ERROR_WANT_READ:
-                    return
-
-                raise self._ssl_object.make_exc_from_ssl_error(
-                    "SSL_shutdown failed", ssl_error)
-        except BaseException as exc:
-            self._on_shutdown_complete(exc)
+            raise self._ssl_object.make_exc_from_ssl_error(
+                "SSL_shutdown failed", ssl_error)
 
     cdef inline _on_shutdown_complete(self, shutdown_exc):
         if self._shutdown_timeout_handle is not None:
             self._shutdown_timeout_handle.cancel()
             self._shutdown_timeout_handle = None
         if shutdown_exc:
-            self._fatal_error(shutdown_exc, 'Error occurred during shutdown')
+            message = getattr(shutdown_exc, constants.EXC_INFO_ATTR, 'Error occurred during shutdown')
+            self._fatal_error(shutdown_exc, message)
         else:
             self._force_close(None)
 
@@ -825,8 +843,8 @@ cdef class SSLTransportBase(Transport):
 
             req.waiter = self._loop.create_future()
             return req.waiter
-        except BaseException as ex:
-            self._fatal_error(ex, 'Fatal error on TLS transport')
+        except BaseException as exc:
+            self._handle_error(exc, 'Fatal error on TLS transport')
             raise
 
     cdef write_c(self, char* data_ptr, Py_ssize_t data_len):
@@ -840,8 +858,8 @@ cdef class SSLTransportBase(Transport):
                 self._append_to_backlog(tail, True)
             else:
                 self._append_to_backlog(PyBytes_FromStringAndSize(data_ptr, data_len), True)
-        except BaseException as ex:
-            self._fatal_error(ex, 'Fatal error on TLS transport')
+        except BaseException as exc:
+            self._handle_error(exc, 'Fatal error on TLS transport')
 
     def write(self, data):
         self._check_thread("write")
@@ -867,8 +885,8 @@ cdef class SSLTransportBase(Transport):
             tail = self._write_impl(data, data_ptr, data_len)
             self._flush_outgoing_bio()
             self._append_to_backlog(tail, True)
-        except BaseException as ex:
-            self._fatal_error(ex, 'Fatal error on TLS transport')
+        except BaseException as exc:
+            self._handle_error(exc, 'Fatal error on TLS transport')
 
     def writelines(self, list_of_data):
         self._check_thread("writelines")
@@ -911,8 +929,8 @@ cdef class SSLTransportBase(Transport):
 
             self._flush_outgoing_bio()
             self._maybe_pause_protocol()
-        except BaseException as ex:
-            self._fatal_error(ex, 'Fatal error on TLS transport')
+        except BaseException as exc:
+            self._handle_error(exc, 'Fatal error on TLS transport')
 
     cdef inline _flush_write_backlog(self):
         cdef:
@@ -999,13 +1017,11 @@ cdef class SSLTransportBase(Transport):
             self._app_state = AppProtocolState.STATE_EOF
             try:
                 keep_open = self._app_protocol.eof_received()
-            except (KeyboardInterrupt, SystemExit):
-                raise
-            except BaseException as ex:
-                self._fatal_error(ex, 'Error calling eof_received()')
-            else:
-                if keep_open:
-                    _logger.warning('returning true from eof_received() has no effect when using ssl')
+            except:
+                aiofn_add_info_and_reraise('Error calling eof_received()', True)
+
+            if keep_open:
+                _logger.warning('returning true from eof_received() has no effect when using ssl')
 
     cdef inline _clear_write_backlog(self, exc):
         cdef SendFileRequest req
@@ -1303,8 +1319,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             if not self._write_had_eagain:
                 self._drop_writer()
         except BaseException as exc:
-            # _fatal_error will always _drop_writer()
-            self._fatal_error(exc, "Error occurred during write")
+            self._handle_error(exc, "Error occurred during write")
 
     cdef bint _try_sendfile(self, SendFileRequest req) except -1:
         """
@@ -1381,9 +1396,8 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                     self._incoming_bio_updated()
             else:
                 self._incoming_bio_updated()
-
         except BaseException as exc:
-            self._fatal_error(exc, "Error occurred during read")
+            self._handle_error(exc, "Error occurred during read")
 
     cpdef _force_close(self, exc):
         if self._sock is None:
@@ -1575,7 +1589,10 @@ cdef class SSLTransport_Transport(SSLTransportBase):
             _logger.debug("%r: buffer_updated(%d)", self, nbytes)
 
         self._ssl_object.incoming_bio_produce(nbytes)
-        self._incoming_bio_updated()
+        try:
+            self._incoming_bio_updated()
+        except BaseException as exc:
+            self._handle_error(exc, "Error occurred during read")
 
     cdef inline eof_received(self):
         if unlikely(self._is_debug):
