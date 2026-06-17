@@ -63,7 +63,7 @@ def _plot_results(
 
     fig, axes = _plot_absolute_results(results, transports, msg_sizes, variants)
     fig.suptitle(
-        f"Echo Round-Trip Benchmark | Python {python_version} | aiofastnet-{aiofastnet_version} | "
+        f"Echo Round-Trip Benchmark | Python {python_version}\naiofastnet-{aiofastnet_version} | "
         f"uvloop-{uvloop_version} | SO_SNDBUF={sndbuf_size}"
     )
     fig.tight_layout()
@@ -114,14 +114,14 @@ def _plot_absolute_results(
     msg_sizes: list[int],
     variants: list[str],
 ):
-    rows = len(transports)
-    cols = len(msg_sizes)
-    fig_width = max(6.0, 3.2 * cols)
-    fig_height = max(3.2, 3.0 * rows)
+    rows = len(msg_sizes)
+    cols = len(transports)
+    fig_width = max(6.0, 3.6 * cols)
+    fig_height = max(3.2, 2.8 * rows)
     fig, axes = plt.subplots(rows, cols, figsize=(fig_width, fig_height), squeeze=False)
 
-    for row, transport in enumerate(transports):
-        for col, msg_size in enumerate(msg_sizes):
+    for row, msg_size in enumerate(msg_sizes):
+        for col, transport in enumerate(transports):
             ax = axes[row][col]
             values_by_variant = results.get(transport, {}).get(msg_size, {})
             local_variants = [variant for variant in variants if variant in values_by_variant]
