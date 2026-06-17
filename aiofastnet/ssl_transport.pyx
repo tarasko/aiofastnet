@@ -1,6 +1,7 @@
 import asyncio
 import os
 import ssl
+import sys
 import warnings
 from asyncio.trsock import TransportSocket
 from logging import getLogger
@@ -328,8 +329,8 @@ cdef class SSLTransportBase(Transport):
             _logger.debug("%r: user called close()", self)
         try:
             self._start_shutdown()
-        except BaseException as exc:
-            self._handle_error(exc, "Error occurred during shutdown")
+        except:
+            self._handle_error("Error occurred during shutdown")
 
     cpdef abort(self):
         self._check_thread("abort")
@@ -395,12 +396,13 @@ cdef class SSLTransportBase(Transport):
         self._incoming_bio_updated()
 
     cdef inline _check_handshake_timeout(self):
-        if self._state == SSLProtocolState.DO_HANDSHAKE:
-            self._handle_error(
-                ConnectionAbortedError(
-                    f"SSL handshake is taking longer than {self._ssl_handshake_timeout} seconds: "
-                    "aborting the connection"),
-                'SSL handshake failed')
+        try:
+            if self._state == SSLProtocolState.DO_HANDSHAKE:
+                raise ConnectionAbortedError(
+                        f"SSL handshake is taking longer than {self._ssl_handshake_timeout} seconds: "
+                        "aborting the connection")
+        except:
+            self._handle_error('SSL handshake failed')
 
     cdef _retry_ssl_read(self):
         if unlikely(self._is_debug):
@@ -411,8 +413,8 @@ cdef class SSLTransportBase(Transport):
 
         try:
             self._incoming_bio_updated()
-        except BaseException as exc:
-            self._handle_error(exc, "Error occurred during read")
+        except:
+            self._handle_error("Error occurred during read")
 
     cdef inline _do_handshake(self):
         cdef:
@@ -641,9 +643,11 @@ cdef class SSLTransportBase(Transport):
         if self._state in (SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN):
             self._abort(asyncio.TimeoutError('SSL shutdown timed out'))
 
-    cdef inline _handle_error(self, exc, message):
+    cdef inline _handle_error(self, message):
+        _, exc, _ = sys.exc_info()
+
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-            raise exc
+            raise
 
         if self._state == SSLProtocolState.DO_HANDSHAKE:
             self._on_handshake_complete(exc)
@@ -821,8 +825,8 @@ cdef class SSLTransportBase(Transport):
 
             req.waiter = self._loop.create_future()
             return req.waiter
-        except BaseException as exc:
-            self._handle_error(exc, 'Fatal error on TLS transport')
+        except:
+            self._handle_error('Fatal error on TLS transport')
             raise
 
     cdef write_c(self, char* data_ptr, Py_ssize_t data_len):
@@ -836,8 +840,8 @@ cdef class SSLTransportBase(Transport):
                 self._append_to_backlog(tail, True)
             else:
                 self._append_to_backlog(PyBytes_FromStringAndSize(data_ptr, data_len), True)
-        except BaseException as exc:
-            self._handle_error(exc, 'Fatal error on TLS transport')
+        except:
+            self._handle_error('Fatal error on TLS transport')
 
     def write(self, data):
         self._check_thread("write")
@@ -863,8 +867,8 @@ cdef class SSLTransportBase(Transport):
             tail = self._write_impl(data, data_ptr, data_len)
             self._flush_outgoing_bio()
             self._append_to_backlog(tail, True)
-        except BaseException as exc:
-            self._handle_error(exc, 'Fatal error on TLS transport')
+        except:
+            self._handle_error('Fatal error on TLS transport')
 
     def writelines(self, list_of_data):
         self._check_thread("writelines")
@@ -906,8 +910,8 @@ cdef class SSLTransportBase(Transport):
 
             self._flush_outgoing_bio()
             self._maybe_pause_protocol()
-        except BaseException as exc:
-            self._handle_error(exc, 'Fatal error on TLS transport')
+        except:
+            self._handle_error('Fatal error on TLS transport')
 
     cdef inline _flush_write_backlog(self):
         cdef:
@@ -1336,8 +1340,8 @@ cdef class SSLTransport_Socket(SSLTransportBase):
 
             if not self._write_had_eagain:
                 self._drop_writer()
-        except BaseException as exc:
-            self._handle_error(exc, "Error occurred during write")
+        except:
+            self._handle_error("Error occurred during write")
 
     cdef bint _try_sendfile(self, SendFileRequest req) except -1:
         """
@@ -1414,8 +1418,8 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                     self._incoming_bio_updated()
             else:
                 self._incoming_bio_updated()
-        except BaseException as exc:
-            self._handle_error(exc, "Error occurred during read")
+        except:
+            self._handle_error("Error occurred during read")
 
     cpdef _force_close(self, exc):
         if self._sock is None:
@@ -1609,8 +1613,8 @@ cdef class SSLTransport_Transport(SSLTransportBase):
         self._ssl_object.incoming_bio_produce(nbytes)
         try:
             self._incoming_bio_updated()
-        except BaseException as exc:
-            self._handle_error(exc, "Error occurred during read")
+        except:
+            self._handle_error("Error occurred during read")
 
     cdef inline eof_received(self):
         if unlikely(self._is_debug):
