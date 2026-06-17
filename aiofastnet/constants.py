@@ -26,5 +26,4 @@ SSL_BIO_SIZE_DEFAULTS = {
     "ssl_outgoing_bio_size": int(4 * (16 * 1024 + 64))
 }
 
-EXC_INFO_ATTR = '_aiofastnet_protocol_callback_error'
-EXC_SHOULD_ABORT_CONN_ATTR = '_aiofastnet_abort_conn'
+EXC_INFO_ATTR = '_aiofastnet_extra_info'

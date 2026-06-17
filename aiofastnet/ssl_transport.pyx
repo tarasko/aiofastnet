@@ -1015,7 +1015,7 @@ cdef class SSLTransportBase(Transport):
 
             return app_buffer
         except:
-            aiofn_add_info_and_reraise('Fatal error: protocol.get_buffer() call failed.', True)
+            aiofn_add_info_and_reraise('Fatal error: protocol.get_buffer() call failed.')
 
     cdef inline _call_protocol_buffer_updated(self, Py_ssize_t bytes_read):
         try:
@@ -1024,14 +1024,14 @@ cdef class SSLTransportBase(Transport):
             else:
                 return self._app_protocol.buffer_updated(bytes_read)
         except:
-            aiofn_add_info_and_reraise('Fatal error: protocol.buffer_updated() call failed.', True)
+            aiofn_add_info_and_reraise('Fatal error: protocol.buffer_updated() call failed.')
 
     cdef inline _call_protocol_data_received(self, data):
         if data is not None:
             try:
                 return self._app_protocol.data_received(data)
             except:
-                aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.', True)
+                aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.')
 
     cdef inline _call_protocol_eof_received(self):
         if self._app_state == AppProtocolState.STATE_CON_MADE:
@@ -1039,7 +1039,7 @@ cdef class SSLTransportBase(Transport):
             try:
                 keep_open = self._app_protocol.eof_received()
             except:
-                aiofn_add_info_and_reraise('Error calling eof_received()', True)
+                aiofn_add_info_and_reraise('Error calling eof_received()')
             else:
                 if keep_open:
                     _logger.warning('returning true from eof_received() has no effect when using ssl')

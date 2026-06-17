@@ -22,6 +22,7 @@ from .utils cimport *
 
 cdef object _logger = getLogger('aiofastnet')
 cdef Py_ssize_t _DATA_RECEIVED_MAX_SIZE = 256 * 1024
+cdef size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
 
 
 cdef class Transport:
@@ -418,7 +419,7 @@ cdef class SocketTransport(Transport):
         try:
             keep_open = self._protocol.eof_received()
         except:
-            aiofn_add_info_and_reraise('Fatal error: protocol.eof_received() call failed.', True)
+            aiofn_add_info_and_reraise('Fatal error: protocol.eof_received() call failed.')
 
         if keep_open:
             # We're keeping the connection open so the
@@ -450,7 +451,7 @@ cdef class SocketTransport(Transport):
             return
 
         if unlikely(self._connection_lost_scheduled):
-            if self._closed_write_count >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
+            if self._closed_write_count >= LOG_THRESHOLD_FOR_CONNLOST_WRITES:
                 _logger.warning('socket.send() raised exception.')
             self._closed_write_count += 1
             return
@@ -562,7 +563,7 @@ cdef class SocketTransport(Transport):
             raise RuntimeError('Cannot call writelines() after write_eof()')
 
         if unlikely(self._connection_lost_scheduled):
-            if self._closed_write_count >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
+            if self._closed_write_count >= LOG_THRESHOLD_FOR_CONNLOST_WRITES:
                 _logger.warning('socket.send() raised exception.')
             self._closed_write_count += 1
             return
@@ -583,7 +584,7 @@ cdef class SocketTransport(Transport):
             return
 
         if unlikely(self._connection_lost_scheduled):
-            if self._closed_write_count >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
+            if self._closed_write_count >= LOG_THRESHOLD_FOR_CONNLOST_WRITES:
                 _logger.warning('socket.send() raised exception.')
             self._closed_write_count += 1
             return
@@ -725,7 +726,7 @@ cdef class SocketTransport(Transport):
 
             return buf
         except:
-            aiofn_add_info_and_reraise('Fatal error: protocol.get_buffer() call failed.', True)
+            aiofn_add_info_and_reraise('Fatal error: protocol.get_buffer() call failed.')
 
     cdef inline _call_protocol_buffer_updated(self, Py_ssize_t bytes_read):
         try:
@@ -734,13 +735,13 @@ cdef class SocketTransport(Transport):
             else:
                 self._protocol.buffer_updated(bytes_read)
         except:
-            aiofn_add_info_and_reraise('Fatal error: protocol.buffer_updated() call failed.', True)
+            aiofn_add_info_and_reraise('Fatal error: protocol.buffer_updated() call failed.')
 
     cdef inline _call_protocol_data_received(self, data):
         try:
             self._protocol.data_received(data)
         except:
-            aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.', True)
+            aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.')
 
     cpdef _call_connection_lost(self, exc):
         try:

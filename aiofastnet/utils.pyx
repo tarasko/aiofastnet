@@ -3,7 +3,7 @@ import sys
 from cpython.bytes cimport PyBytes_FromObject, PyBytes_FromStringAndSize, PyBytes_GET_SIZE
 from cpython.buffer cimport PyObject_GetBuffer, PyBuffer_Release, PyBUF_SIMPLE
 from libc cimport errno
-from .constants import EXC_INFO_ATTR, EXC_SHOULD_ABORT_CONN_ATTR
+from .constants import EXC_INFO_ATTR
 import socket
 
 
@@ -175,9 +175,8 @@ cdef aiofn_set_nodelay(sock):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
 
-cdef aiofn_add_info_and_reraise(info, abort_conn):
+cdef aiofn_add_info_and_reraise(info):
     _, exc, _ = sys.exc_info()
     if exc is not None:
         setattr(exc, EXC_INFO_ATTR, info)
-        setattr(exc, EXC_SHOULD_ABORT_CONN_ATTR, abort_conn)
         raise
