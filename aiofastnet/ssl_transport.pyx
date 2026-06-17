@@ -6,7 +6,7 @@ from asyncio.trsock import TransportSocket
 from logging import getLogger
 from typing import Optional
 
-from cpython.bytearray cimport PyByteArray_AS_STRING, PyByteArray_GET_SIZE
+from cpython.bytearray cimport PyByteArray_AS_STRING, PyByteArray_GET_SIZE, PyByteArray_FromStringAndSize
 from cpython.bytes cimport PyBytes_FromStringAndSize
 from cpython.object cimport PyObject
 from cpython.buffer cimport PyBUF_WRITE, PyBUF_WRITABLE
@@ -39,6 +39,7 @@ from .openssl_compat import OPENSSL_DYN_LIBS
 
 
 cdef object _logger = getLogger('aiofastnet.ssl')
+cdef size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
 
 
 def _create_transport_context(server_side, server_hostname):
@@ -149,7 +150,7 @@ cdef class SSLTransportBase(Transport):
     cpdef set_write_buffer_limits(self, high=None, low=None):
         raise NotImplementedError()
 
-    cpdef get_write_buffer_size(self):
+    cpdef Py_ssize_t get_write_buffer_size(self) except -1:
         raise NotImplementedError()
 
     cdef _is_closed(self):
@@ -593,7 +594,7 @@ cdef class SSLTransportBase(Transport):
             if not self._should_retry_read(last_error) or self._read_paused:
                 return
 
-    cdef inline _should_retry_read(self, int last_error):
+    cdef inline bint _should_retry_read(self, int last_error) except -1:
         if last_error == SSLError.SSL_ERROR_WANT_READ:
             return False
 
@@ -657,7 +658,7 @@ cdef class SSLTransportBase(Transport):
 
     cdef inline _do_read_into_void(self):
         cdef:
-            bytearray buffer = bytearray(16 * 1024)
+            bytearray buffer = PyByteArray_FromStringAndSize(NULL, 16 * 1024)
             int bytes_read
             int ssl_error
 
@@ -735,7 +736,7 @@ cdef class SSLTransportBase(Transport):
         if self._shutdown_timeout_handle is not None:
             self._shutdown_timeout_handle.cancel()
             self._shutdown_timeout_handle = None
-        if shutdown_exc:
+        if shutdown_exc is not None:
             message = getattr(shutdown_exc, constants.EXC_INFO_ATTR, 'Error occurred during shutdown')
             self._fatal_error(shutdown_exc, message)
         else:
@@ -875,7 +876,7 @@ cdef class SSLTransportBase(Transport):
         if not self._is_protocol_ready():
             return
 
-        if unlikely(self._write_backlog_size != 0):
+        if unlikely(self._write_backlog_size):
             for data in list_of_data:
                 self._append_to_backlog(data, False)
             self._maybe_pause_protocol()
@@ -888,8 +889,7 @@ cdef class SSLTransportBase(Transport):
             Py_ssize_t idx
 
         try:
-            for idx in range(len(list_of_data)):
-                data = list_of_data[idx]
+            for idx, data in enumerate(list_of_data):
                 if add_to_backlog:
                     self._append_to_backlog(data, False)
                     continue
@@ -920,8 +920,7 @@ cdef class SSLTransportBase(Transport):
         if self._state not in (SSLProtocolState.WRAPPED, SSLProtocolState.FLUSHING) or self._write_backlog_size == 0:
             return
 
-        for idx in range(len(self._write_backlog)):
-            data = self._write_backlog[idx]
+        for idx, data in enumerate(self._write_backlog):
             if isinstance(data, SendFileRequest):
                 orig_req_size = (<SendFileRequest>data).count
                 sendfile_completed = self._try_sendfile(data)
@@ -1057,7 +1056,7 @@ cdef class SSLTransportBase(Transport):
             SSLProtocolState.SHUTDOWN,
             SSLProtocolState.UNWRAPPED
         ):
-            if self._closed_write_count >= constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES:
+            if self._closed_write_count >= LOG_THRESHOLD_FOR_CONNLOST_WRITES:
                 _logger.warning('SSL connection is closed')
             self._closed_write_count += 1
             return False
@@ -1229,7 +1228,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         self._write_watermarks.set_write_buffer_limits(
             self, self._app_protocol, self.get_write_buffer_size(), high, low)
 
-    cpdef get_write_buffer_size(self):
+    cpdef Py_ssize_t get_write_buffer_size(self) except -1:
         self._check_thread("get_write_buffer_size")
         cdef Py_ssize_t total = self._write_backlog_size
         if self._app_protocol_aiofn:
@@ -1251,6 +1250,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         cdef:
             char* ptr
             long sz
+            Py_ssize_t bytes_sent
             bint had_successful_writes = False
 
         while True:
@@ -1675,7 +1675,7 @@ cdef class SSLTransport_Transport(SSLTransportBase):
         else:
             return 0, 0
 
-    cpdef get_write_buffer_size(self):
+    cpdef Py_ssize_t get_write_buffer_size(self) except -1:
         self._check_thread("get_write_buffer_size")
         if self._transport is not None:
             return self._transport.get_write_buffer_size()
