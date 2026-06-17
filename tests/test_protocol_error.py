@@ -148,29 +148,66 @@ async def test_exc_all(all_loops, conn_type):
         assert "closed" in repr(client.transport)
 
 
-def test_system_exit_data_received_not_reported(conn_type):
-    contexts = []
-    payload = b"x" * (512*1024)
+@pytest.mark.parametrize("exc", [SystemExit, KeyboardInterrupt], ids=["sys", "ctrlc"])
+@pytest.mark.parametrize("meth", ["connection_made", "data_received", "get_buffer", "buffer_updated", "eof_received"])
+def test_system_exit_not_reported(conn_type, exc, meth):
+    class ServerProtocol:
+        def connection_made(self, transport):
+            self.transport = transport
 
-    class ClientRaiseDataReceived(AsyncClient):
         def data_received(self, data):
-            raise SystemExit(42)
+            self.transport.write(data)
+            self.transport.close()
 
+
+    class ClientRaiseException(AsyncClient):
+        def connection_made(self, transport):
+            if meth == "connection_made":
+                raise exc(42)
+            super().connection_made(transport)
+
+        def connection_lost(self, e):
+            if meth == "connection_lost":
+                raise exc(42)
+            super().connection_lost(e)
+
+        def data_received(self, data):
+            if meth == "data_received":
+                raise exc(42)
+            super().data_received(data)
+
+        def get_buffer(self, hint):
+            if meth == "get_buffer":
+                raise exc(42)
+            return super().get_buffer(hint)
+
+        def buffer_updated(self, bytes_read):
+            if meth == "buffer_updated":
+                raise exc(42)
+            return super().buffer_updated(bytes_read)
+
+        def eof_received(self):
+            if meth == "eof_received":
+                raise exc(42)
+            return super().eof_received()
+
+        def is_buffered_protocol(self):
+            return meth in ("get_buffer", "buffer_updated")
+
+    payload = b"x" * (64*1024)
+    excq = []
     async def run():
-        loop = asyncio.get_running_loop()
-        old_handler = loop.get_exception_handler()
-        loop.set_exception_handler(lambda loop, context: contexts.append(context))
-        try:
-            async with TestServer(ct=conn_type) as server:
-                async with TestClient(server, protocol_factory=ClientRaiseDataReceived, ct=conn_type,
+        asyncio.get_running_loop().set_debug(True)
+        with exc_queue(excq):
+            async with TestServer(protocol_factory=ServerProtocol, ct=conn_type) as server:
+                async with TestClient(server,
+                                      protocol_factory=ClientRaiseException,
+                                      ct=conn_type,
                                       is_buffered=False) as client:
                     client.transport.write(payload)
                     await asyncio.sleep(0.1)
-                    assert contexts == []
-        finally:
-            loop.set_exception_handler(old_handler)
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(exc):
         asyncio.run(run())
 
-    assert contexts == []
+    assert excq == []

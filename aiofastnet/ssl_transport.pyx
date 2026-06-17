@@ -1040,9 +1040,9 @@ cdef class SSLTransportBase(Transport):
                 keep_open = self._app_protocol.eof_received()
             except:
                 aiofn_add_info_and_reraise('Error calling eof_received()', True)
-
-            if keep_open:
-                _logger.warning('returning true from eof_received() has no effect when using ssl')
+            else:
+                if keep_open:
+                    _logger.warning('returning true from eof_received() has no effect when using ssl')
 
     cdef inline _clear_write_backlog(self, exc):
         cdef SendFileRequest req

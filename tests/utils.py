@@ -514,10 +514,10 @@ def make_test_ssl_contexts(cert_file: Union[str, Path], key_file: Union[str, Pat
 
 
 @contextmanager
-def exc_queue():
+def exc_queue(excq=None):
     loop = asyncio.get_running_loop()
     old_handler = loop.get_exception_handler()
-    exc_queue = []
+    exc_queue = [] if excq is None else excq
     def new_handler(loop, context):
         nonlocal exc_queue
         exc_queue.append(context)
