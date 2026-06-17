@@ -806,7 +806,7 @@ cdef class SSLTransportBase(Transport):
         cdef SendFileRequest req = _make_send_file_request(file, offset, count)
 
         try:
-            if not self._write_backlog:
+            if self._write_backlog_size == 0:
                 if self._try_sendfile(req):
                     return None
 
@@ -829,7 +829,7 @@ cdef class SSLTransportBase(Transport):
             return
 
         try:
-            if not self._write_backlog:
+            if self._write_backlog_size == 0:
                 tail = self._write_impl(None, data_ptr, data_len)
                 self._flush_outgoing_bio()
                 self._append_to_backlog(tail, True)
@@ -875,7 +875,7 @@ cdef class SSLTransportBase(Transport):
         if not self._is_protocol_ready():
             return
 
-        if unlikely(self._write_backlog):
+        if unlikely(self._write_backlog_size != 0):
             for data in list_of_data:
                 self._append_to_backlog(data, False)
             self._maybe_pause_protocol()
@@ -917,7 +917,7 @@ cdef class SSLTransportBase(Transport):
             Py_ssize_t items_completed = 0
             Py_ssize_t orig_req_size
 
-        if self._state not in (SSLProtocolState.WRAPPED, SSLProtocolState.FLUSHING) or not self._write_backlog:
+        if self._state not in (SSLProtocolState.WRAPPED, SSLProtocolState.FLUSHING) or self._write_backlog_size == 0:
             return
 
         for idx in range(len(self._write_backlog)):
