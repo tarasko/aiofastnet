@@ -339,10 +339,13 @@ cdef class SocketTransport(Transport):
         return total
 
     def _read_ready(self):
-        if self._protocol_buffered:
-            self._read_ready__get_buffer()
-        else:
-            self._read_ready__data_received()
+        try:
+            if self._protocol_buffered:
+                self._read_ready__get_buffer()
+            else:
+                self._read_ready__data_received()
+        except:
+            self._handle_error('Fatal read error on socket transport')
 
     cdef inline _read_ready__get_buffer(self):
         cdef:
@@ -358,71 +361,11 @@ cdef class SocketTransport(Transport):
             if self._read_paused:
                 return
 
-            try:
-                if self._protocol_aiofn:
-                    buf = (<Protocol>self._protocol).get_buffer_c(-1, &buf_ptr, &buf_len)
-                else:
-                    buf = self._protocol.get_buffer(-1)
-                    aiofn_unpack_simple_buffer(buf, &buf_ptr, &buf_len, PyBUF_WRITABLE)
+            buf = self._call_protocol_get_buffer(&buf_ptr, &buf_len)
 
-                if buf_len == 0:
-                    raise RuntimeError('get_buffer() returned an empty buffer')
-            except (SystemExit, KeyboardInterrupt):
-                raise
-            except BaseException as exc:
-                self._fatal_error(
-                    exc, 'Fatal error: protocol.get_buffer() call failed.')
-                return
-
-            try:
-                bytes_read = aiofn_recv(self._sock_fd, buf_ptr, buf_len)
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: aiofn_recv(,len=%d) = %d", self, buf_len, bytes_read)
-                if bytes_read == -1:    # without exception this means EGAIN
-                    return
-            except BaseException as exc:
-                self._fatal_error(exc, 'Fatal read error on socket transport')
-                return
-
-            if bytes_read == 0:
-                self._read_ready__on_eof()
-                return
-
-            try:
-                if self._protocol_aiofn:
-                    buf = (<Protocol>self._protocol).buffer_updated(bytes_read)
-                else:
-                    buf = self._protocol.buffer_updated(bytes_read)
-            except (SystemExit, KeyboardInterrupt):
-                raise
-            except BaseException as exc:
-                self._fatal_error(
-                    exc, 'Fatal error: protocol.buffer_updated() call failed.')
-
-    cdef inline _read_ready__data_received(self):
-        cdef:
-            PyObject* buffer
-            char* buf_ptr
-            Py_ssize_t bytes_read
-            object data
-            str error_stage
-
-        if self._connection_lost_scheduled:
-            return
-
-        if self._read_paused:
-            return
-
-        error_stage = "socket read failed."
-        buffer = aiofn_allocate_bytes(_DATA_RECEIVED_MAX_SIZE, &buf_ptr)
-
-        try:
-            bytes_read = aiofn_recv(self._sock_fd, buf_ptr, _DATA_RECEIVED_MAX_SIZE)
-            data = aiofn_finalize_bytes(buffer, max(bytes_read, 0))
-            buffer = NULL
-
+            bytes_read = aiofn_recv(self._sock_fd, buf_ptr, buf_len)
             if unlikely(self._is_debug):
-                _logger.debug("%r: aiofn_recv(...,len=%d)=%d", self, _DATA_RECEIVED_MAX_SIZE, bytes_read)
+                _logger.debug("%r: aiofn_recv(,len=%d) = %d", self, buf_len, bytes_read)
 
             if bytes_read == -1:    # without exception this means EGAIN
                 return
@@ -431,16 +374,42 @@ cdef class SocketTransport(Transport):
                 self._read_ready__on_eof()
                 return
 
-            error_stage = "protocol.data_received() call failed."
+            self._call_protocol_buffer_updated(bytes_read)
 
-            self._protocol.data_received(data)
-        except (SystemExit, KeyboardInterrupt):
-            raise
-        except BaseException as exc:
-            self._fatal_error(exc, f'Fatal error: {error_stage}')
-        finally:
+    cdef inline _read_ready__data_received(self):
+        cdef:
+            PyObject* buffer
+            char* buf_ptr
+            Py_ssize_t bytes_read
+            object data
+
+        if self._connection_lost_scheduled:
+            return
+
+        if self._read_paused:
+            return
+
+        buffer = aiofn_allocate_bytes(_DATA_RECEIVED_MAX_SIZE, &buf_ptr)
+
+        try:
+            bytes_read = aiofn_recv(self._sock_fd, buf_ptr, _DATA_RECEIVED_MAX_SIZE)
+            data = aiofn_finalize_bytes(buffer, max(bytes_read, 0))
+            buffer = NULL
+        except:
             Py_XDECREF(buffer)
+            raise
 
+        if unlikely(self._is_debug):
+            _logger.debug("%r: aiofn_recv(...,len=%d)=%d", self, _DATA_RECEIVED_MAX_SIZE, bytes_read)
+
+        if bytes_read == -1:    # without exception this means EGAIN
+            return
+
+        if bytes_read == 0:
+            self._read_ready__on_eof()
+            return
+
+        self._call_protocol_data_received(data)
 
     cdef inline _read_ready__on_eof(self):
         if self._loop.get_debug():
@@ -448,12 +417,8 @@ cdef class SocketTransport(Transport):
 
         try:
             keep_open = self._protocol.eof_received()
-        except (SystemExit, KeyboardInterrupt):
-            raise
-        except BaseException as exc:
-            self._fatal_error(
-                exc, 'Fatal error: protocol.eof_received() call failed.')
-            return
+        except:
+            aiofn_add_info_and_reraise('Fatal error: protocol.eof_received() call failed.', True)
 
         if keep_open:
             # We're keeping the connection open so the
@@ -495,20 +460,23 @@ cdef class SocketTransport(Transport):
             Py_ssize_t data_len, data_len_init = 0
             Py_ssize_t bytes_sent
 
-        if self._write_backlog_size == 0:
-            aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
-            data = self._write_one_handle_exc(data, data_ptr, data_len)
-            if data is None:
-                return
+        try:
+            if self._write_backlog_size == 0:
+                aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
+                data = self._write_one(data, data_ptr, data_len)
+                if data is None:
+                    return
 
-            # Not all was written; register write handler.
-            self._ensure_writer()
-        else:
-            data = aiofn_maybe_copy_buffer(data)
+                # Not all was written; register write handler.
+                self._ensure_writer()
+            else:
+                data = aiofn_maybe_copy_buffer(data)
 
-        self._write_backlog.append(data)
-        self._write_backlog_size += len(data)
-        self._maybe_pause_protocol()
+            self._write_backlog.append(data)
+            self._write_backlog_size += len(data)
+            self._maybe_pause_protocol()
+        except:
+            self._handle_error('Fatal write error on socket transport')
 
     cdef inline Py_ssize_t _flush_iovecs(self, Py_ssize_t num_iovecs, Py_ssize_t* total_bytes_sent) except -2:
         cdef Py_ssize_t bytes_sent = aiofn_writev(self._sock_fd, self._iovecs, num_iovecs)
@@ -607,8 +575,8 @@ cdef class SocketTransport(Transport):
                     return
 
             self._add_list_of_data_tail_to_backlog(list_of_data, total_bytes_sent)
-        except BaseException as exc:
-            self._fatal_error(exc, 'Fatal write error on socket transport')
+        except:
+            self._handle_error('Fatal write error on socket transport')
 
     cdef write_c(self, char* ptr, Py_ssize_t sz):
         if sz <= 0:
@@ -620,19 +588,22 @@ cdef class SocketTransport(Transport):
             self._closed_write_count += 1
             return
 
-        if self._write_backlog_size == 0:
-            data = self._write_one_handle_exc(None, ptr, sz)
-            if data is None:
-                return
+        try:
+            if self._write_backlog_size == 0:
+                data = self._write_one(None, ptr, sz)
+                if data is None:
+                    return
 
-            # Not all was written; register write handler.
-            self._ensure_writer()
-        else:
-            data = PyBytes_FromStringAndSize(ptr, sz)
+                # Not all was written; register write handler.
+                self._ensure_writer()
+            else:
+                data = PyBytes_FromStringAndSize(ptr, sz)
 
-        self._write_backlog.append(data)
-        self._write_backlog_size += len(data)
-        self._maybe_pause_protocol()
+            self._write_backlog.append(data)
+            self._write_backlog_size += len(data)
+            self._maybe_pause_protocol()
+        except:
+            self._handle_error('Fatal write error on socket transport')
 
     cpdef can_write_eof(self):
         return True
@@ -647,21 +618,17 @@ cdef class SocketTransport(Transport):
             if unlikely(self._is_debug):
                 _logger.debug("%r: shutdown(SHUT_WR) done", self)
 
-    cdef inline _write_one_handle_exc(self, object data, char* data_ptr, Py_ssize_t data_len):
+    cdef inline _write_one(self, object data, char* data_ptr, Py_ssize_t data_len):
         """
         Returns None if all data has been sent, or remaining data
         """
         cdef Py_ssize_t bytes_sent
 
         while True:
-            try:
-                bytes_sent = aiofn_send(self._sock_fd, data_ptr, data_len)
-                if unlikely(self._is_debug):
-                    _logger.debug("%r aiofn_send(...,len=%d)=%d", self,
-                                  data_len, bytes_sent)
-            except BaseException as exc:
-                self._fatal_error(exc, 'Fatal write error on socket transport')
-                return None
+            bytes_sent = aiofn_send(self._sock_fd, data_ptr, data_len)
+            if unlikely(self._is_debug):
+                _logger.debug("%r aiofn_send(...,len=%d)=%d", self,
+                              data_len, bytes_sent)
 
             if bytes_sent == data_len:
                 return None
@@ -730,13 +697,12 @@ cdef class SocketTransport(Transport):
             if unlikely(self._is_debug):
                 _logger.debug("%r write_ready event, resume writing from backlog", self)
             self._flush_write_backlog()
-        except BaseException as exc:
+        except:
             self._drop_writer()
-            self._clear_write_backlog(exc)
-            self._fatal_error(exc, 'Fatal write error on socket transport')
+            self._handle_error('Fatal write error on socket transport')
         else:
             self._maybe_resume_protocol()
-            if not self._write_backlog:
+            if self._write_backlog_size == 0:
                 self._drop_writer()
                 if self._closing:
                     self._connection_lost_scheduled = True
@@ -745,6 +711,36 @@ cdef class SocketTransport(Transport):
                     self._sock.shutdown(socket.SHUT_WR)
                     if unlikely(self._is_debug):
                         _logger.debug("%r: shutdown(SHUT_WR) done", self)
+
+    cdef inline _call_protocol_get_buffer(self, char** buf_ptr, Py_ssize_t* buf_len):
+        try:
+            if self._protocol_aiofn:
+                buf = (<Protocol> self._protocol).get_buffer_c(-1, buf_ptr, buf_len)
+            else:
+                buf = self._protocol.get_buffer(-1)
+                aiofn_unpack_simple_buffer(buf, buf_ptr, buf_len, PyBUF_WRITABLE)
+
+            if buf_len[0] == 0:
+                raise RuntimeError('get_buffer() returned an empty buffer')
+
+            return buf
+        except:
+            aiofn_add_info_and_reraise('Fatal error: protocol.get_buffer() call failed.', True)
+
+    cdef inline _call_protocol_buffer_updated(self, Py_ssize_t bytes_read):
+        try:
+            if self._protocol_aiofn:
+                (<Protocol> self._protocol).buffer_updated(bytes_read)
+            else:
+                self._protocol.buffer_updated(bytes_read)
+        except:
+            aiofn_add_info_and_reraise('Fatal error: protocol.buffer_updated() call failed.', True)
+
+    cdef inline _call_protocol_data_received(self, data):
+        try:
+            self._protocol.data_received(data)
+        except:
+            aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.', True)
 
     cpdef _call_connection_lost(self, exc):
         try:
@@ -784,9 +780,6 @@ cdef class SocketTransport(Transport):
         self._loop.remove_writer(self._sock_fd_obj)
 
     def sendfile(self, file, offset, count) -> Optional[asyncio.Future[None]]:
-        # TODO: Add _fatal_error and terminate transport on exception
-        # TODO: Add relevant tests
-
         self._check_thread("sendfile")
 
         # This is an undocumented feature in asyncio and uvloop
@@ -818,8 +811,8 @@ cdef class SocketTransport(Transport):
 
             req.waiter = self._loop.create_future()
             return req.waiter
-        except BaseException as exc:
-            self._fatal_error(exc, 'Fatal write error on socket transport')
+        except:
+            self._handle_error('Fatal write error on socket transport')
             raise
 
     cdef inline bint _try_sendfile(self, SendFileRequest req) except -1:
@@ -870,6 +863,15 @@ cdef class SocketTransport(Transport):
                 'protocol': self._protocol,
             })
         self._force_close(exc)
+
+    cdef inline _handle_error(self, message):
+        _, exc, _ = sys.exc_info()
+
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+
+        message = getattr(exc, constants.EXC_INFO_ATTR, message)
+        self._fatal_error(exc, message)
 
     # May be used by create_connection/create_server
     # Keep cpdef
