@@ -61,7 +61,7 @@ much of your total runtime is spent in transport/SSL plumbing.
 
 Source: [examples/benchmark.py](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark.py)
 
-In these benchmarks, `aiofastnet` is up to 2.6x faster than standard
+In these benchmarks, `aiofastnet` is up to 2.7x faster than standard
 `asyncio` and up to 1.6x faster than uvloop for TLS connections.
 
 `aiofastnet` is fully compatible with free-threaded Python builds and scales
