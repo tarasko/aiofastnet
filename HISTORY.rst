@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.17.0
+------------------
+
+* Various minor optimizations for the hot path, refactor exception handling
+
 0.16.0
 ------------------
 
