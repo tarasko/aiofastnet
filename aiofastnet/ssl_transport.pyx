@@ -477,14 +477,7 @@ cdef class SSLTransportBase(Transport):
             compression=self._ssl_object.compression()
         )
         self._wakeup_waiter()
-        if self._app_state == AppProtocolState.STATE_INIT:
-            self._app_state = AppProtocolState.STATE_CON_MADE
-            try:
-                self._app_protocol.connection_made(self)
-            except (KeyboardInterrupt, SystemExit):
-                raise
-            except Exception as exc:
-                self._fatal_error_no_close(exc, "user connection_made raised an exception")
+        self._call_protocol_connection_made()
         self._loop.call_soon(self._retry_ssl_read)
 
     cpdef _do_read(self):
@@ -991,6 +984,16 @@ cdef class SSLTransportBase(Transport):
                 raise ConnectionResetError()
 
             raise self._ssl_object.make_exc_from_ssl_error("SSL_write failed", ssl_error)
+
+    cdef inline _call_protocol_connection_made(self):
+        if self._app_state == AppProtocolState.STATE_INIT:
+            self._app_state = AppProtocolState.STATE_CON_MADE
+            try:
+                return self._app_protocol.connection_made(self)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception as exc:
+                self._fatal_error_no_close(exc, "user connection_made raised an exception")
 
     cdef inline _call_protocol_get_buffer(self, char** buf_ptr, Py_ssize_t* buf_len):
         try:
