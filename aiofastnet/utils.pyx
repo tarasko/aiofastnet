@@ -176,7 +176,8 @@ cdef aiofn_set_nodelay(sock):
 
 
 cdef aiofn_add_info_and_reraise(info, abort_conn):
-    exc = sys.exception()
-    setattr(exc, EXC_INFO_ATTR, info)
-    setattr(exc, EXC_SHOULD_ABORT_CONN_ATTR, abort_conn)
-    raise
+    _, exc, _ = sys.exc_info()
+    if exc is not None:
+        setattr(exc, EXC_INFO_ATTR, info)
+        setattr(exc, EXC_SHOULD_ABORT_CONN_ATTR, abort_conn)
+        raise

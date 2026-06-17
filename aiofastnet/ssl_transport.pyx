@@ -513,17 +513,7 @@ cdef class SSLTransportBase(Transport):
             int last_error = 0
 
         while True:
-            try:
-                if self._app_protocol_aiofn:
-                    app_buffer = (<Protocol>self._app_protocol).get_buffer_c(-1, &buf_ptr, &buf_len)
-                else:
-                    app_buffer = self._app_protocol.get_buffer(-1)
-                    aiofn_unpack_simple_buffer(app_buffer, &buf_ptr, &buf_len, PyBUF_WRITABLE)
-
-                if buf_len == 0:
-                    raise RuntimeError('get_buffer() returned an empty buffer')
-            except:
-                aiofn_add_info_and_reraise('Fatal error: protocol.get_buffer() call failed.', True)
+            app_buffer = self._call_protocol_get_buffer(&buf_ptr, &buf_len)
 
             while buf_len > 0:
                 last_bytes_read = self._ssl_object.read(buf_ptr, buf_len)
@@ -544,13 +534,7 @@ cdef class SSLTransportBase(Transport):
                 total_bytes_read += last_bytes_read
 
             if total_bytes_read > 0:
-                try:
-                    if self._app_protocol_aiofn:
-                        (<Protocol>self._app_protocol).buffer_updated(total_bytes_read)
-                    else:
-                        self._app_protocol.buffer_updated(total_bytes_read)
-                except:
-                    aiofn_add_info_and_reraise('Fatal error: protocol.buffer_updated() call failed.', True)
+                self._call_protocol_buffer_updated(total_bytes_read)
                 total_bytes_read = 0
 
             if buf_len == 0:
@@ -610,12 +594,8 @@ cdef class SSLTransportBase(Transport):
                 Py_XDECREF(bytes_obj)
                 raise
 
-            user_data = aiofn_finalize_bytes(bytes_obj, total_bytes_read)
-            if user_data is not None:
-                try:
-                    self._app_protocol.data_received(user_data)
-                except:
-                    aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.', True)
+            data = aiofn_finalize_bytes(bytes_obj, total_bytes_read)
+            self._call_protocol_data_received(data)
 
             if not self._should_retry_read(last_error) or self._read_paused:
                 return
@@ -628,7 +608,7 @@ cdef class SSLTransportBase(Transport):
             return self._should_retry_after_want_write()
 
         if last_error == SSLError.SSL_ERROR_ZERO_RETURN:
-            self._call_eof_received()
+            self._call_protocol_eof_received()
             self._start_shutdown()
             return False
 
@@ -1012,7 +992,38 @@ cdef class SSLTransportBase(Transport):
 
             raise self._ssl_object.make_exc_from_ssl_error("SSL_write failed", ssl_error)
 
-    cdef inline _call_eof_received(self):
+    cdef inline _call_protocol_get_buffer(self, char** buf_ptr, Py_ssize_t* buf_len):
+        try:
+            if self._app_protocol_aiofn:
+                app_buffer = (<Protocol> self._app_protocol).get_buffer_c(-1, buf_ptr, buf_len)
+            else:
+                app_buffer = self._app_protocol.get_buffer(-1)
+                aiofn_unpack_simple_buffer(app_buffer, buf_ptr, buf_len, PyBUF_WRITABLE)
+
+            if buf_len[0] == 0:
+                raise RuntimeError('get_buffer() returned an empty buffer')
+
+            return app_buffer
+        except:
+            aiofn_add_info_and_reraise('Fatal error: protocol.get_buffer() call failed.', True)
+
+    cdef inline _call_protocol_buffer_updated(self, Py_ssize_t bytes_read):
+        try:
+            if self._app_protocol_aiofn:
+                return (<Protocol> self._app_protocol).buffer_updated(bytes_read)
+            else:
+                return self._app_protocol.buffer_updated(bytes_read)
+        except:
+            aiofn_add_info_and_reraise('Fatal error: protocol.buffer_updated() call failed.', True)
+
+    cdef inline _call_protocol_data_received(self, data):
+        if data is not None:
+            try:
+                return self._app_protocol.data_received(data)
+            except:
+                aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.', True)
+
+    cdef inline _call_protocol_eof_received(self):
         if self._app_state == AppProtocolState.STATE_CON_MADE:
             self._app_state = AppProtocolState.STATE_EOF
             try:
