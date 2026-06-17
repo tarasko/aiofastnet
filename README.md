@@ -57,6 +57,8 @@ much of your total runtime is spent in transport/SSL plumbing.
 
 [![Benchmark](https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark.png)](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark.png)
 
+[![Speedup](https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark_speedup.png)](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_speedup.png)
+
 Source: [examples/benchmark.py](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark.py)
 
 In these benchmarks, `aiofastnet` is up to 2.2x faster than standard
