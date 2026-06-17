@@ -149,7 +149,7 @@ async def test_exc_all(all_loops, conn_type):
 
 
 @pytest.mark.parametrize("exc", [SystemExit, KeyboardInterrupt], ids=["sys", "ctrlc"])
-@pytest.mark.parametrize("meth", ["connection_made", "data_received", "get_buffer", "buffer_updated", "eof_received"])
+@pytest.mark.parametrize("meth", ["connection_made", "connection_lost", "pause_writing", "resume_writing", "data_received", "get_buffer", "buffer_updated", "eof_received"])
 def test_system_exit_not_reported(conn_type, exc, meth):
     class ServerProtocol:
         def connection_made(self, transport):
@@ -157,8 +157,8 @@ def test_system_exit_not_reported(conn_type, exc, meth):
 
         def data_received(self, data):
             self.transport.write(data)
-            self.transport.close()
-
+            if meth == "eof_received":
+                self.transport.close()
 
     class ClientRaiseException(AsyncClient):
         def connection_made(self, transport):
@@ -170,6 +170,16 @@ def test_system_exit_not_reported(conn_type, exc, meth):
             if meth == "connection_lost":
                 raise exc(42)
             super().connection_lost(e)
+
+        def pause_writing(self):
+            if meth == "pause_writing":
+                raise exc(42)
+            super().pause_writing()
+
+        def resume_writing(self):
+            if meth == "resume_writing":
+                raise exc(42)
+            super().resume_writing()
 
         def data_received(self, data):
             if meth == "data_received":
@@ -204,7 +214,11 @@ def test_system_exit_not_reported(conn_type, exc, meth):
                                       protocol_factory=ClientRaiseException,
                                       ct=conn_type,
                                       is_buffered=False) as client:
-                    client.transport.write(payload)
+                    if meth in ('pause_writing', 'resume_writing'):
+                        while not client.is_writing_paused:
+                            client.transport.write(payload)
+                    else:
+                        client.transport.write(payload)
                     await asyncio.sleep(0.1)
 
     with pytest.raises(exc):
