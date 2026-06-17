@@ -395,8 +395,11 @@ cdef class SSLTransportBase(Transport):
 
     cdef inline _check_handshake_timeout(self):
         if self._state == SSLProtocolState.DO_HANDSHAKE:
-            self._fatal_error(ConnectionAbortedError(
-                f"SSL handshake is taking longer than {self._ssl_handshake_timeout} seconds: aborting the connection"))
+            self._handle_error(
+                ConnectionAbortedError(
+                    f"SSL handshake is taking longer than {self._ssl_handshake_timeout} seconds: "
+                    "aborting the connection"),
+                'SSL handshake failed')
 
     cdef _retry_ssl_read(self):
         if unlikely(self._is_debug):
@@ -439,10 +442,7 @@ cdef class SSLTransportBase(Transport):
                 self._flush_outgoing_bio()
                 return
 
-            exc = self._ssl_object.make_exc_from_ssl_error(
-                "ssl handshake failed", ssl_error)
-            self._on_handshake_complete(exc)
-            return
+            raise self._ssl_object.make_exc_from_ssl_error("ssl handshake failed", ssl_error)
 
     cdef inline _on_handshake_complete(self, handshake_exc):
         if self._handshake_timeout_handle is not None:
@@ -643,6 +643,10 @@ cdef class SSLTransportBase(Transport):
     cdef inline _handle_error(self, exc, message):
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise exc
+
+        if self._state == SSLProtocolState.DO_HANDSHAKE:
+            self._on_handshake_complete(exc)
+            return
 
         if self._state in (SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN):
             self._on_shutdown_complete(exc)
