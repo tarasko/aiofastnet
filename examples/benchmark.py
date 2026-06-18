@@ -53,7 +53,7 @@ def _plot_results(
     uvloop_version: str,
     save_plot: bool,
 ) -> None:
-    transports = [transport for transport in ("tcp", "ssl") if transport in results]
+    transports = [transport for transport in ("ssl", "tcp") if transport in results]
     if not transports:
         return
 
