@@ -125,7 +125,7 @@ async def run_echo(payload: Union[bytes, List[bytes]], rounds: int, ct: Connecti
     payload_len = sum(len(p) for p in payload) if isinstance(payload, list) else len(payload)
 
     def client_factory(is_buffered: bool):
-        return EchoClientProtocol(payload, rounds, is_buffered)
+        return ClientProtocol(payload, rounds, is_buffered)
 
     async with TestServer(lambda: ServerProtocol(payload_len, buffered_protocol), ct=ct) as server:
         async with TestClient(server, ct=ct, is_buffered=buffered_protocol, protocol_factory=client_factory) as client:
