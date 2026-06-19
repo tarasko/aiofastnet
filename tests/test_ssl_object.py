@@ -343,3 +343,11 @@ async def test_ssl_hostname_verification_mismatch(
         with pytest.raises(ssl.SSLCertVerificationError, match=error):
             async with TestClient(server, ct=ssl_conn_type, server_hostname=server_hostname):
                 pass
+
+
+async def test_ssl_object_methods_mockable(ssl_conn_type):
+    async with TestServer(ct=ssl_conn_type) as server:
+        async with TestClient(server, ct=ssl_conn_type) as client:
+            ssl_object: aiofastnet.SSLObject = client.transport.get_extra_info('ssl_object')
+            ssl_object.compression = lambda: "zlib"
+            assert ssl_object.compression() == "zlib"
