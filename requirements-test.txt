@@ -1,3 +1,4 @@
+exceptiongroup; python_version < "3.11"
 setuptools >= 78.0
 Cython >= 3.2
 pytest
