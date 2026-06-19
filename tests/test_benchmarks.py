@@ -121,11 +121,13 @@ class EchoClientProtocol(asyncio.Protocol):
         await self._done
 
 
-async def run_echo(payload: bytes, rounds: int, ct: ConnectionType, buffered_protocol: bool):
+async def run_echo(payload: Union[bytes, List[bytes]], rounds: int, ct: ConnectionType, buffered_protocol: bool):
+    payload_len = sum(len(p) for p in payload) if isinstance(payload, list) else len(payload)
+
     def client_factory(is_buffered: bool):
         return EchoClientProtocol(payload, rounds, is_buffered)
 
-    async with TestServer(lambda: ServerProtocol(len(payload), buffered_protocol), ct=ct) as server:
+    async with TestServer(lambda: ServerProtocol(payload_len, buffered_protocol), ct=ct) as server:
         async with TestClient(server, ct=ct, is_buffered=buffered_protocol, protocol_factory=client_factory) as client:
             client.write()
             await client.wait_closed()
@@ -141,3 +143,9 @@ def test_benchmark_write(benchmark, conn_type, buffered_protocol, msg_size):
     rounds = msg_size[1]
     benchmark(run_sync, payload, rounds, conn_type, buffered_protocol)
 
+
+@pytest.mark.parametrize("msg_size", MSG_SIZES, ids=MSG_SIZE_IDS)
+def test_benchmark_writelines(benchmark, conn_type, buffered_protocol, msg_size):
+    payload = [b"x" * int(msg_size[0]/256)] * 256
+    rounds = msg_size[1]
+    benchmark(run_sync, payload, rounds, conn_type, buffered_protocol)
