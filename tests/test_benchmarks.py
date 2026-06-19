@@ -52,7 +52,7 @@ class ServerProtocol(asyncio.Protocol):
             self._pending -= self._msg_size
 
 
-class EchoClientProtocol(asyncio.Protocol):
+class ClientProtocol(asyncio.Protocol):
     def __init__(self, payload: Union[bytes, List[bytes]] , rounds: int, is_buffered: bool):
         self._payload = payload
         self._remaining = rounds
