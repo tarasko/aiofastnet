@@ -18,11 +18,6 @@ from tests.utils import TestClient, TestServer, \
     start_tls, sendfile
 
 
-@pytest.fixture(params=["simple", "buffered"])
-def buffered_protocol(request):
-    return request.param == "buffered"
-
-
 @pytest.mark.parametrize("msg_size", [1, 2, 3, 4, 5, 6, 7, 8, 29, 64, 256 * 1024, 6 * 1024 * 1024])
 async def test_echo(all_loops, msg_size, conn_type, buffered_protocol):
     payload = b"x" * msg_size
@@ -882,8 +877,8 @@ async def test_start_tls(all_loops):
 
 
 async def test_peername(all_loops, conn_type):
-    async with TestServer(ct=conn_type, is_buffered=buffered_protocol) as server:
-        async with TestClient(server, ct=conn_type, is_buffered=buffered_protocol) as client:
+    async with TestServer(ct=conn_type) as server:
+        async with TestClient(server, ct=conn_type) as client:
             server_client = await server.get_any_server_client()
             client_peername = client.transport.get_extra_info('peername')
             client_sockname = client.transport.get_extra_info('sockname')

@@ -216,3 +216,41 @@ jobs:
             "$PYBIN/python" -m pytest -n auto -v
           '
         
+  benchmarks:
+    name: benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v6
+
+    # aiofastnet requires a Python distribution whose `ssl` module is
+    # dynamically linked against OpenSSL. actions/setup-python provides that,
+    # so it is used here instead of a uv-managed (statically linked) Python.
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
+    - name: Load kTLS kernel module
+      run: sudo modprobe tls
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      with:
+        enable-cache: true
+        cache-dependency-glob: |
+          requirements*.txt
+          pyproject.toml
+
+    - name: Install dependencies
+      run: uv pip install --system -r requirements.txt -r requirements-test.txt
+
+    - name: Compile Cython extensions
+      run: python setup.py build_ext --inplace
+
+    - name: Run benchmarks
+      uses: CodSpeedHQ/action@v4
+      with:
+        mode: simulation
+        run: pytest -v tests/test_benchmarks.py --codspeed
