@@ -412,7 +412,8 @@ async def TestServer(protocol_factory=None,
     clients = set()
     client_waiters = []
     if protocol_factory is None:
-        protocol_factory = lambda: EchoServerProtocol(clients, client_waiters, is_buffered)
+        def protocol_factory():
+            return EchoServerProtocol(clients, client_waiters, is_buffered)
     server = await create_server(
         loop,
         protocol_factory,

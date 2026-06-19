@@ -755,7 +755,7 @@ async def test_contextvar(all_loops, conn_type, buffered_protocol):
         async with TestClient(server, protocol_factory=Client, ct=conn_type, is_buffered=buffered_protocol) as client:
             assert var.get() == "begin"
             client.write(payload)
-            reply = await client.readn(len(payload))
+            await client.readn(len(payload))
 
             # Initiate disconnect from the server side
             server_client = await server.get_any_server_client()
@@ -909,7 +909,7 @@ async def test_ssl_server_hostname_not_passed(all_loops, ssl_conn_type):
     async with TestServer(ct=ssl_conn_type) as server:
         ssl_conn_type.client_ssl_context.check_hostname = True
         with pytest.raises(ValueError, match="check_hostname requires server_hostname"):
-            async with TestClient(server, ct=ssl_conn_type, server_hostname="") as client:
+            async with TestClient(server, ct=ssl_conn_type, server_hostname=""):
                 pass
 
 
@@ -928,7 +928,7 @@ async def test_ssl_timeout_validation(all_loops, ssl_conn_type, timeout_name, ti
 
     async with TestServer(ct=ssl_conn_type) as server:
         with pytest.raises(ValueError, match=match):
-            async with TestClient(server, ct=ssl_conn_type, **kwargs) as client:
+            async with TestClient(server, ct=ssl_conn_type, **kwargs):
                 pass
 
 
