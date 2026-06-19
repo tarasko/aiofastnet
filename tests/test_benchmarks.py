@@ -11,16 +11,24 @@ instrument.
 """
 
 import asyncio
+import tempfile
 from typing import Union, List
 
 import pytest
 
 import aiofastnet
-from tests.utils import ConnectionType, TestServer, TestClient, _set_socket_sndbuf
+from tests.utils import ConnectionType, TestServer, TestClient, _set_socket_sndbuf, sendfile
 
 # Message payload sizes (bytes) + num of rounds exercised by the benchmarks.
 MSG_SIZES = [(256, 200), (1024*1024, 10)]
 MSG_SIZE_IDS = ["small", "large"]
+
+
+@pytest.fixture(params=["tcp", "ktls"])
+def sendfile_conn_type(request):
+    if request.param == "tcp":
+        return ConnectionType("tcp")
+    return request.getfixturevalue("ktls_conn_type")
 
 
 class ServerProtocol(asyncio.Protocol):
@@ -53,7 +61,7 @@ class ServerProtocol(asyncio.Protocol):
 
 
 class ClientProtocol(asyncio.Protocol):
-    def __init__(self, payload: Union[bytes, List[bytes]] , rounds: int, is_buffered: bool):
+    def __init__(self, payload: Union[bytes, List[bytes]], rounds: int, is_buffered: bool):
         self._payload = payload
         self._remaining = rounds
         self._is_buffered = is_buffered
@@ -77,7 +85,7 @@ class ClientProtocol(asyncio.Protocol):
             self._transport.write(self._payload)
 
     def connection_lost(self, exc):
-        if self._done is not None:
+        if self._done is not None and not self._done.done():
             if exc is None:
                 self._done.set_result(None)
             else:
@@ -121,6 +129,20 @@ class ClientProtocol(asyncio.Protocol):
         await self._done
 
 
+class SendfileClientProtocol(ClientProtocol):
+    def __init__(self, file, payload_size: int, rounds: int, is_buffered: bool):
+        super().__init__(b"", rounds, is_buffered)
+        self._file = file
+        self._payload_size = payload_size
+
+    def write(self):
+        self._transport.sendfile(
+            self._file,
+            offset=0,
+            count=self._payload_size,
+        )
+
+
 async def run_echo(payload: Union[bytes, List[bytes]], rounds: int, ct: ConnectionType, buffered_protocol: bool):
     payload_len = sum(len(p) for p in payload) if isinstance(payload, list) else len(payload)
 
@@ -137,6 +159,21 @@ def run_sync(payload: bytes, rounds: int, ct: ConnectionType, buffered_protocol:
     asyncio.run(run_echo(payload, rounds, ct, buffered_protocol))
 
 
+async def run_sendfile(file, payload_size: int, rounds: int, ct: ConnectionType):
+    def client_factory(is_buffered: bool):
+        return SendfileClientProtocol(file, payload_size, rounds, is_buffered)
+
+    async with TestServer(lambda: ServerProtocol(payload_size, True), ct=ct) as server:
+        async with TestClient(server, ct=ct, is_buffered=True, protocol_factory=client_factory) as client:
+            client.write()
+            await client.wait_closed()
+
+
+def run_sendfile_sync(file, payload_size: int, rounds: int, ct: ConnectionType):
+    file.seek(0)
+    asyncio.run(run_sendfile(file, payload_size, rounds, ct), debug=True)
+
+
 @pytest.mark.parametrize("msg_size", MSG_SIZES, ids=MSG_SIZE_IDS)
 def test_benchmark_write(benchmark, conn_type, buffered_protocol, msg_size):
     payload = b"x" * msg_size[0]
@@ -149,3 +186,14 @@ def test_benchmark_writelines(benchmark, conn_type, msg_size):
     payload = [b"x" * int(msg_size[0]/256)] * 256
     rounds = msg_size[1]
     benchmark(run_sync, payload, rounds, conn_type, True)
+
+
+@pytest.mark.parametrize("msg_size", MSG_SIZES, ids=MSG_SIZE_IDS)
+def test_benchmark_sendfile(benchmark, sendfile_conn_type, msg_size):
+    sendfile_conn_type.check_sendfile_supported()
+    payload_size = msg_size[0]
+    rounds = msg_size[1]
+    with tempfile.TemporaryFile() as file:
+        file.write(b"x" * payload_size)
+        file.flush()
+        benchmark(run_sendfile_sync, file, payload_size, rounds, sendfile_conn_type)
