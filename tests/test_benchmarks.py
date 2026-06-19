@@ -171,7 +171,7 @@ async def run_sendfile(file, payload_size: int, rounds: int, ct: ConnectionType)
 
 def run_sendfile_sync(file, payload_size: int, rounds: int, ct: ConnectionType):
     file.seek(0)
-    asyncio.run(run_sendfile(file, payload_size, rounds, ct), debug=True)
+    asyncio.run(run_sendfile(file, payload_size, rounds, ct), debug=False)
 
 
 @pytest.mark.parametrize("msg_size", MSG_SIZES, ids=MSG_SIZE_IDS)
