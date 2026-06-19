@@ -877,8 +877,8 @@ async def test_start_tls(all_loops):
 
 
 async def test_peername(all_loops, conn_type):
-    async with TestServer(ct=conn_type, is_buffered=buffered_protocol) as server:
-        async with TestClient(server, ct=conn_type, is_buffered=buffered_protocol) as client:
+    async with TestServer(ct=conn_type) as server:
+        async with TestClient(server, ct=conn_type) as client:
             server_client = await server.get_any_server_client()
             client_peername = client.transport.get_extra_info('peername')
             client_sockname = client.transport.get_extra_info('sockname')

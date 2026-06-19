@@ -217,7 +217,7 @@ jobs:
           '
         
   benchmarks:
-    name: Run benchmarks
+    name: benchmarks
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
