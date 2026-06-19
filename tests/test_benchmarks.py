@@ -145,7 +145,7 @@ def test_benchmark_write(benchmark, conn_type, buffered_protocol, msg_size):
 
 
 @pytest.mark.parametrize("msg_size", MSG_SIZES, ids=MSG_SIZE_IDS)
-def test_benchmark_writelines(benchmark, conn_type, buffered_protocol, msg_size):
+def test_benchmark_writelines(benchmark, conn_type, msg_size):
     payload = [b"x" * int(msg_size[0]/256)] * 256
     rounds = msg_size[1]
-    benchmark(run_sync, payload, rounds, conn_type, buffered_protocol)
+    benchmark(run_sync, payload, rounds, conn_type, True)
