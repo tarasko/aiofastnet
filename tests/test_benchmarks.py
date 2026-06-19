@@ -16,7 +16,7 @@ from typing import Union, List
 import pytest
 
 import aiofastnet
-from tests.utils import ConnectionType, TestServer, TestClient, _set_socket_sndbuf, EchoServerProtocol
+from tests.utils import ConnectionType, TestServer, TestClient, _set_socket_sndbuf
 
 # Message payload sizes (bytes) + num of rounds exercised by the benchmarks.
 MSG_SIZES = [(256, 200), (1024*1024, 10)]
