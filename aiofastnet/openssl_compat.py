@@ -82,7 +82,6 @@ if os.name == "nt":
         return libraries
 
 elif os.name == "posix" and sys.platform in {"darwin", "ios", "tvos", "watchos"}:
-    from ctypes.macholib.dyld import dyld_find as _dyld_find
 
     _libc = ctypes.CDLL(ctypes.util.find_library("c"))
     _dyld_get_image_name = _libc["_dyld_get_image_name"]
@@ -153,7 +152,6 @@ class OpenSSLDynLibs:
 
 
 def _find_openssl_library_paths() -> OpenSSLDynLibs:
-    import ssl
     import _ssl
 
     if getattr(_ssl, '__file__', None) is None:
