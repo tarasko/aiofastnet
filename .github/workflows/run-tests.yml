@@ -250,4 +250,4 @@ jobs:
       uses: CodSpeedHQ/action@v4
       with:
         mode: simulation
-        run: pytest -v tests/test_echo_benchmarks.py --codspeed
+        run: pytest -v tests/test_benchmarks.py --codspeed
