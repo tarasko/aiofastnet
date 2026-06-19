@@ -299,7 +299,7 @@ class EchoServerHandle:
         finally:
             try:
                 self.client_waiters.remove(fut)
-            except:
+            except ValueError:
                 pass
 
         return next(iter(self.clients))()
@@ -486,7 +486,7 @@ async def TestClient(server_or_host, port=None,
             transport.abort()
             try:
                 await client.wait_closed(1.0)
-            except:
+            except Exception:
                 pass
 
 

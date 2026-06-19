@@ -819,7 +819,7 @@ async def test_start_tls(all_loops):
                     server_side=True)
                 _logger.debug("Server(%d): start_tls completed", self._gen)
                 self._gen += 1
-            except:
+            except Exception:
                 _logger.exception("Server: unable to start_tls")
 
         async def _start_tls_and_push(self):
@@ -833,7 +833,7 @@ async def test_start_tls(all_loops):
                 _logger.debug("Server(%d): start_tls completed", self._gen)
                 self._gen += 1
                 self._transport.write(test_msg)
-            except:
+            except Exception:
                 _logger.exception("Server: unable to start_tls")
 
         def connection_lost(self, exc):
