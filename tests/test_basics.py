@@ -18,11 +18,6 @@ from tests.utils import TestClient, TestServer, \
     start_tls, sendfile
 
 
-@pytest.fixture(params=["simple", "buffered"])
-def buffered_protocol(request):
-    return request.param == "buffered"
-
-
 @pytest.mark.parametrize("msg_size", [1, 2, 3, 4, 5, 6, 7, 8, 29, 64, 256 * 1024, 6 * 1024 * 1024])
 async def test_echo(all_loops, msg_size, conn_type, buffered_protocol):
     payload = b"x" * msg_size

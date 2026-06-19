@@ -401,6 +401,11 @@ def ssl_conn_type(request):
         return _make_ktls_conn_type()
 
 
+@pytest.fixture(params=["simple", "buffered"])
+def buffered_protocol(request):
+    return request.param == "buffered"
+
+
 @asynccontextmanager
 async def TestServer(protocol_factory=None,
                      host="127.0.0.1", port=0,
