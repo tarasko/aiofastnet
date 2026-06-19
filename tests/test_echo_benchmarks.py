@@ -15,13 +15,11 @@ import asyncio
 import pytest
 
 import aiofastnet
-from tests.utils import ConnectionType, TestServer, TestClient
+from tests.utils import ConnectionType, TestServer, TestClient, _set_socket_sndbuf
 
-# Number of echo round-trips performed per benchmarked run.
-ROUNDS = 200
-# Message payload sizes (bytes) exercised by the benchmarks.
-MSG_SIZES = [256, 16384]
-
+# Message payload sizes (bytes) + num of rounds exercised by the benchmarks.
+MSG_SIZES = [(256, 200), (1024*1024, 20)]
+MSG_SIZE_IDS = ["small", "large"]
 
 class EchoClientProtocol(asyncio.Protocol):
     def __init__(self, payload: bytes, rounds: int, is_buffered: bool):
@@ -38,6 +36,7 @@ class EchoClientProtocol(asyncio.Protocol):
 
     def connection_made(self, transport: aiofastnet.Transport):
         self._transport = transport
+        _set_socket_sndbuf(self._transport, 64*1024)
         self._done = asyncio.get_running_loop().create_future()
 
     def start_benchmark(self):
@@ -102,8 +101,9 @@ def run_sync(payload: bytes, rounds: int, ct: ConnectionType, buffered_protocol:
     asyncio.run(run_echo(payload, rounds, ct, buffered_protocol))
 
 
-@pytest.mark.parametrize("msg_size", MSG_SIZES)
+@pytest.mark.parametrize("msg_size", MSG_SIZES, ids=MSG_SIZE_IDS)
 def test_echo_write(benchmark, conn_type, buffered_protocol, msg_size):
-    payload = b"x" * msg_size
-    benchmark(run_sync, payload, ROUNDS, conn_type, buffered_protocol)
+    payload = b"x" * msg_size[0]
+    rounds = msg_size[1]
+    benchmark(run_sync, payload, rounds, conn_type, buffered_protocol)
 
