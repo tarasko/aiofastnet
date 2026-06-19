@@ -82,7 +82,7 @@ async def _create_connection_transport(
                 server_hostname=server_hostname
             )
 
-            ssl_protocol_factory = lambda: ssl_transport.get_tls_protocol()
+            ssl_protocol_factory = ssl_transport.get_tls_protocol
 
             create_connection = _get_original_loop_method(loop, "create_connection")
             loop_transport, ssl_protocol = await create_connection(

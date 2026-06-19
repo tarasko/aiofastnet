@@ -15,7 +15,7 @@ from aiofastnet.transport import Protocol, SocketTransport, Transport
 from aiofastnet.ssl_transport import SSLTransport_Socket, SSLTransport_Transport
 from tests.utils import TestClient, TestServer, \
     make_test_ssl_contexts, AsyncClient, SomeException, _logger, \
-    conn_type, ssl_conn_type, ktls_conn_type, ssl_sbio_conn_type, start_tls, sendfile
+    start_tls, sendfile
 
 
 @pytest.fixture(params=["simple", "buffered"])

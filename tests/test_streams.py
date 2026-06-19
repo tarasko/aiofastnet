@@ -5,7 +5,7 @@ import pytest
 from async_timeout import timeout
 
 from aiofastnet import start_server, open_connection
-from tests.utils import EchoServerHandle, conn_type, _logger
+from tests.utils import EchoServerHandle, _logger
 
 
 @asynccontextmanager
@@ -57,5 +57,4 @@ async def test_streams_echo(msg_size, conn_type):
             assert payload == reply
             writer.close()
             await writer.wait_closed()
-
 

@@ -6,7 +6,7 @@ import pytest
 
 import aiofastnet
 from aiofastnet import ssl_object
-from tests.utils import TestServer, TestClient, ssl_conn_type
+from tests.utils import TestServer, TestClient
 
 
 class _Path:

@@ -7,7 +7,7 @@ from aiofastnet.wrapped_transport import (
     _AIOFASTNET_ORIGINAL_ATTR,
     _AIOFASTNET_PATCHED_ATTR,
 )
-from tests.utils import TestClient, TestServer, conn_type
+from tests.utils import TestClient, TestServer
 
 
 async def test_patch_loop_is_idempotent():

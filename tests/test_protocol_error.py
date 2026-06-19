@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from tests.utils import AsyncClient, SomeException, TestServer, TestClient, exc_queue, conn_type
+from tests.utils import AsyncClient, SomeException, TestServer, TestClient, exc_queue
 
 
 async def test_exc_eof_received(all_loops, conn_type):

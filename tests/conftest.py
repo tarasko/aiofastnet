@@ -8,6 +8,9 @@ from importlib.metadata import version
 import pytest
 
 
+pytest_plugins = ("tests.pytest_plugin",)
+
+
 def _version_tuple(package_name):
     return tuple(int(part) for part in version(package_name).split(".")[:2])
 
