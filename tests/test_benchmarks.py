@@ -28,7 +28,7 @@ class ServerProtocol(asyncio.Protocol):
         self._msg_size = msg_size
         self._is_buffered = is_buffered
         self._pending = 0
-        self._buffer = bytearray(16*1024) if is_buffered else None
+        self._buffer = bytearray(32*1024) if is_buffered else None
 
     def is_buffered_protocol(self):
         return self._is_buffered
