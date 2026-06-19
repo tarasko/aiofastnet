@@ -11,6 +11,7 @@ instrument.
 """
 
 import asyncio
+from typing import Union, List
 
 import pytest
 
@@ -52,7 +53,7 @@ class ServerProtocol(asyncio.Protocol):
 
 
 class EchoClientProtocol(asyncio.Protocol):
-    def __init__(self, payload: bytes, rounds: int, is_buffered: bool):
+    def __init__(self, payload: Union[bytes, List[bytes]] , rounds: int, is_buffered: bool):
         self._payload = payload
         self._remaining = rounds
         self._is_buffered = is_buffered
@@ -66,11 +67,14 @@ class EchoClientProtocol(asyncio.Protocol):
 
     def connection_made(self, transport: aiofastnet.Transport):
         self._transport = transport
-        _set_socket_sndbuf(self._transport, 64*1024)
+        _set_socket_sndbuf(self._transport, 128*1024)
         self._done = asyncio.get_running_loop().create_future()
 
-    def start_benchmark(self):
-        self._transport.write(self._payload)
+    def write(self):
+        if isinstance(self._payload, list):
+            self._transport.writelines(self._payload)
+        else:
+            self._transport.write(self._payload)
 
     def connection_lost(self, exc):
         if self._done is not None:
@@ -98,7 +102,7 @@ class EchoClientProtocol(asyncio.Protocol):
         if self._remaining <= 0:
             self._transport.close()
         else:
-            self._transport.write(self._payload)
+            self.write()
 
     async def start_tls(self, ssl_context, server_hostname="127.0.0.1",
                         ssl_handshake_timeout=None, ssl_shutdown_timeout=None):
@@ -123,7 +127,7 @@ async def run_echo(payload: bytes, rounds: int, ct: ConnectionType, buffered_pro
 
     async with TestServer(lambda: ServerProtocol(len(payload), buffered_protocol), ct=ct) as server:
         async with TestClient(server, ct=ct, is_buffered=buffered_protocol, protocol_factory=client_factory) as client:
-            client.start_benchmark()
+            client.write()
             await client.wait_closed()
 
 
