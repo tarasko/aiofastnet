@@ -12,13 +12,11 @@ cpdef enum SSLError:
 
 
 cdef class SSLObject:
-    # Wraps raw openssl pointers and provide some methods that may be
+    # Wraps raw openssl pointers and provide some methods of ssl.SSLObject that may be
     # interesting for the user.
-    #
-    # Provided methods:
-    # * getpeercert()
-    # * cipher()
-    # * compression()
+
+    # To allow mocking in user tests
+    cdef dict __dict__
 
     cdef:
         object ssl_ctx_py
@@ -28,11 +26,14 @@ cdef class SSLObject:
         BIO* incoming
         BIO* outgoing
         SSL* ssl
-        readonly str server_hostname
-        readonly bint server_side
-        bint ktls_requested
 
     # Exposed to the end user
+
+    cdef:
+        readonly str server_hostname
+        readonly bint server_side
+        readonly bint ktls_requested
+
     cpdef object version(self)
     cpdef tuple cipher(self)
     cpdef object shared_ciphers(self)
@@ -42,7 +43,7 @@ cdef class SSLObject:
     cpdef object get_channel_binding(self, str cb_type=*)
     cpdef str compression(self)
     cpdef object selected_alpn_protocol(self)
-    cpdef bint is_socket_bio_enabled(self)
+    cpdef bint socket_bio_enabled(self)
     cpdef int ktls_send_enabled(self)
     cpdef int ktls_recv_enabled(self)
 

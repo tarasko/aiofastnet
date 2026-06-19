@@ -469,7 +469,7 @@ cdef class SSLObject:
 
         return PyUnicode_FromStringAndSize(<const char*>protocol, protocol_len)
 
-    cpdef bint is_socket_bio_enabled(self):
+    cpdef bint socket_bio_enabled(self):
         return self.incoming == NULL or self.outgoing == NULL
 
     cpdef int ktls_send_enabled(self):

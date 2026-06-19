@@ -301,7 +301,7 @@ cdef class SSLTransportBase(Transport):
         elif name == 'ssl_layer_num':
             return self._ssl_layer_num
         elif name == 'ssl_socket_bio_enabled':
-            return bool(self._ssl_object.is_socket_bio_enabled())
+            return bool(self._ssl_object.socket_bio_enabled())
         elif name == 'ktls_send_enabled':
             return bool(self._ssl_object.ktls_send_enabled())
         elif name == 'ktls_recv_enabled':

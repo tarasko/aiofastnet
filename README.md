@@ -273,6 +273,27 @@ Possible workarounds:
 - Build or install Python so that `_ssl` is a dynamic extension linked against
   shared OpenSSL libraries.
 
+## Asyncio Compatibility
+
+`aiofastnet` is a drop-in replacement and is expected to behave like the
+corresponding asyncio API, with one notable exception: aiofastnet implements
+its own `SSLObject` type, and `transport.get_extra_info("ssl_object")` returns
+it instead of `ssl.SSLObject`.
+
+Compared with `ssl.SSLObject`, the following public methods are absent:
+
+- `do_handshake()`
+- `read()`
+- `write()`
+- `unwrap()`
+- `pending()`
+- `selected_npn_protocol()`
+- `verify_client_post_handshake()`
+
+The following public attribute is also absent:
+
+- `session`
+
 ## Kernel TLS (KTLS) support on Linux
 
 On Linux, `aiofastnet` can use OpenSSL's KTLS support for TLS
