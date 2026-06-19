@@ -8,6 +8,12 @@ import asyncio
 import collections
 import itertools
 import socket
+import sys
+
+if sys.version_info >= (3, 11):
+    from builtins import ExceptionGroup
+else:
+    from exceptiongroup import ExceptionGroup
 
 from .api_utils import (_check_ssl_socket, _create_connection_transport,
                         _logger, _ensure_resolved, _validate_ssl_timeout, _validate_bio_size)

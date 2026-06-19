@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.18.0
+------------------
+
+* Fixed potential error in create_connection on python < 3.11 due to missing ExceptionGroup
+
 0.17.0
 ------------------
 
