@@ -29,6 +29,17 @@ MSG_SIZES = [(256, 200), (1024*1024, 10)]
 MSG_SIZE_IDS = ["small", "large"]
 
 
+@pytest.fixture
+def asyncio_debug(request):
+    value = request.config.getoption("asyncio_debug")
+    if value is None:
+        value = request.config.getini("asyncio_debug")
+    if isinstance(value, bool):
+        return value
+    return value == "true"
+
+
+
 class ServerProtocol(asyncio.Protocol):
     def __init__(self, msg_size, is_buffered, all_server_clients):
         self._all_server_clients = all_server_clients
@@ -145,42 +156,44 @@ async def run_server_client(client_factory, payload_size, ct: ConnectionType, is
 
     async with TestServer(lambda: ServerProtocol(payload_size, is_server_buffered, all_server_clients), ct=ct) as server:
         async with TestClient(server, ct=ct, is_buffered=True, protocol_factory=client_factory) as client:
+            while not all_server_clients:
+                await asyncio.sleep(0)
             all_server_clients[0].set_client(client)
             client.write()
             await client.wait_closed()
 
 
-def run_in_loop(client_factory, payload_size, ct, is_server_buffered):
+def run_in_loop(client_factory, payload_size, ct, is_server_buffered, asyncio_debug):
     uvloop.run(
         run_server_client(client_factory, payload_size, ct, is_server_buffered),
-        debug=False,
+        debug=asyncio_debug,
     )
 
 
 @pytest.mark.parametrize("msg_size", MSG_SIZES, ids=MSG_SIZE_IDS)
-def test_benchmark_write(benchmark, conn_type, buffered_protocol, msg_size):
+def test_benchmark_write(benchmark, conn_type, buffered_protocol, msg_size, asyncio_debug):
     payload_size, rounds = msg_size
     payload = b"x" * payload_size
 
     def client_factory(is_buffered: bool):
         return ClientProtocol(payload, rounds)
 
-    benchmark(run_in_loop, client_factory, payload_size, conn_type, buffered_protocol)
+    benchmark(run_in_loop, client_factory, payload_size, conn_type, buffered_protocol, asyncio_debug)
 
 
 @pytest.mark.parametrize("msg_size", MSG_SIZES, ids=MSG_SIZE_IDS)
-def test_benchmark_writelines(benchmark, conn_type, msg_size):
+def test_benchmark_writelines(benchmark, conn_type, msg_size, asyncio_debug):
     payload_size, rounds = msg_size
     payload = [b"x" * int(payload_size/256)] * 256
 
     def client_factory(is_buffered: bool):
         return ClientProtocol(payload, rounds)
 
-    benchmark(run_in_loop, client_factory, payload_size, conn_type, True)
+    benchmark(run_in_loop, client_factory, payload_size, conn_type, True, asyncio_debug)
 
 
 @pytest.mark.parametrize("msg_size", MSG_SIZES, ids=MSG_SIZE_IDS)
-def test_benchmark_sendfile(benchmark, sendfile_conn_type, msg_size):
+def test_benchmark_sendfile(benchmark, sendfile_conn_type, msg_size, asyncio_debug):
     payload_size = msg_size[0]
     rounds = msg_size[1]
     with tempfile.TemporaryFile() as file:
@@ -190,4 +203,4 @@ def test_benchmark_sendfile(benchmark, sendfile_conn_type, msg_size):
         def client_factory(is_buffered: bool):
             return SendfileClientProtocol(file, payload_size, rounds)
 
-        benchmark(run_in_loop, client_factory, payload_size, sendfile_conn_type, True)
+        benchmark(run_in_loop, client_factory, payload_size, sendfile_conn_type, True, asyncio_debug)
