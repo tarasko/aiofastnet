@@ -25,7 +25,7 @@ import uvloop
 from tests.utils import ConnectionType, TestServer, TestClient, _set_socket_sndbuf
 
 # Message payload sizes (bytes) + num of rounds exercised by the benchmarks.
-MSG_SIZES = [(256, 400), (1024*1024, 10)]
+MSG_SIZES = [(256, 300), (1024*1024, 15)]
 MSG_SIZE_IDS = ["small", "large"]
 
 
