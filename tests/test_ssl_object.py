@@ -1,12 +1,19 @@
 import asyncio
 import logging
 import ssl
+from pathlib import Path
 
 import pytest
 
 import aiofastnet
 from aiofastnet import ssl_object
 from tests.utils import TestServer, TestClient
+
+
+def _test_cert_der():
+    return ssl.PEM_cert_to_DER_cert(
+        Path("tests/test.crt").read_text(encoding="ascii")
+    )
 
 
 class _Path:
@@ -219,8 +226,7 @@ async def test_ssl_get_channel_binding(ssl_conn_type):
 
 
 async def test_ssl_certificate_chains(ssl_conn_type):
-    expected_der = ssl.PEM_cert_to_DER_cert(
-        open("tests/test.crt", "r", encoding="ascii").read())
+    expected_der = _test_cert_der()
 
     async with TestServer(ct=ssl_conn_type) as server:
         async with TestClient(server, ct=ssl_conn_type) as client:
@@ -235,8 +241,7 @@ async def test_ssl_certificate_chains(ssl_conn_type):
 
 
 async def test_ssl_certificate_chains_with_client_auth(ssl_conn_type):
-    expected_der = ssl.PEM_cert_to_DER_cert(
-        open("tests/test.crt", "r", encoding="ascii").read())
+    expected_der = _test_cert_der()
 
     ssl_conn_type.server_ssl_context.verify_mode = ssl.CERT_REQUIRED
     ssl_conn_type.server_ssl_context.load_verify_locations(cafile="tests/test.crt")
@@ -291,8 +296,7 @@ async def test_ssl_shared_ciphers(ssl_conn_type):
 
 
 async def test_ssl_getpeercert_binary_form(ssl_conn_type):
-    expected_der = ssl.PEM_cert_to_DER_cert(
-        open("tests/test.crt", "r", encoding="ascii").read())
+    expected_der = _test_cert_der()
 
     async with TestServer(ct=ssl_conn_type) as server:
         async with TestClient(server, ct=ssl_conn_type) as client:
