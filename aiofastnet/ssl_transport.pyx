@@ -28,7 +28,6 @@ from .utils cimport (
     aiofn_send,
     aiofn_allocate_bytes,
     aiofn_finalize_bytes,
-    aiofn_resize_bytes,
     aiofn_set_nodelay,
     aiofn_add_info_and_reraise,
     unlikely
@@ -41,6 +40,7 @@ from .openssl_compat import OPENSSL_DYN_LIBS
 
 cdef object _logger = getLogger('aiofastnet.ssl')
 cdef size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
+cdef Py_ssize_t DATA_RECEIVED_MAX_SIZE = constants.DATA_RECEIVED_MAX_SIZE
 
 
 def _create_transport_context(server_side, server_hostname):
@@ -548,52 +548,51 @@ cdef class SSLTransportBase(Transport):
             char* bytes_buffer_ptr = NULL
             PyObject* bytes_obj = NULL
             int last_error = 0
-            Py_ssize_t capacity
             Py_ssize_t total_bytes_read
-            Py_ssize_t available
-            Py_ssize_t max_ssl_read_size = 16 * 1024
 
         while True:
-            capacity = self._ssl_object.pending() + max_ssl_read_size
-            if self._ssl_object.incoming != NULL:
-                capacity += self._ssl_object.incoming_bio_pending()
-
-            bytes_obj = aiofn_allocate_bytes(capacity, &bytes_buffer_ptr)
+            bytes_obj = aiofn_allocate_bytes(DATA_RECEIVED_MAX_SIZE, &bytes_buffer_ptr)
             total_bytes_read = 0
 
             try:
-                while True:
-                    available = capacity - total_bytes_read
-                    if available == 0:
-                        capacity += max(capacity, max_ssl_read_size)
-                        aiofn_resize_bytes(&bytes_obj, capacity, &bytes_buffer_ptr)
-
+                while total_bytes_read < DATA_RECEIVED_MAX_SIZE:
                     bytes_read = self._ssl_object.read(
-                        bytes_buffer_ptr + total_bytes_read,
-                        min(capacity - total_bytes_read, max_ssl_read_size)
+                        bytes_buffer_ptr,
+                        DATA_RECEIVED_MAX_SIZE - total_bytes_read
                     )
 
-                    if bytes_read <= 0:
+                    if unlikely(bytes_read <= 0):
                         last_error = self._ssl_object.get_error(bytes_read)
                         if unlikely(self._is_debug):
-                            _logger.debug("%r: SSL_read(buf_len=%d)=%d, %s",
-                                          self, capacity - total_bytes_read, bytes_read,
+                            _logger.debug("%r: SSL_read(buf_len=%d)=%d, total=%d, %s",
+                                          self,
+                                          DATA_RECEIVED_MAX_SIZE - total_bytes_read,
+                                          bytes_read,
+                                          total_bytes_read,
                                           ssl_error_name(last_error))
                         break
 
-                    total_bytes_read += bytes_read
                     if unlikely(self._is_debug):
                         _logger.debug("%r: SSL_read(buf_len=%d)=%d, total=%d",
-                                      self, capacity - total_bytes_read + bytes_read,
-                                      bytes_read, total_bytes_read)
+                                      self,
+                                      DATA_RECEIVED_MAX_SIZE - total_bytes_read,
+                                      bytes_read,
+                                      total_bytes_read + bytes_read)
+
+                    bytes_buffer_ptr += bytes_read
+                    total_bytes_read += bytes_read
             except:
                 Py_XDECREF(bytes_obj)
                 raise
 
             data = aiofn_finalize_bytes(bytes_obj, total_bytes_read)
+            bytes_obj = NULL # Just to mark that it doesn't have any valid object anymore
             self._call_protocol_data_received(data)
 
-            if not self._should_retry_read(last_error) or self._read_paused:
+            if self._read_paused:
+                return
+
+            if total_bytes_read < DATA_RECEIVED_MAX_SIZE and not self._should_retry_read(last_error):
                 return
 
     cdef inline bint _should_retry_read(self, int last_error) except -1:

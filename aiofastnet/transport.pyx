@@ -21,7 +21,7 @@ from .utils cimport *
 
 
 cdef object _logger = getLogger('aiofastnet')
-cdef Py_ssize_t _DATA_RECEIVED_MAX_SIZE = 256 * 1024
+cdef Py_ssize_t DATA_RECEIVED_MAX_SIZE = constants.DATA_RECEIVED_MAX_SIZE
 cdef size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
 
 
@@ -390,10 +390,10 @@ cdef class SocketTransport(Transport):
         if self._read_paused:
             return
 
-        buffer = aiofn_allocate_bytes(_DATA_RECEIVED_MAX_SIZE, &buf_ptr)
+        buffer = aiofn_allocate_bytes(DATA_RECEIVED_MAX_SIZE, &buf_ptr)
 
         try:
-            bytes_read = aiofn_recv(self._sock_fd, buf_ptr, _DATA_RECEIVED_MAX_SIZE)
+            bytes_read = aiofn_recv(self._sock_fd, buf_ptr, DATA_RECEIVED_MAX_SIZE)
             data = aiofn_finalize_bytes(buffer, max(bytes_read, 0))
             buffer = NULL
         except:
@@ -401,7 +401,7 @@ cdef class SocketTransport(Transport):
             raise
 
         if unlikely(self._is_debug):
-            _logger.debug("%r: aiofn_recv(...,len=%d)=%d", self, _DATA_RECEIVED_MAX_SIZE, bytes_read)
+            _logger.debug("%r: aiofn_recv(...,len=%d)=%d", self, DATA_RECEIVED_MAX_SIZE, bytes_read)
 
         if bytes_read == -1:    # without exception this means EGAIN
             return
