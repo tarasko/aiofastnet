@@ -17,6 +17,7 @@ from typing import Union, List
 import pytest
 
 import aiofastnet
+import uvloop
 from tests.utils import ConnectionType, TestServer, TestClient, _set_socket_sndbuf
 
 # Message payload sizes (bytes) + num of rounds exercised by the benchmarks.
@@ -24,25 +25,25 @@ MSG_SIZES = [(256, 200), (1024*1024, 10)]
 MSG_SIZE_IDS = ["small", "large"]
 
 
-@pytest.fixture(params=["tcp", "ktls"])
-def sendfile_conn_type(request):
-    if request.param == "tcp":
-        return ConnectionType("tcp")
-    return request.getfixturevalue("ktls_conn_type")
-
-
 class ServerProtocol(asyncio.Protocol):
-    def __init__(self, msg_size, is_buffered):
+    def __init__(self, msg_size, is_buffered, all_server_clients):
+        self._all_server_clients = all_server_clients
         self._msg_size = msg_size
         self._is_buffered = is_buffered
         self._pending = 0
         self._buffer = bytearray(32*1024) if is_buffered else None
+        self._client = None
 
     def is_buffered_protocol(self):
         return self._is_buffered
 
     def connection_made(self, transport):
         self.transport = transport
+        self._all_server_clients.append(self)
+
+    def connection_lost(self, exc):
+        self.transport = None
+        self._all_server_clients.remove(self)
 
     def get_buffer(self, hint):
         return self._buffer
@@ -50,28 +51,26 @@ class ServerProtocol(asyncio.Protocol):
     def buffer_updated(self, bytes_read):
         self._pending += bytes_read
         while self._pending >= self._msg_size:
-            self.transport.write(b"done")
+            asyncio.get_running_loop().call_soon(self._client.write)
             self._pending -= self._msg_size
 
     def data_received(self, data):
         self._pending += len(data)
         while self._pending >= self._msg_size:
-            self.transport.write(b"done")
+            asyncio.get_running_loop().call_soon(self._client.write)
             self._pending -= self._msg_size
 
+    def set_client(self, client):
+        self._client = client
 
-class ClientProtocol(asyncio.Protocol):
-    def __init__(self, payload: Union[bytes, List[bytes]], rounds: int, is_buffered: bool):
+
+class ClientProtocol(asyncio.BufferedProtocol):
+    def __init__(self, payload: Union[bytes, List[bytes]], rounds: int):
         self._payload = payload
-        self._remaining = rounds
-        self._is_buffered = is_buffered
-        self._received = 0
+        self._remaining = rounds + 1
         self._transport = None
         self._done = None
-        self._read_buffer = bytearray(b"X") * (128*1024) if is_buffered else None
-
-    def is_buffered_protocol(self):
-        return self._is_buffered
+        self._read_buffer = bytearray(b"X") * (128*1024)
 
     def connection_made(self, transport: aiofastnet.Transport):
         self._transport = transport
@@ -79,6 +78,14 @@ class ClientProtocol(asyncio.Protocol):
         self._done = asyncio.get_running_loop().create_future()
 
     def write(self):
+        self._remaining -= 1
+        if self._remaining <= 0:
+            self._transport.close()
+            return
+
+        self.write_impl()
+
+    def write_impl(self):
         if isinstance(self._payload, list):
             self._transport.writelines(self._payload)
         else:
@@ -92,25 +99,11 @@ class ClientProtocol(asyncio.Protocol):
                 self._done.set_exception(exc)
 
     def get_buffer(self, hint):
-        return memoryview(self._read_buffer)
+        return self._read_buffer
 
     def buffer_updated(self, bytes_read):
-        self._account_received(bytes_read)
+        pass
 
-    def data_received(self, data):
-        self._account_received(len(data))
-
-    def _account_received(self, sz):
-        self._received += sz
-        if self._received < 4:
-            return
-
-        self._received -= 4
-        self._remaining -= 1
-        if self._remaining <= 0:
-            self._transport.close()
-        else:
-            self.write()
 
     async def start_tls(self, ssl_context, server_hostname="127.0.0.1",
                         ssl_handshake_timeout=None, ssl_shutdown_timeout=None):
@@ -130,12 +123,12 @@ class ClientProtocol(asyncio.Protocol):
 
 
 class SendfileClientProtocol(ClientProtocol):
-    def __init__(self, file, payload_size: int, rounds: int, is_buffered: bool):
-        super().__init__(b"", rounds, is_buffered)
+    def __init__(self, file, payload_size: int, rounds: int):
+        super().__init__(b"", rounds)
         self._file = file
         self._payload_size = payload_size
 
-    def write(self):
+    def write_impl(self):
         self._transport.sendfile(
             self._file,
             offset=0,
@@ -143,57 +136,51 @@ class SendfileClientProtocol(ClientProtocol):
         )
 
 
-async def run_echo(payload: Union[bytes, List[bytes]], rounds: int, ct: ConnectionType, buffered_protocol: bool):
-    payload_len = sum(len(p) for p in payload) if isinstance(payload, list) else len(payload)
+async def run_server_client(client_factory, payload_size, ct: ConnectionType, is_server_buffered):
+    all_server_clients = []
 
-    def client_factory(is_buffered: bool):
-        return ClientProtocol(payload, rounds, is_buffered)
-
-    async with TestServer(lambda: ServerProtocol(payload_len, buffered_protocol), ct=ct) as server:
-        async with TestClient(server, ct=ct, is_buffered=buffered_protocol, protocol_factory=client_factory) as client:
-            client.write()
-            await client.wait_closed()
-
-
-def run_sync(payload: bytes, rounds: int, ct: ConnectionType, buffered_protocol: bool):
-    asyncio.run(run_echo(payload, rounds, ct, buffered_protocol))
-
-
-async def run_sendfile(file, payload_size: int, rounds: int, ct: ConnectionType):
-    def client_factory(is_buffered: bool):
-        return SendfileClientProtocol(file, payload_size, rounds, is_buffered)
-
-    async with TestServer(lambda: ServerProtocol(payload_size, True), ct=ct) as server:
+    async with TestServer(lambda: ServerProtocol(payload_size, is_server_buffered, all_server_clients), ct=ct) as server:
         async with TestClient(server, ct=ct, is_buffered=True, protocol_factory=client_factory) as client:
+            all_server_clients[0].set_client(client)
             client.write()
             await client.wait_closed()
 
 
-def run_sendfile_sync(file, payload_size: int, rounds: int, ct: ConnectionType):
-    file.seek(0)
-    asyncio.run(run_sendfile(file, payload_size, rounds, ct), debug=False)
+def run_in_loop(coro):
+    uvloop.run(coro, debug=True)
 
 
 @pytest.mark.parametrize("msg_size", MSG_SIZES, ids=MSG_SIZE_IDS)
 def test_benchmark_write(benchmark, conn_type, buffered_protocol, msg_size):
-    payload = b"x" * msg_size[0]
-    rounds = msg_size[1]
-    benchmark(run_sync, payload, rounds, conn_type, buffered_protocol)
+    payload_size, rounds = msg_size
+    payload = b"x" * payload_size
+
+    def client_factory(is_buffered: bool):
+        return ClientProtocol(payload, rounds)
+
+    benchmark(run_in_loop, run_server_client(client_factory, payload_size, conn_type, buffered_protocol))
 
 
 @pytest.mark.parametrize("msg_size", MSG_SIZES, ids=MSG_SIZE_IDS)
 def test_benchmark_writelines(benchmark, conn_type, msg_size):
-    payload = [b"x" * int(msg_size[0]/256)] * 256
-    rounds = msg_size[1]
-    benchmark(run_sync, payload, rounds, conn_type, True)
+    payload_size, rounds = msg_size
+    payload = [b"x" * int(payload_size/256)] * 256
+
+    def client_factory(is_buffered: bool):
+        return ClientProtocol(payload, rounds)
+
+    benchmark(run_in_loop, run_server_client(client_factory, payload_size, conn_type, True))
 
 
 @pytest.mark.parametrize("msg_size", MSG_SIZES, ids=MSG_SIZE_IDS)
 def test_benchmark_sendfile(benchmark, sendfile_conn_type, msg_size):
-    sendfile_conn_type.check_sendfile_supported()
     payload_size = msg_size[0]
     rounds = msg_size[1]
     with tempfile.TemporaryFile() as file:
         file.write(b"x" * payload_size)
         file.flush()
-        benchmark(run_sendfile_sync, file, payload_size, rounds, sendfile_conn_type)
+
+        def client_factory(is_buffered: bool):
+            return SendfileClientProtocol(file, payload_size, rounds)
+
+        benchmark(run_in_loop, run_server_client(client_factory, payload_size, sendfile_conn_type, True))

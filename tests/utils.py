@@ -356,6 +356,13 @@ def ssl_sbio_conn_type():
     return _make_ssl_sbio_conn_type()
 
 
+@pytest.fixture(params=["tcp", "ktls"])
+def sendfile_conn_type(request):
+    if request.param == "tcp":
+        return ConnectionType("tcp")
+    return request.getfixturevalue("ktls_conn_type")
+
+
 @pytest.fixture(params=[
     "tcp",
     "ssl_mbio",
