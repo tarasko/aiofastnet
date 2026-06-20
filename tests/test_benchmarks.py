@@ -150,8 +150,11 @@ async def run_server_client(client_factory, payload_size, ct: ConnectionType, is
             await client.wait_closed()
 
 
-def run_in_loop(coro):
-    uvloop.run(coro, debug=True)
+def run_in_loop(client_factory, payload_size, ct, is_server_buffered):
+    uvloop.run(
+        run_server_client(client_factory, payload_size, ct, is_server_buffered),
+        debug=False,
+    )
 
 
 @pytest.mark.parametrize("msg_size", MSG_SIZES, ids=MSG_SIZE_IDS)
@@ -162,7 +165,7 @@ def test_benchmark_write(benchmark, conn_type, buffered_protocol, msg_size):
     def client_factory(is_buffered: bool):
         return ClientProtocol(payload, rounds)
 
-    benchmark(run_in_loop, run_server_client(client_factory, payload_size, conn_type, buffered_protocol))
+    benchmark(run_in_loop, client_factory, payload_size, conn_type, buffered_protocol)
 
 
 @pytest.mark.parametrize("msg_size", MSG_SIZES, ids=MSG_SIZE_IDS)
@@ -173,7 +176,7 @@ def test_benchmark_writelines(benchmark, conn_type, msg_size):
     def client_factory(is_buffered: bool):
         return ClientProtocol(payload, rounds)
 
-    benchmark(run_in_loop, run_server_client(client_factory, payload_size, conn_type, True))
+    benchmark(run_in_loop, client_factory, payload_size, conn_type, True)
 
 
 @pytest.mark.parametrize("msg_size", MSG_SIZES, ids=MSG_SIZE_IDS)
@@ -187,4 +190,4 @@ def test_benchmark_sendfile(benchmark, sendfile_conn_type, msg_size):
         def client_factory(is_buffered: bool):
             return SendfileClientProtocol(file, payload_size, rounds)
 
-        benchmark(run_in_loop, run_server_client(client_factory, payload_size, sendfile_conn_type, True))
+        benchmark(run_in_loop, client_factory, payload_size, sendfile_conn_type, True)
