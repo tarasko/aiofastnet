@@ -1,5 +1,7 @@
 import asyncio
+import gc
 import os
+import warnings
 
 import pytest
 
@@ -221,7 +223,22 @@ def test_system_exit_not_reported(conn_type, exc, meth):
                         client.transport.write(payload)
                     await asyncio.sleep(0.1)
 
-    with pytest.raises(exc):
-        asyncio.run(run())
+    if meth in ("connection_made", "connection_lost") and conn_type.name in (
+        "ssl_mbio",
+        "ssl_sbio",
+        "ktls",
+    ):
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"deleting unclosed SSLTransport_Socket",
+                category=ResourceWarning,
+            )
+            with pytest.raises(exc):
+                asyncio.run(run())
+            gc.collect()
+    else:
+        with pytest.raises(exc):
+            asyncio.run(run())
 
     assert excq == []
