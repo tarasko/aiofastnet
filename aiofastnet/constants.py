@@ -26,4 +26,6 @@ SSL_BIO_SIZE_DEFAULTS = {
     "ssl_outgoing_bio_size": int(4 * (16 * 1024 + 64))
 }
 
+DATA_RECEIVED_MAX_SIZE = 256 * 1024
+
 EXC_INFO_ATTR = '_aiofastnet_extra_info'
