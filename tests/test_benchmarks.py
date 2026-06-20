@@ -25,7 +25,7 @@ import uvloop
 from tests.utils import ConnectionType, TestServer, TestClient, _set_socket_sndbuf
 
 # Message payload sizes (bytes) + num of rounds exercised by the benchmarks.
-MSG_SIZES = [(256, 500), (1024*1024, 10)]
+MSG_SIZES = [(256, 400), (1024*1024, 10)]
 MSG_SIZE_IDS = ["small", "large"]
 
 
@@ -159,7 +159,7 @@ async def run_server_client(client_factory, payload_size, ct: ConnectionType, is
             while not all_server_clients:
                 await asyncio.sleep(0)
             all_server_clients[0].set_client(client)
-            client.write()
+            asyncio.get_running_loop().call_soon(client.write)
             await client.wait_closed()
 
 
