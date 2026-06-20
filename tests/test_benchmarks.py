@@ -11,10 +11,14 @@ instrument.
 """
 
 import asyncio
+import os
 import tempfile
 from typing import Union, List
 
 import pytest
+
+if os.name == "nt":
+    pytest.skip("CodSpeed benchmarks are not run on Windows", allow_module_level=True)
 
 import aiofastnet
 import uvloop
