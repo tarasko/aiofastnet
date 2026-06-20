@@ -3,7 +3,8 @@ from tests.utils import (
     ktls_conn_type,
     ssl_conn_type,
     ssl_sbio_conn_type,
-    buffered_protocol
+    sendfile_conn_type,
+    buffered_protocol,
 )
 
 __all__ = [
@@ -11,5 +12,6 @@ __all__ = [
     "ktls_conn_type",
     "ssl_conn_type",
     "ssl_sbio_conn_type",
+    "sendfile_conn_type",
     "buffered_protocol"
 ]
