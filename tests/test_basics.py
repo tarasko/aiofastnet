@@ -592,7 +592,7 @@ async def test_sendfile_huge_error(all_loops, conn_type):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only test")
-async def test_sendfile_win_not_implemented(all_loops):
+async def test_sendfile_win_not_implemented(selector_loop):
     loop = asyncio.get_running_loop()
     payload = b"p" * (1024)
     with TmpFromData(payload) as tmp:
