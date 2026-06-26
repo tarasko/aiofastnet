@@ -1,7 +1,7 @@
 import asyncio
 
 from .transport import Transport
-from .wrapped_transport import _WrappedTransport, _get_original_loop_method
+from .wrapped_transport import _get_original_loop_method
 
 
 async def sendfile(loop: asyncio.AbstractEventLoop,
@@ -16,15 +16,7 @@ async def sendfile(loop: asyncio.AbstractEventLoop,
     Ignores fallback argument. Always raises NotImplementedError if native
     sendfile is not available.
     """
-    if isinstance(transport, _WrappedTransport):
-        if not getattr(transport, "_sendfile_compatible", True):
-            raise NotImplementedError()
-
-        loop_sendfile = _get_original_loop_method(loop, "sendfile")
-        return await loop_sendfile(
-            transport._transport, file, offset, count, fallback=fallback)
-
-    elif isinstance(transport, Transport):
+    if isinstance(transport, Transport):
         fut = transport.sendfile(file, offset, count)
         if fut is not None:
             return await fut

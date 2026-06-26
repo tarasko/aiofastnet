@@ -90,6 +90,14 @@ class _WrappedTransport(Transport):
     def abort(self):
         return self._transport.abort()
 
+    def sendfile(self, file, offset, count, *, fallback=True):
+        if not getattr(self, "_sendfile_compatible", True):
+            raise NotImplementedError()
+
+        loop_sendfile = _get_original_loop_method(asyncio.get_running_loop(), "sendfile")
+        return loop_sendfile(
+            self._transport, file, offset, count, fallback=fallback)
+
 
 class _WrappedProtocolBase(asyncio.BaseProtocol):
     __slots__ = ('_protocol', '_wrapped_transport')
