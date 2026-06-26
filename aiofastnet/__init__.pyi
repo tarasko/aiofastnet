@@ -1,4 +1,5 @@
 import asyncio
+import os
 import socket
 import ssl
 from typing import (
@@ -57,6 +58,20 @@ async def create_connection(
     happy_eyeballs_delay: Optional[float] = ...,
     interleave: Optional[int] = ...,
     all_errors: bool = ...,
+) -> Tuple[asyncio.Transport, _ProtocolT]: ...
+
+async def create_unix_connection(
+    loop: asyncio.AbstractEventLoop,
+    protocol_factory: Callable[[], _ProtocolT],
+    path: Optional[Union[str, bytes, os.PathLike[str], os.PathLike[bytes]]] = ...,
+    *,
+    ssl: Optional[Union[bool, ssl.SSLContext]] = ...,
+    sock: Optional[socket.socket] = ...,
+    server_hostname: Optional[str] = ...,
+    ssl_handshake_timeout: Optional[float] = ...,
+    ssl_shutdown_timeout: Optional[float] = ...,
+    ssl_incoming_bio_size: Optional[int] = ...,
+    ssl_outgoing_bio_size: Optional[int] = ...,
 ) -> Tuple[asyncio.Transport, _ProtocolT]: ...
 
 async def create_server(
