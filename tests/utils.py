@@ -383,9 +383,7 @@ def ssl_sbio_conn_type():
 
 @pytest.fixture(params=["tcp", "ktls"])
 def sendfile_conn_type(request):
-    if request.param == "tcp":
-        return ConnectionType("tcp")
-    return request.getfixturevalue("ktls_conn_type")
+    return _make_conn_type_from_param(request)
 
 
 @pytest.fixture(params=[
@@ -406,6 +404,26 @@ def sendfile_conn_type(request):
                  )
 ])
 def conn_type(request):
+    return _make_conn_type_from_param(request)
+
+
+@pytest.fixture(params=[
+    "tcp",
+    "ssl_mbio",
+    "ssl_sbio",
+    "stls",     # Use SSLTransport_Transport by using start_tls
+    pytest.param("ktls",
+                 marks=[
+                        pytest.mark.skipif(sys.version_info < (3, 12), reason="kTLS tests require Python >= 3.12"),
+                        pytest.mark.skipif(sys.platform != "linux", reason="kTLS is available only on Linux")
+                 ]
+                 )
+])
+def benchmark_conn_type(request):
+    return _make_conn_type_from_param(request)
+
+
+def _make_conn_type_from_param(request):
     if request.param in ("tcp", "unix"):
         return ConnectionType(name=request.param)
     else:
@@ -416,6 +434,8 @@ def conn_type(request):
             return _make_ssl_sbio_conn_type()
         elif request.param == "ktls":
             return _make_ktls_conn_type()
+        else:
+            raise ValueError(f"unknown connection type {request.param!r}")
 
 
 @pytest.fixture(params=[
@@ -429,13 +449,7 @@ def conn_type(request):
                  )
 ])
 def ssl_conn_type(request):
-    if request.param in ("ssl_mbio", "stls"):
-        server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
-        return ConnectionType(request.param, server_context, client_context)
-    elif request.param == "ssl_sbio":
-        return _make_ssl_sbio_conn_type()
-    elif request.param == "ktls":
-        return _make_ktls_conn_type()
+    return _make_conn_type_from_param(request)
 
 
 @pytest.fixture(params=["simple", "buffered"])
