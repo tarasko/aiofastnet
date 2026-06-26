@@ -95,6 +95,22 @@ async def create_server(
     start_serving: bool = ...,
 ) -> asyncio.Server: ...
 
+async def create_unix_server(
+    loop: asyncio.AbstractEventLoop,
+    protocol_factory: Callable[[], asyncio.BaseProtocol],
+    path: Optional[Union[str, bytes, os.PathLike[str], os.PathLike[bytes]]] = ...,
+    *,
+    sock: Optional[socket.socket] = ...,
+    backlog: int = ...,
+    ssl: Optional[ssl.SSLContext] = ...,
+    ssl_handshake_timeout: Optional[float] = ...,
+    ssl_shutdown_timeout: Optional[float] = ...,
+    ssl_incoming_bio_size: Optional[int] = ...,
+    ssl_outgoing_bio_size: Optional[int] = ...,
+    start_serving: bool = ...,
+    cleanup_socket: bool = ...,
+) -> asyncio.Server: ...
+
 async def open_connection(
     loop: asyncio.AbstractEventLoop,
     host: Optional[Union[str, bytes]] = ...,

@@ -66,6 +66,13 @@ async def create_server(loop, *args, **kwargs):
         return await aiofastnet.create_server(loop, *args, **kwargs)
 
 
+async def create_unix_server(loop, *args, **kwargs):
+    if NO_AIOFN:
+        return await loop.create_unix_server(*args, **kwargs)
+    else:
+        return await aiofastnet.create_unix_server(loop, *args, **kwargs)
+
+
 class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
     def __init__(self, clients: set, client_waiters: List[Any], is_buffered: bool):
         self.transport = None
@@ -454,7 +461,8 @@ async def TestServer(protocol_factory=None,
         if ct.name == "unix":
             tmpdir = stack.enter_context(tempfile.TemporaryDirectory())
             path = os.path.join(tmpdir, "aiofastnet.sock")
-            server = await loop.create_unix_server(
+            server = await create_unix_server(
+                loop,
                 protocol_factory,
                 path=path,
                 ssl=ct.server_ssl_context,

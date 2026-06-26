@@ -8,6 +8,7 @@ from typing import Callable, Optional
 from .api_create_connection import create_connection
 from .api_create_unix_connection import create_unix_connection
 from .api_create_server import create_server
+from .api_create_unix_server import create_unix_server
 from .api_sendfile import sendfile
 from .api_start_tls import start_tls
 from .wrapped_transport import (
@@ -20,6 +21,7 @@ _PATCHABLE_METHODS = {
     "create_connection": create_connection,
     "create_unix_connection": create_unix_connection,
     "create_server": create_server,
+    "create_unix_server": create_unix_server,
     "start_tls": start_tls,
     "sendfile": sendfile,
 }
@@ -35,8 +37,8 @@ def patch_loop(
             patched.
 
     The loop's ``create_connection``, ``create_unix_connection``,
-    ``create_server``, ``start_tls``, and ``sendfile`` methods are replaced
-    when the loop exposes them.
+    ``create_server``, ``create_unix_server``, ``start_tls``, and
+    ``sendfile`` methods are replaced.
 
     The patch is idempotent. Original loop methods are retained on the loop so
     aiofastnet's compatibility fallbacks, such as Windows ProactorEventLoop

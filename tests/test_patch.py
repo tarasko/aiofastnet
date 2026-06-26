@@ -23,11 +23,11 @@ async def test_patch_loop_is_idempotent():
     originals = getattr(loop, _AIOFASTNET_ORIGINAL_ATTR)
     assert originals["create_connection"] is not loop.create_connection
     assert "create_connection" in getattr(loop, _AIOFASTNET_PATCHED_ATTR)
-    if hasattr(loop, "create_unix_connection"):
-        assert originals["create_unix_connection"] is not \
-            loop.create_unix_connection
-        assert "create_unix_connection" in getattr(
-            loop, _AIOFASTNET_PATCHED_ATTR)
+    assert originals["create_unix_connection"] is not \
+        loop.create_unix_connection
+    assert "create_unix_connection" in getattr(loop, _AIOFASTNET_PATCHED_ATTR)
+    assert originals["create_unix_server"] is not loop.create_unix_server
+    assert "create_unix_server" in getattr(loop, _AIOFASTNET_PATCHED_ATTR)
 
 
 def test_loop_factory_sets_and_patches_current_loop():

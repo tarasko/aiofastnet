@@ -5,6 +5,7 @@ from .api_streams import open_connection, start_server
 from .api_create_server import create_server
 from .api_create_connection import create_connection
 from .api_create_unix_connection import create_unix_connection
+from .api_create_unix_server import create_unix_server
 from .api_start_tls import start_tls
 from .api_sendfile import sendfile
 from .api_patch import loop_factory, patch_loop, install_policy
@@ -22,6 +23,7 @@ __all__ = [
     'create_server',
     'create_connection',
     'create_unix_connection',
+    'create_unix_server',
     'start_tls',
     'sendfile',
     'loop_factory',
