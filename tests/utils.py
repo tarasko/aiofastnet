@@ -1,13 +1,14 @@
 import asyncio
 import socket
 import weakref
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager, ExitStack
 from dataclasses import dataclass
 import os
 from logging import getLogger
 from pathlib import Path
 import ssl
 import sys
+import tempfile
 from typing import Tuple, Optional, Union, Any, List
 
 import async_timeout
@@ -51,11 +52,25 @@ async def create_connection(loop, *args, **kwargs):
         return await aiofastnet.create_connection(loop, *args, **kwargs)
 
 
+async def create_unix_connection(loop, *args, **kwargs):
+    if NO_AIOFN:
+        return await loop.create_unix_connection(*args, **kwargs)
+    else:
+        return await aiofastnet.create_unix_connection(loop, *args, **kwargs)
+
+
 async def create_server(loop, *args, **kwargs):
     if NO_AIOFN:
         return await loop.create_server(*args, **kwargs)
     else:
         return await aiofastnet.create_server(loop, *args, **kwargs)
+
+
+async def create_unix_server(loop, *args, **kwargs):
+    if NO_AIOFN:
+        return await loop.create_unix_server(*args, **kwargs)
+    else:
+        return await aiofastnet.create_unix_server(loop, *args, **kwargs)
 
 
 class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
@@ -282,8 +297,9 @@ class EchoServerHandle:
     server: asyncio.Server
     clients: set[Any]
     client_waiters: List[Any]
-    port: int
+    port: Optional[int]
     host: str = "127.0.0.1"
+    path: Optional[str] = None
 
     async def get_any_server_client(self, timeout=1.0) -> EchoServerProtocol:
         if self.clients:
@@ -367,9 +383,28 @@ def ssl_sbio_conn_type():
 
 @pytest.fixture(params=["tcp", "ktls"])
 def sendfile_conn_type(request):
-    if request.param == "tcp":
-        return ConnectionType("tcp")
-    return request.getfixturevalue("ktls_conn_type")
+    return _make_conn_type_from_param(request)
+
+
+@pytest.fixture(params=[
+    "tcp",
+    pytest.param("unix",
+                 marks=pytest.mark.skipif(os.name == "nt",
+                                          reason="Unix sockets are not supported on Windows"
+                                          )
+                 ),
+    "ssl_mbio",
+    "ssl_sbio",
+    "stls",     # Use SSLTransport_Transport by using start_tls
+    pytest.param("ktls",
+                 marks=[
+                        pytest.mark.skipif(sys.version_info < (3, 12), reason="kTLS tests require Python >= 3.12"),
+                        pytest.mark.skipif(sys.platform != "linux", reason="kTLS is available only on Linux")
+                 ]
+                 )
+])
+def conn_type(request):
+    return _make_conn_type_from_param(request)
 
 
 @pytest.fixture(params=[
@@ -384,8 +419,12 @@ def sendfile_conn_type(request):
                  ]
                  )
 ])
-def conn_type(request):
-    if request.param == "tcp":
+def benchmark_conn_type(request):
+    return _make_conn_type_from_param(request)
+
+
+def _make_conn_type_from_param(request):
+    if request.param in ("tcp", "unix"):
         return ConnectionType(name=request.param)
     else:
         if request.param in ("ssl_mbio", "stls"):
@@ -395,6 +434,8 @@ def conn_type(request):
             return _make_ssl_sbio_conn_type()
         elif request.param == "ktls":
             return _make_ktls_conn_type()
+        else:
+            raise ValueError(f"unknown connection type {request.param!r}")
 
 
 @pytest.fixture(params=[
@@ -408,13 +449,7 @@ def conn_type(request):
                  )
 ])
 def ssl_conn_type(request):
-    if request.param in ("ssl_mbio", "stls"):
-        server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
-        return ConnectionType(request.param, server_context, client_context)
-    elif request.param == "ssl_sbio":
-        return _make_ssl_sbio_conn_type()
-    elif request.param == "ktls":
-        return _make_ktls_conn_type()
+    return _make_conn_type_from_param(request)
 
 
 @pytest.fixture(params=["simple", "buffered"])
@@ -435,25 +470,50 @@ async def TestServer(protocol_factory=None,
     if protocol_factory is None:
         def protocol_factory():
             return EchoServerProtocol(clients, client_waiters, is_buffered)
-    server = await create_server(
-        loop,
-        protocol_factory,
-        host=host,
-        port=port,
-        ssl=ct.server_ssl_context,
-        ssl_handshake_timeout=ssl_handshake_timeout,
-        ssl_shutdown_timeout=ssl_shutdown_timeout,
-    )
-    try:
-        resolved_port = server.sockets[0].getsockname()[1]
-        yield EchoServerHandle(server=server, port=resolved_port, host=host, clients=clients, client_waiters=client_waiters)
-    finally:
-        server.close()
-        for w in client_waiters:
-            if not w.done():
-                w.set_exception(RuntimeError("server finished"))
-        client_waiters.clear()
-        await server.wait_closed()
+
+    with ExitStack() as stack:
+        if ct.name == "unix":
+            tmpdir = stack.enter_context(tempfile.TemporaryDirectory())
+            path = os.path.join(tmpdir, "aiofastnet.sock")
+            server = await create_unix_server(
+                loop,
+                protocol_factory,
+                path=path,
+                ssl=ct.server_ssl_context,
+                ssl_handshake_timeout=ssl_handshake_timeout,
+                ssl_shutdown_timeout=ssl_shutdown_timeout,
+            )
+        else:
+            path = None
+            server = await create_server(
+                loop,
+                protocol_factory,
+                host=host,
+                port=port,
+                ssl=ct.server_ssl_context,
+                ssl_handshake_timeout=ssl_handshake_timeout,
+                ssl_shutdown_timeout=ssl_shutdown_timeout,
+            )
+        try:
+            if ct.name == "unix":
+                resolved_port = None
+            else:
+                resolved_port = server.sockets[0].getsockname()[1]
+            yield EchoServerHandle(
+                server=server,
+                port=resolved_port,
+                host=host,
+                path=path,
+                clients=clients,
+                client_waiters=client_waiters,
+            )
+        finally:
+            server.close()
+            for w in client_waiters:
+                if not w.done():
+                    w.set_exception(RuntimeError("server finished"))
+            client_waiters.clear()
+            await server.wait_closed()
 
 
 @asynccontextmanager
@@ -467,16 +527,24 @@ async def TestClient(server_or_host, port=None,
     if isinstance(server_or_host, EchoServerHandle):
         host = server_or_host.host
         port = server_or_host.port
+        path = server_or_host.path
     else:
         host = server_or_host
-        if port is None:
+        path = None
+        if port is None and ct.name != "unix":
             raise ValueError("port must be provided when host is passed directly")
 
     loop = asyncio.get_running_loop()
     transport = None
     client = None
     try:
-        if ct.use_start_tls or ct.client_ssl_context is None:
+        if ct.name == "unix":
+            transport, client = await create_unix_connection(
+                loop,
+                lambda: protocol_factory(is_buffered),
+                path=path if path is not None else host,
+            )
+        elif ct.use_start_tls or ct.client_ssl_context is None:
             transport, client = await create_connection(
                 loop,
                 lambda: protocol_factory(is_buffered),

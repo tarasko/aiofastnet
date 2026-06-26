@@ -1,4 +1,5 @@
 import asyncio
+import os
 import socket
 import ssl
 from typing import (
@@ -59,6 +60,20 @@ async def create_connection(
     all_errors: bool = ...,
 ) -> Tuple[asyncio.Transport, _ProtocolT]: ...
 
+async def create_unix_connection(
+    loop: asyncio.AbstractEventLoop,
+    protocol_factory: Callable[[], _ProtocolT],
+    path: Optional[Union[str, bytes, os.PathLike[str], os.PathLike[bytes]]] = ...,
+    *,
+    ssl: Optional[Union[bool, ssl.SSLContext]] = ...,
+    sock: Optional[socket.socket] = ...,
+    server_hostname: Optional[str] = ...,
+    ssl_handshake_timeout: Optional[float] = ...,
+    ssl_shutdown_timeout: Optional[float] = ...,
+    ssl_incoming_bio_size: Optional[int] = ...,
+    ssl_outgoing_bio_size: Optional[int] = ...,
+) -> Tuple[asyncio.Transport, _ProtocolT]: ...
+
 async def create_server(
     loop: asyncio.AbstractEventLoop,
     protocol_factory: Callable[[], asyncio.BaseProtocol],
@@ -80,10 +95,34 @@ async def create_server(
     start_serving: bool = ...,
 ) -> asyncio.Server: ...
 
+async def create_unix_server(
+    loop: asyncio.AbstractEventLoop,
+    protocol_factory: Callable[[], asyncio.BaseProtocol],
+    path: Optional[Union[str, bytes, os.PathLike[str], os.PathLike[bytes]]] = ...,
+    *,
+    sock: Optional[socket.socket] = ...,
+    backlog: int = ...,
+    ssl: Optional[ssl.SSLContext] = ...,
+    ssl_handshake_timeout: Optional[float] = ...,
+    ssl_shutdown_timeout: Optional[float] = ...,
+    ssl_incoming_bio_size: Optional[int] = ...,
+    ssl_outgoing_bio_size: Optional[int] = ...,
+    start_serving: bool = ...,
+    cleanup_socket: bool = ...,
+) -> asyncio.Server: ...
+
 async def open_connection(
     loop: asyncio.AbstractEventLoop,
     host: Optional[Union[str, bytes]] = ...,
     port: Optional[Union[int, str]] = ...,
+    *,
+    limit: int = ...,
+    **kwds: Any,
+) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]: ...
+
+async def open_unix_connection(
+    loop: asyncio.AbstractEventLoop,
+    path: Optional[Union[str, bytes, os.PathLike[str], os.PathLike[bytes]]] = ...,
     *,
     limit: int = ...,
     **kwds: Any,
@@ -97,6 +136,18 @@ async def start_server(
     ],
     host: _Host = ...,
     port: Optional[Union[int, str]] = ...,
+    *,
+    limit: int = ...,
+    **kwds: Any,
+) -> asyncio.Server: ...
+
+async def start_unix_server(
+    loop: asyncio.AbstractEventLoop,
+    client_connected_cb: Callable[
+        [asyncio.StreamReader, asyncio.StreamWriter],
+        Optional[Awaitable[None]],
+    ],
+    path: Optional[Union[str, bytes, os.PathLike[str], os.PathLike[bytes]]] = ...,
     *,
     limit: int = ...,
     **kwds: Any,

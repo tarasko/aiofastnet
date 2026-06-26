@@ -4,6 +4,7 @@ from tests.utils import (
     ssl_conn_type,
     ssl_sbio_conn_type,
     sendfile_conn_type,
+    benchmark_conn_type,
     buffered_protocol,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "ssl_conn_type",
     "ssl_sbio_conn_type",
     "sendfile_conn_type",
+    "benchmark_conn_type",
     "buffered_protocol"
 ]

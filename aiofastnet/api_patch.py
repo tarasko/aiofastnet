@@ -6,7 +6,9 @@ from functools import partial
 from typing import Callable, Optional
 
 from .api_create_connection import create_connection
+from .api_create_unix_connection import create_unix_connection
 from .api_create_server import create_server
+from .api_create_unix_server import create_unix_server
 from .api_sendfile import sendfile
 from .api_start_tls import start_tls
 from .wrapped_transport import (
@@ -17,7 +19,9 @@ from .wrapped_transport import (
 
 _PATCHABLE_METHODS = {
     "create_connection": create_connection,
+    "create_unix_connection": create_unix_connection,
     "create_server": create_server,
+    "create_unix_server": create_unix_server,
     "start_tls": start_tls,
     "sendfile": sendfile,
 }
@@ -32,7 +36,8 @@ def patch_loop(
         loop: Event loop to patch. If omitted, the currently running loop is
             patched.
 
-    The loop's ``create_connection``, ``create_server``, ``start_tls``, and
+    The loop's ``create_connection``, ``create_unix_connection``,
+    ``create_server``, ``create_unix_server``, ``start_tls``, and
     ``sendfile`` methods are replaced.
 
     The patch is idempotent. Original loop methods are retained on the loop so
@@ -70,15 +75,20 @@ def loop_factory(
 
     Parameters:
         base_factory: Callable used to create the underlying event loop. If
-            omitted, ``asyncio.new_event_loop`` is used. Pass a third-party loop
-            factory such as ``uvloop.new_event_loop`` to patch that loop type.
+            omitted, ``asyncio.new_event_loop`` is used. Pass a third-party
+            loop factory such as ``uvloop.new_event_loop`` to patch that loop
+            type.
 
-    The returned callable is intended for ``asyncio.run(..., loop_factory=...)``
-    and ``asyncio.Runner(loop_factory=...)``. It sets the newly created loop as
-    the current loop, matching ``Runner``'s loop factory contract.
+    The returned callable is intended for
+    ``asyncio.run(..., loop_factory=...)`` and
+    ``asyncio.Runner(loop_factory=...)``. It sets the newly created loop as the
+    current loop, matching ``Runner``'s loop factory contract.
     """
     def factory():
-        loop = base_factory() if base_factory is not None else asyncio.new_event_loop()
+        if base_factory is not None:
+            loop = base_factory()
+        else:
+            loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         return patch_loop(loop)
 
