@@ -1,4 +1,5 @@
 import asyncio
+import socket
 from contextlib import asynccontextmanager
 import os
 import tempfile
@@ -8,10 +9,15 @@ from async_timeout import timeout
 
 from aiofastnet import (
     open_connection,
-    open_unix_connection,
     start_server,
-    start_unix_server,
 )
+
+if hasattr(socket, 'AF_UNIX'):
+    from aiofastnet import (
+        open_unix_connection,
+        start_unix_server,
+    )
+
 from tests.utils import EchoServerHandle, _logger
 
 
