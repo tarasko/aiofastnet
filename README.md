@@ -27,8 +27,12 @@ The difference is especially noticeable when SSL is used.
 
 - [`loop.create_connection()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_connection)
 - [`loop.open_connection()`](https://docs.python.org/3/library/asyncio-stream.html#asyncio.open_connection)
+- [`loop.create_unix_connection()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_unix_connection)
+- [`loop.open_unix_connection()`](https://docs.python.org/3/library/asyncio-stream.html#asyncio.open_unix_connection)
 - [`loop.create_server()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_server)
 - [`loop.start_server()`](https://docs.python.org/3/library/asyncio-stream.html#asyncio.start_server)
+- [`loop.create_unix_server()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_unix_server)
+- [`loop.start_unix_server()`](https://docs.python.org/3/library/asyncio-stream.html#asyncio.start_unix_server)
 - [`loop.start_tls()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.start_tls)
 - [`loop.sendfile()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sendfile)
 
