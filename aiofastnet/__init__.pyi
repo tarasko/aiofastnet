@@ -120,6 +120,14 @@ async def open_connection(
     **kwds: Any,
 ) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]: ...
 
+async def open_unix_connection(
+    loop: asyncio.AbstractEventLoop,
+    path: Optional[Union[str, bytes, os.PathLike[str], os.PathLike[bytes]]] = ...,
+    *,
+    limit: int = ...,
+    **kwds: Any,
+) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]: ...
+
 async def start_server(
     loop: asyncio.AbstractEventLoop,
     client_connected_cb: Callable[
@@ -128,6 +136,18 @@ async def start_server(
     ],
     host: _Host = ...,
     port: Optional[Union[int, str]] = ...,
+    *,
+    limit: int = ...,
+    **kwds: Any,
+) -> asyncio.Server: ...
+
+async def start_unix_server(
+    loop: asyncio.AbstractEventLoop,
+    client_connected_cb: Callable[
+        [asyncio.StreamReader, asyncio.StreamWriter],
+        Optional[Awaitable[None]],
+    ],
+    path: Optional[Union[str, bytes, os.PathLike[str], os.PathLike[bytes]]] = ...,
     *,
     limit: int = ...,
     **kwds: Any,

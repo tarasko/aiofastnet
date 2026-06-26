@@ -1,6 +1,15 @@
+# Portions of this file are derived from CPython's asyncio sources
+# (notably asyncio/streams.py).
+# Copyright (c) Python Software Foundation.
+# Licensed under the Python Software Foundation License Version 2.
+# See LICENSES/PSF-2.0.txt and THIRD_PARTY_NOTICES for details.
+
+import socket
 from asyncio.streams import StreamReader, StreamWriter, StreamReaderProtocol
 from .api_create_server import create_server
+from .api_create_unix_server import create_unix_server
 from .api_create_connection import create_connection
+from .api_create_unix_connection import create_unix_connection
 
 _DEFAULT_LIMIT = 2 ** 16 # 64 KiB
 
@@ -57,3 +66,28 @@ async def start_server(loop, client_connected_cb, host=None, port=None, *,
         return protocol
 
     return await create_server(loop, factory, host, port, **kwds)
+
+
+if hasattr(socket, 'AF_UNIX'):
+    # UNIX Domain Sockets are supported on this platform
+
+    async def open_unix_connection(loop, path=None, *,
+                                   limit=_DEFAULT_LIMIT, **kwds):
+        """Similar to `open_connection` but works with UNIX Domain Sockets."""
+        reader = StreamReader(limit=limit, loop=loop)
+        protocol = StreamReaderProtocol(reader, loop=loop)
+        transport, _ = await create_unix_connection(
+            loop, lambda: protocol, path, **kwds)
+        writer = StreamWriter(transport, protocol, reader, loop)
+        return reader, writer
+
+    async def start_unix_server(loop, client_connected_cb, path=None, *,
+                                limit=_DEFAULT_LIMIT, **kwds):
+        """Similar to `start_server` but works with UNIX Domain Sockets."""
+        def factory():
+            reader = StreamReader(limit=limit, loop=loop)
+            protocol = StreamReaderProtocol(reader, client_connected_cb,
+                                            loop=loop)
+            return protocol
+
+        return await create_unix_server(loop, factory, path, **kwds)
