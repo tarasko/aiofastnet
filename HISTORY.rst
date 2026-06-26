@@ -10,6 +10,7 @@ aiofastnet Release History
 
 * Fixed potential error in create_connection on python < 3.11 due to missing ExceptionGroup
 * Fixed NotImplementError from sendfile when used on windows with proactor loop and tcp transport
+* Added unix sockets primitives: create_unix_connection, create_unix_server, open_unix_connection, start_unix_server
 
 0.17.0
 ------------------
