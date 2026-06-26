@@ -8,12 +8,6 @@ from .api_streams import (
     start_server,
 )
 
-if hasattr(socket, 'AF_UNIX'):
-    from .api_streams import (
-        open_unix_connection,
-        start_unix_server,
-    )
-
 from .api_create_server import create_server
 from .api_create_connection import create_connection
 from .api_create_unix_connection import create_unix_connection
@@ -47,6 +41,11 @@ __all__ = [
 ]
 
 if hasattr(socket, 'AF_UNIX'):
+    from .api_streams import (  # noqa: F401
+        open_unix_connection as open_unix_connection,
+        start_unix_server as start_unix_server,
+    )
+
     __all__.extend((
         'open_unix_connection',
         'start_unix_server',
