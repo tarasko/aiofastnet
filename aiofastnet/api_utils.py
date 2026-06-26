@@ -1,9 +1,13 @@
 import asyncio
+import errno
 import socket
 import ssl
+import weakref
+from asyncio.trsock import TransportSocket
 from logging import getLogger
 from typing import Callable, Union, Optional, Tuple
 
+from . import constants
 from .constants import SSL_TIMEOUT_DEFAULTS, SSL_BIO_SIZE_DEFAULTS
 from .ssl_transport import SSLTransport_Socket, SSLTransport_Transport
 from .transport import SocketTransport, aiofn_is_buffered_protocol
@@ -218,3 +222,273 @@ def _ipaddr_info(host, port, family, type, proto, flowinfo=0, scopeid=0):
 
     # "host" is not an IP address.
     return None
+
+
+class Server(asyncio.AbstractServer):
+    def __init__(self, loop, sockets, protocol_factory, ssl_context, backlog,
+                 ssl_handshake_timeout, ssl_shutdown_timeout,
+                 ssl_incoming_bio_size, ssl_outgoing_bio_size
+                 ):
+        self._loop = loop
+        self._sockets = sockets
+        # Weak references so we don't break Transport's ability to
+        # detect abandoned transports
+        self._clients = weakref.WeakSet()
+        self._waiters = []
+        self._protocol_factory = protocol_factory
+        self._backlog = backlog
+        self._ssl_context = ssl_context
+        self._ssl_handshake_timeout = ssl_handshake_timeout
+        self._ssl_shutdown_timeout = ssl_shutdown_timeout
+        self._ssl_incoming_bio_size = ssl_incoming_bio_size
+        self._ssl_outgoing_bio_size = ssl_outgoing_bio_size
+        self._serving = False
+        self._serving_forever_fut = None
+
+    def __repr__(self):
+        return f'<{self.__class__.__name__} sockets={self.sockets!r}>'
+
+    def _attach(self, transport):
+        assert self._sockets is not None
+        self._clients.add(transport)
+
+    def _detach(self, transport):
+        self._clients.discard(transport)
+        if len(self._clients) == 0 and self._sockets is None:
+            self._wakeup()
+
+    def _wakeup(self):
+        waiters = self._waiters
+        if waiters is None:
+            return
+        self._waiters = None
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.set_result(None)
+
+    def _start_serving(self):
+        if self._serving:
+            return
+        self._serving = True
+        for sock in self._sockets:
+            sock.listen(self._backlog)
+            _start_serving(
+                self._loop,
+                self._protocol_factory, sock, self._ssl_context,
+                self, self._backlog,
+                self._ssl_handshake_timeout,
+                self._ssl_shutdown_timeout,
+                self._ssl_incoming_bio_size,
+                self._ssl_outgoing_bio_size)
+
+    def get_loop(self):
+        return self._loop
+
+    def is_serving(self):
+        return self._serving
+
+    @property
+    def sockets(self):
+        if self._sockets is None:
+            return ()
+        return tuple(asyncio.trsock.TransportSocket(s) for s in self._sockets)
+
+    def close(self):
+        sockets = self._sockets
+        if sockets is None:
+            return
+        self._sockets = None
+
+        for sock in sockets:
+            _stop_serving(self._loop, sock)
+
+        self._serving = False
+
+        if (self._serving_forever_fut is not None and
+                not self._serving_forever_fut.done()):
+            self._serving_forever_fut.cancel()
+            self._serving_forever_fut = None
+
+        if len(self._clients) == 0:
+            self._wakeup()
+
+    def close_clients(self):
+        for transport in self._clients.copy():
+            transport.close()
+
+    def abort_clients(self):
+        for transport in self._clients.copy():
+            transport.abort()
+
+    async def start_serving(self):
+        self._start_serving()
+        # Skip one loop iteration so that all 'loop.add_reader'
+        # go through.
+        await asyncio.sleep(0)
+
+    async def serve_forever(self):
+        if self._serving_forever_fut is not None:
+            raise RuntimeError(
+                f'server {self!r} is already being awaited on serve_forever()')
+        if self._sockets is None:
+            raise RuntimeError(f'server {self!r} is closed')
+
+        self._start_serving()
+        self._serving_forever_fut = self._loop.create_future()
+
+        try:
+            await self._serving_forever_fut
+        except asyncio.CancelledError:
+            try:
+                self.close()
+                await self.wait_closed()
+            finally:
+                raise
+        finally:
+            self._serving_forever_fut = None
+
+    async def wait_closed(self):
+        """Wait until server is closed and all connections are dropped.
+
+        - If the server is not closed, wait.
+        - If it is closed, but there are still active connections, wait.
+
+        Anyone waiting here will be unblocked once both conditions
+        (server is closed and all connections have been dropped)
+        have become true, in either order.
+
+        Historical note: In 3.11 and before, this was broken, returning
+        immediately if the server was already closed, even if there
+        were still active connections. An attempted fix in 3.12.0 was
+        still broken, returning immediately if the server was still
+        open and there were no active connections. Hopefully in 3.12.1
+        we have it right.
+        """
+        # Waiters are unblocked by self._wakeup(), which is called
+        # from two places: self.close() and self._detach(), but only
+        # when both conditions have become true. To signal that this
+        # has happened, self._wakeup() sets self._waiters to None.
+        if self._waiters is None:
+            return
+        waiter = self._loop.create_future()
+        self._waiters.append(waiter)
+        await waiter
+
+
+def _accept_connection(
+        loop, protocol_factory, sock,
+        sslcontext, server,
+        backlog,
+        ssl_handshake_timeout,
+        ssl_shutdown_timeout,
+        ssl_incoming_bio_size,
+        ssl_outgoing_bio_size
+):
+    # This method is only called once for each event loop tick where the
+    # listening socket has triggered an EVENT_READ. There may be multiple
+    # connections waiting for an .accept() so it is called in a loop.
+    # See https://bugs.python.org/issue27906 for more details.
+    for _ in range(backlog + 1):
+        try:
+            conn, addr = sock.accept()
+            if loop.get_debug():
+                _logger.debug("%r got a new connection from %r: %r",
+                              server, addr, conn)
+            conn.setblocking(False)
+        except ConnectionAbortedError:
+            # Discard connections that were aborted before accept().
+            continue
+        except (BlockingIOError, InterruptedError):
+            # Early exit because of a signal or
+            # the socket accept buffer is empty.
+            return
+        except OSError as exc:
+            # There's nowhere to send the error, so just log it.
+            if exc.errno in (errno.EMFILE, errno.ENFILE,
+                             errno.ENOBUFS, errno.ENOMEM):
+                # Some platforms (e.g. Linux keep reporting the FD as
+                # ready, so we remove the read handler temporarily.
+                # We'll try again in a while.
+                loop.call_exception_handler({
+                    'message': 'socket.accept() out of system resource',
+                    'exception': exc,
+                    'socket': TransportSocket(sock),
+                })
+                loop.remove_reader(sock.fileno())
+                loop.call_later(constants.ACCEPT_RETRY_DELAY,
+                                _start_serving,
+                                loop, protocol_factory, sock, sslcontext, server,
+                                backlog,
+                                ssl_handshake_timeout,
+                                ssl_shutdown_timeout,
+                                ssl_incoming_bio_size,
+                                ssl_outgoing_bio_size
+                                )
+            else:
+                raise  # The event loop will catch, log and ignore it.
+        else:
+            accept = _accept_connection2(
+                loop, protocol_factory, conn, sslcontext, server,
+                ssl_handshake_timeout, ssl_shutdown_timeout,
+                ssl_incoming_bio_size, ssl_outgoing_bio_size
+            )
+            asyncio.create_task(accept)
+
+
+async def _accept_connection2(
+        loop,
+        protocol_factory,
+        sock,
+        sslcontext, server,
+        ssl_handshake_timeout,
+        ssl_shutdown_timeout,
+        ssl_incoming_bio_size,
+        ssl_outgoing_bio_size
+):
+    protocol = None
+    transport = None
+    try:
+        transport, protocol = await _create_connection_transport(
+            loop, sock, protocol_factory, sslcontext,
+            server_hostname=None, server_side=True,
+            ssl_handshake_timeout=ssl_handshake_timeout,
+            ssl_shutdown_timeout=ssl_shutdown_timeout,
+            ssl_incoming_bio_size=ssl_incoming_bio_size,
+            ssl_outgoing_bio_size=ssl_outgoing_bio_size,
+            server=server
+        )
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except BaseException as exc:
+        if transport is None:
+            sock.close()
+        if loop.get_debug():
+            context = {
+                'message':
+                    'Error on transport creation for incoming connection',
+                'exception': exc,
+            }
+            if protocol is not None:
+                context['protocol'] = protocol
+            if transport is not None:
+                context['transport'] = transport
+            loop.call_exception_handler(context)
+
+
+def _start_serving(loop, protocol_factory, sock,
+                   sslcontext, server, backlog,
+                   ssl_handshake_timeout,
+                   ssl_shutdown_timeout,
+                   ssl_incoming_bio_size,
+                   ssl_outgoing_bio_size,
+                   ):
+    loop.add_reader(sock.fileno(), _accept_connection, loop,
+                    protocol_factory, sock, sslcontext, server, backlog,
+                    ssl_handshake_timeout, ssl_shutdown_timeout,
+                    ssl_incoming_bio_size, ssl_outgoing_bio_size
+                    )
+
+
+def _stop_serving(loop, sock):
+    loop.remove_reader(sock.fileno())
+    sock.close()
