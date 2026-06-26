@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 import warnings
 from functools import partial
 from typing import Callable, Optional

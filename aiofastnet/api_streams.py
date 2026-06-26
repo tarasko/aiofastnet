@@ -91,11 +91,3 @@ if hasattr(socket, 'AF_UNIX'):
             return protocol
 
         return await create_unix_server(loop, factory, path, **kwds)
-else:
-    async def open_unix_connection(loop, path=None, *,
-                                   limit=_DEFAULT_LIMIT, **kwds):
-        raise NotImplementedError()
-
-    async def start_unix_server(loop, client_connected_cb, path=None, *,
-                                limit=_DEFAULT_LIMIT, **kwds):
-        raise NotImplementedError()
