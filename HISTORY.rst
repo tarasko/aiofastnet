@@ -9,6 +9,7 @@ aiofastnet Release History
 ------------------
 
 * Fixed potential error in create_connection on python < 3.11 due to missing ExceptionGroup
+* Fixed NotImplementError from sendfile when used on windows with proactor loop and tcp transport
 
 0.17.0
 ------------------
