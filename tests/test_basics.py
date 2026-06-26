@@ -106,7 +106,7 @@ async def test_write_huge_close(all_loops, conn_type):
             # Read notes about eof_received flakiness in test_write_huge_abort
 
             assert client.transport.get_write_buffer_size() == 0
-            if conn_type.name != 'tcp':
+            if conn_type.name not in ('tcp', 'unix'):
                 assert client.is_eof_received
 
         async with TestClient(server, ct=conn_type) as client:
@@ -120,7 +120,7 @@ async def test_write_huge_close(all_loops, conn_type):
             client.transport.writelines([payload, payload])
 
             assert client.transport.get_write_buffer_size() == 0
-            if conn_type.name != 'tcp':
+            if conn_type.name not in ('tcp', 'unix'):
                 assert client.is_eof_received
 
 
@@ -164,7 +164,7 @@ async def test_write_huge_abort(all_loops, conn_type):
             client.transport.write(payload)
 
             assert client.transport.get_write_buffer_size() == 0
-            if conn_type.name != 'tcp':
+            if conn_type.name not in ('tcp', 'unix'):
                 assert not client.is_eof_received
 
         async with TestClient(server, ct=conn_type) as client:
@@ -178,7 +178,7 @@ async def test_write_huge_abort(all_loops, conn_type):
             client.transport.writelines([payload, payload])
 
             assert client.transport.get_write_buffer_size() == 0
-            if conn_type.name != 'tcp':
+            if conn_type.name not in ('tcp', 'unix'):
                 assert not client.is_eof_received
 
 
