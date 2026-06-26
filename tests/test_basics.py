@@ -512,7 +512,7 @@ async def test_sendfile(all_loops, sendfile_conn_type, file_size, header_size, t
                 _logger.debug("Begin writing header(%d)", len(header))
                 client.transport.write(header)
                 _logger.debug("Call sendfile")
-                await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2)
+                await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2, fallback=False)
                 assert client.transport.is_reading()
                 _logger.debug("Begin writing tail(%d)", len(tail))
                 client.transport.write(tail)
@@ -531,7 +531,7 @@ async def test_sendfile(all_loops, sendfile_conn_type, file_size, header_size, t
 
                 client.transport._sendfile_compatible = False
                 with pytest.raises(NotImplementedError):
-                    await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2)
+                    await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2, fallback=False)
 
 
 @pytest.mark.parametrize("count", [None, 1024])
@@ -543,7 +543,7 @@ async def test_sendfile_to_eof(all_loops, conn_type, count):
     with TmpFromData(payload) as tmp:
         async with TestServer(ct=conn_type) as server:
             async with TestClient(server, ct=conn_type) as client:
-                await sendfile(loop, client.transport, tmp, offset=2, count=count)
+                await sendfile(loop, client.transport, tmp, offset=2, count=count, fallback=False)
                 assert await client.readn(len(payload) - 2, timeout=1.0) == payload[2:]
 
 
@@ -576,7 +576,7 @@ async def test_sendfile_huge_error(all_loops, conn_type):
                 # But for a regular sendfile we can
                 if conn_type.name == 'ktls':
                     try:
-                        await sendfile(loop, client.transport, tmp, offset=0, count=len(payload))
+                        await sendfile(loop, client.transport, tmp, offset=0, count=len(payload), fallback=False)
                         await client.wait_closed()
                         # OpenSSL 3.0 may report peer-abort KTLS SSL_sendfile() syscall failures as
                         # [SSL: UNINITIALIZED], fixed/changed in later OpenSSL, so the test accepts it only for
@@ -599,7 +599,7 @@ async def test_sendfile_win_not_implemented(selector_loop):
         async with TestServer() as server:
             async with TestClient(server) as client:
                 with pytest.raises(NotImplementedError):
-                    await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2)
+                    await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2, fallback=False)
 
 
 async def test_sendfile_ssl_not_implemented(all_loops, ssl_conn_type):
@@ -612,7 +612,7 @@ async def test_sendfile_ssl_not_implemented(all_loops, ssl_conn_type):
         async with TestServer(ct=ssl_conn_type) as server:
             async with TestClient(server, ct=ssl_conn_type) as client:
                 with pytest.raises(NotImplementedError):
-                    await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2)
+                    await sendfile(loop, client.transport, tmp, offset=2, count=len(payload)-2, fallback=False)
 
 
 async def test_write_wrong_type(all_loops, conn_type):
