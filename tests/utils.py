@@ -312,6 +312,15 @@ class ConnectionType:
 
     def check_sendfile_supported(self):
         if os.name == "nt":
+            proactor_loop = getattr(asyncio, "ProactorEventLoop", None)
+            loop = asyncio.get_running_loop()
+            if (
+                    self.name == "tcp"
+                    and not NO_AIOFN
+                    and proactor_loop is not None
+                    and isinstance(loop, proactor_loop)
+            ):
+                return
             pytest.skip("sendfile is not supported in Windows")
 
         if self.name in ("ssl_mbio", "ssl_sbio", "stls"):

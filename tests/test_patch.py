@@ -52,7 +52,8 @@ def test_install_policy_patches_new_loops_and_can_restore_policy():
         loop = None
         try:
             loop = policy.new_event_loop()
-            assert "create_connection" in getattr(loop, _AIOFASTNET_PATCHED_ATTR)
+            assert "create_connection" in getattr(
+                loop, _AIOFASTNET_PATCHED_ATTR)
             policy.set_event_loop(loop)
             assert policy.get_event_loop() is loop
         finally:
