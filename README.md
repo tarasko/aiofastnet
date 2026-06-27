@@ -1,5 +1,9 @@
 # aiofastnet
 
+<p align="center">
+  <img src="aiofastnet.png" alt="aiofastnet" width="520">
+</p>
+
 [![Test status](https://img.shields.io/github/actions/workflow/status/tarasko/aiofastnet/run-tests.yml?branch=master&label=tests)](https://github.com/tarasko/aiofastnet/actions/workflows/run-tests.yml?query=branch%3Amaster)
 [![codecov](https://codecov.io/github/tarasko/aiofastnet/graph/badge.svg?token=TC4IG6K78V)](https://codecov.io/github/tarasko/aiofastnet)
 [![Latest PyPI package version](https://badge.fury.io/py/aiofastnet.svg)](https://pypi.org/project/aiofastnet)
