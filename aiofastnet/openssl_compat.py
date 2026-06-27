@@ -3,18 +3,38 @@
 # Licensed under the Python Software Foundation License Version 2.
 # See LICENSES/PSF-2.0.txt and THIRD_PARTY_NOTICES for details.
 
-import ctypes
-import ctypes.util
-import sys
 import os
 from dataclasses import dataclass
 
-from typing import Optional
+import _ssl
 
-# ctypes.util.dllist is available only since 3.14
-# One day we can replace our implementation with stdlib, but it is still in a very distant future
+_ssl_module_path = getattr(_ssl, '__file__', None)
+if _ssl_module_path is None:
+    raise ImportError(
+        "aiofastnet requires Python distribution that is dynamically "
+        "linked against OpenSSL. It seems your Python is linked "
+        "statically against OpenSSL (this is common for uv virtual "
+        "envs)"
+    )
+
+
+@dataclass(frozen=True)
+class OpenSSLDynLibs:
+    libssl: str
+    libcrypto: str
+
+    @property
+    def libssl_path(self) -> bytes:
+        return self.libssl.encode()
+
+    @property
+    def libcrypto_path(self) -> bytes:
+        return self.libcrypto.encode()
+
 
 if os.name == "nt":
+    import ctypes
+
     # Listing loaded DLLs on Windows relies on the following APIs:
     # https://learn.microsoft.com/windows/win32/api/psapi/nf-psapi-enumprocessmodules
     # https://learn.microsoft.com/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulefilenamew
@@ -32,7 +52,7 @@ if os.name == "nt":
         wintypes.DWORD,
     )
 
-    # gh-145307: We defer loading psapi.dll until _get_module_handles is called.
+    # gh-145307: Defer loading psapi.dll until _get_module_handles is called.
     # Loading additional DLLs at startup for functionality that may never be
     # used is wasteful.
     _enum_process_modules = None
@@ -42,7 +62,6 @@ if os.name == "nt":
         if _k32_get_module_file_name(module, name, len(name)):
             return name.value
         return None
-
 
     def _get_module_handles():
         global _enum_process_modules
@@ -81,111 +100,55 @@ if os.name == "nt":
                      if (name := _get_module_filename(h)) is not None]
         return libraries
 
-elif os.name == "posix" and sys.platform in {"darwin", "ios", "tvos", "watchos"}:
+    def _find_openssl_library_paths() -> OpenSSLDynLibs:
+        libssl_path: str | None = None
+        libcrypto_path: str | None = None
 
-    _libc = ctypes.CDLL(ctypes.util.find_library("c"))
-    _dyld_get_image_name = _libc["_dyld_get_image_name"]
-    _dyld_get_image_name.restype = ctypes.c_char_p
+        loaded_libs = dllist()
+        dl: str
+        for dl in loaded_libs:
+            if not dl:
+                continue
 
-    def dllist():
-        """Return a list of loaded shared libraries in the current process."""
-        num_images = _libc._dyld_image_count()
-        libraries = [os.fsdecode(name) for i in range(num_images)
-                     if (name := _dyld_get_image_name(i)) is not None]
+            # Find libssl and libcrypto among loaded libraries.
+            # There could be multiple loaded ssl libraries.
+            # Prefer those that were loaded from the python directory, since it
+            # is what ssl module was build against.
+            if "libssl" in dl:
+                if libssl_path is None or "ython" in dl:
+                    libssl_path = os.path.normpath(dl)
+            elif "libcrypto" in dl:
+                if libcrypto_path is None or "ython" in dl:
+                    libcrypto_path = os.path.normpath(dl)
 
-        return libraries
+        if libssl_path is None or libcrypto_path is None:
+            raise ImportError(
+                "aiofastnet could not locate OpenSSL dynamic libs among "
+                "loaded libraries. It could be that your Python is linked "
+                "statically "
+                "against OpenSSL (this is common for uv virtual envs)"
+            )
 
-elif (os.name == "posix" and sys.platform not in {"darwin", "ios", "tvos", "watchos"}):
-    if hasattr((_libc := ctypes.CDLL(None)), "dl_iterate_phdr"):
-        class _dl_phdr_info(ctypes.Structure):
-            _fields_ = [
-                ("dlpi_addr", ctypes.c_void_p),
-                ("dlpi_name", ctypes.c_char_p),
-                ("dlpi_phdr", ctypes.c_void_p),
-                ("dlpi_phnum", ctypes.c_ushort),
-            ]
+        return OpenSSLDynLibs(libssl_path, libcrypto_path)
 
-        _dl_phdr_callback = ctypes.CFUNCTYPE(
-            ctypes.c_int,
-            ctypes.POINTER(_dl_phdr_info),
-            ctypes.c_size_t,
-            ctypes.POINTER(ctypes.py_object),
-        )
+elif os.name == "posix":
+    def _find_openssl_library_paths() -> OpenSSLDynLibs:
+        from .utils import aiofn_get_openssl_library_paths
 
-        @_dl_phdr_callback
-        def _info_callback(info, _size, data):
-            libraries = data.contents.value
-            name = os.fsdecode(info.contents.dlpi_name)
-            libraries.append(name)
-            return 0
+        try:
+            openssl_library_paths = aiofn_get_openssl_library_paths(
+                _ssl_module_path)
+        except OSError as exc:
+            raise ImportError(
+                "aiofastnet could not identify the OpenSSL dynamic libraries "
+                "used by Python's _ssl module"
+            ) from exc
 
-        _dl_iterate_phdr = _libc["dl_iterate_phdr"]
-        _dl_iterate_phdr.argtypes = [
-            _dl_phdr_callback,
-            ctypes.POINTER(ctypes.py_object),
-        ]
-        _dl_iterate_phdr.restype = ctypes.c_int
+        libssl_path, libcrypto_path = openssl_library_paths
+        return OpenSSLDynLibs(libssl_path, libcrypto_path)
 
-        def dllist():
-            """Return a list of loaded shared libraries in the current process."""
-            libraries = []
-            _dl_iterate_phdr(_info_callback,
-                             ctypes.byref(
-                                 ctypes.py_object(libraries)))
-            return libraries
 else:
-    raise ImportError(f"unsupported platform {os.name}-{sys.platform}")
-
-
-@dataclass(frozen=True)
-class OpenSSLDynLibs:
-    libssl: str
-    libcrypto: str
-
-    @property
-    def libssl_path(self) -> bytes:
-        return self.libssl.encode()
-
-    @property
-    def libcrypto_path(self) -> bytes:
-        return self.libcrypto.encode()
-
-
-def _find_openssl_library_paths() -> OpenSSLDynLibs:
-    import _ssl
-
-    if getattr(_ssl, '__file__', None) is None:
-        raise ImportError(
-            "aiofastnet requires Python distribution that is dynamically linked against OpenSSL. "
-            "It seems your Python is linked statically against OpenSSL (this is common for uv virtual envs)"
-        )
-
-    libssl_path: Optional[str] = None
-    libcrypto_path: Optional[str] = None
-
-    loaded_libs = dllist()
-    dl: str
-    for dl in loaded_libs:
-        if not dl:
-            continue
-
-        # Find libssl and libcrypto among loaded libraries.
-        # There could be multiple loaded ssl libraries.
-        # Prefer those that were loaded from the python directory, since it is
-        # what ssl module was build against.
-        if "libssl" in dl:
-            if libssl_path is None or "ython" in dl:
-                libssl_path = os.path.normpath(dl)
-        elif "libcrypto" in dl:
-            if libcrypto_path is None or "ython" in dl:
-                libcrypto_path = os.path.normpath(dl)
-
-    if libssl_path is None and libcrypto_path is None:
-        raise ImportError(
-            "aiofastnet could not locates OpenSSL dynamic libs among loaded libraries. It could be that your Python is linked statically against OpenSSL (this is common for uv virtual envs)"
-        )
-
-    return OpenSSLDynLibs(libssl_path, libcrypto_path)
+    raise ImportError(f"unsupported platform {os.name}")
 
 
 OPENSSL_DYN_LIBS = _find_openssl_library_paths()
