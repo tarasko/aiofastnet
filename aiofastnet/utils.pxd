@@ -98,7 +98,7 @@ cdef extern from *:
         typedef struct iovec aiofn_iovec;
     #endif
 
-    # define AIOFN_MAX_IOVEC 256
+    #define AIOFN_MAX_IOVEC 256
     """
 
     PyObject* aiofn_allocate_bytes(Py_ssize_t sz, char** buf) except NULL
