@@ -35,19 +35,12 @@ from .utils cimport (
 from .ssl_object cimport (SSLObject, SSLError, ssl_error_name)
 from .transport cimport Transport, Protocol, WriteWatermarks
 from .transport import aiofn_is_buffered_protocol
-from .openssl_compat import OPENSSL_DYN_LIBS
+from .openssl_compat import OPENSSL_DYN_LIBS, create_transport_context
 
 
 cdef object _logger = getLogger('aiofastnet.ssl')
 cdef size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
 cdef Py_ssize_t DATA_RECEIVED_MAX_SIZE = constants.DATA_RECEIVED_MAX_SIZE
-
-
-def _create_transport_context(server_side, server_hostname):
-    sslcontext = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-    if not server_hostname:
-        sslcontext.check_hostname = False
-    return sslcontext
 
 
 def _log_ktls_deactivation_reason(conn) -> None:
@@ -221,7 +214,7 @@ cdef class SSLTransportBase(Transport):
             raise ValueError('Server side SSL needs a valid SSLContext')
 
         if not sslcontext or sslcontext is True:
-            sslcontext = _create_transport_context(server_side, server_hostname)
+            sslcontext = create_transport_context(server_side, server_hostname)
 
         self._extra = {'sslcontext': sslcontext}
         self._server = server

@@ -1,4 +1,5 @@
 import os
+import ssl
 from dataclasses import dataclass
 
 import _ssl
@@ -50,3 +51,10 @@ def _find_openssl_library_paths() -> OpenSSLDynLibs:
 
 
 OPENSSL_DYN_LIBS = _find_openssl_library_paths()
+
+
+def create_transport_context(server_side, server_hostname):
+    sslcontext = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+    if not server_hostname:
+        sslcontext.check_hostname = False
+    return sslcontext
