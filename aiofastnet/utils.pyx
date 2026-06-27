@@ -19,8 +19,6 @@ cdef extern from *:
     """
     #if defined(_WIN32)
 
-    #include <winsock2.h>
-
     #define AIOFN_IS_WINDOWS 1
     #define AIOFN_EAGAIN WSAEWOULDBLOCK
     #define AIOFN_EWOULDBLOCK WSAEWOULDBLOCK

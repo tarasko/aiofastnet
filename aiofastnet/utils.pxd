@@ -85,7 +85,7 @@ cdef extern from *:
     }
 
     #if defined(_WIN32)
-        #include <windows.h>
+        #include <winsock2.h>
 
         // Memory layout is compatible with WSABUF
         typedef struct
