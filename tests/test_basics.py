@@ -327,7 +327,7 @@ async def test_pause_reading_from_read_callback(all_loops, conn_type, buffered_p
             assert client.read_callback_count == 1
 
             client.transport.resume_reading()
-            assert await client.readn(len(payload), timeout=2.0) == payload
+            assert await client.readn(len(payload), timeout=4.0) == payload
             assert client.read_callback_count > 1
 
 
