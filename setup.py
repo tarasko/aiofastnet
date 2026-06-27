@@ -10,7 +10,7 @@ if vi < (3, 9):
     raise RuntimeError('aiofastnet requires Python 3.9 or greater')
 
 if os.name == 'nt':
-    libs = ["Ws2_32"]
+    libs = ["Ws2_32", "Psapi"]
 else:
     libs = []
 
@@ -79,6 +79,13 @@ if os.name == 'posix':
         make_extension(
             "aiofastnet.utils_posix",
             ["aiofastnet/utils_posix.pyx"],
+        )
+    )
+elif os.name == 'nt':
+    extensions.append(
+        make_extension(
+            "aiofastnet.utils_win",
+            ["aiofastnet/utils_win.pyx"],
         )
     )
 
