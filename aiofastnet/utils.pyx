@@ -1,11 +1,9 @@
-import os
 import socket
 import sys
 
 from cpython.bytes cimport PyBytes_FromObject, PyBytes_FromStringAndSize, PyBytes_GET_SIZE
 from cpython.buffer cimport PyObject_GetBuffer, PyBuffer_Release, PyBUF_SIMPLE
 from libc cimport errno
-from posix.dlfcn cimport RTLD_NOW, dlclose, dlerror, dlopen, dlsym
 from .constants import EXC_INFO_ATTR
 
 
@@ -66,52 +64,6 @@ cpdef object aiofn_maybe_copy_buffer(object buffer):
 cpdef object aiofn_validate_and_maybe_copy_buffer(object buffer):
     aiofn_validate_buffer(buffer)
     return aiofn_maybe_copy_buffer(buffer)
-
-
-cdef object aiofn_dlerror_message():
-    cdef char* message = dlerror()
-    if message == NULL:
-        return "unknown error"
-    return os.fsdecode(message)
-
-
-cpdef object aiofn_get_openssl_library_paths(str ssl_module_path):
-    cdef:
-        bytes ssl_module_path_b = os.fsencode(ssl_module_path)
-        void* handle
-        void* addr
-        Dl_info info
-        object libssl_path
-        object libcrypto_path
-
-    handle = dlopen(ssl_module_path_b, RTLD_NOW)
-    if handle == NULL:
-        raise OSError(
-            f"dlopen({ssl_module_path!r}) failed: "
-            f"{aiofn_dlerror_message()}")
-
-    try:
-        addr = dlsym(handle, b"SSL_new")
-        if addr == NULL:
-            raise OSError(
-                f"dlsym('SSL_new') failed: {aiofn_dlerror_message()}")
-
-        if dladdr(addr, &info) == 0 or info.dli_fname == NULL:
-            raise OSError("dladdr('SSL_new') failed")
-        libssl_path = os.path.normpath(os.fsdecode(info.dli_fname))
-
-        addr = dlsym(handle, b"BIO_new")
-        if addr == NULL:
-            raise OSError(
-                f"dlsym('BIO_new') failed: {aiofn_dlerror_message()}")
-
-        if dladdr(addr, &info) == 0 or info.dli_fname == NULL:
-            raise OSError("dladdr('BIO_new') failed")
-        libcrypto_path = os.path.normpath(os.fsdecode(info.dli_fname))
-
-        return libssl_path, libcrypto_path
-    finally:
-        dlclose(handle)
 
 
 cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz):

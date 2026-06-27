@@ -133,7 +133,7 @@ if os.name == "nt":
 
 elif os.name == "posix":
     def _find_openssl_library_paths() -> OpenSSLDynLibs:
-        from .utils import aiofn_get_openssl_library_paths
+        from .utils_posix import aiofn_get_openssl_library_paths
 
         try:
             openssl_library_paths = aiofn_get_openssl_library_paths(

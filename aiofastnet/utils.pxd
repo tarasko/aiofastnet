@@ -30,7 +30,6 @@ cpdef aiofn_validate_buffer(object buffer)
 cdef aiofn_unpack_simple_buffer(object buffer, char** ptr_out, Py_ssize_t* size_out, int flags)
 cpdef object aiofn_maybe_copy_buffer(object buffer)
 cpdef object aiofn_validate_and_maybe_copy_buffer(object buffer)
-cpdef object aiofn_get_openssl_library_paths(str ssl_module_path)
 cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz)
 cdef Py_ssize_t aiofn_recv(int sockfd, void* buf, Py_ssize_t len) except? -1
 cdef Py_ssize_t aiofn_send(int sockfd, void* buf, Py_ssize_t len) except? -1

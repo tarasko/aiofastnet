@@ -61,9 +61,6 @@ cdef extern from *:
     }
 
 #else
-    #ifndef _GNU_SOURCE
-        #define _GNU_SOURCE
-    #endif
     #include <sys/types.h>
     #include <sys/socket.h>
     #include <sys/uio.h>
@@ -149,13 +146,3 @@ cdef extern from *:
         size_t iov_len
 
     Py_ssize_t aiofn_writev_sys(int fd, aiofn_iovec *iov, int iovcnt)
-
-
-cdef extern from "<dlfcn.h>" nogil:
-    ctypedef struct Dl_info:
-        const char* dli_fname
-        void* dli_fbase
-        const char* dli_sname
-        void* dli_saddr
-
-    int dladdr(const void* addr, Dl_info* info)

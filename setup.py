@@ -25,6 +25,7 @@ def _consume_build_ext_flag(flag: str) -> bool:
         return False
     return True
 
+
 with_annotate = _consume_build_ext_flag("--with-annotate")
 with_debug = _consume_build_ext_flag("--with-debug")
 with_examples = _consume_build_ext_flag("--with-examples")
@@ -59,13 +60,34 @@ def make_extension(name: str, sources: List[str]) -> Extension:
 extensions = [
     make_extension("aiofastnet.utils", ["aiofastnet/utils.pyx"]),
     make_extension("aiofastnet.transport", ["aiofastnet/transport.pyx"]),
-    make_extension("aiofastnet.ssl_object", ["aiofastnet/ssl_object.pyx", "aiofastnet/static_mem_bio.c", "aiofastnet/openssl_compat.c"]),
-    make_extension("aiofastnet.ssl_transport", ["aiofastnet/ssl_transport.pyx"]),
+    make_extension(
+        "aiofastnet.ssl_object",
+        [
+            "aiofastnet/ssl_object.pyx",
+            "aiofastnet/static_mem_bio.c",
+            "aiofastnet/openssl_compat.c",
+        ],
+    ),
+    make_extension(
+        "aiofastnet.ssl_transport",
+        ["aiofastnet/ssl_transport.pyx"],
+    ),
 ]
+
+if os.name == 'posix':
+    extensions.append(
+        make_extension(
+            "aiofastnet.utils_posix",
+            ["aiofastnet/utils_posix.pyx"],
+        )
+    )
 
 if with_examples:
     extensions.append(
-        make_extension("examples.benchmark_protocol", ["examples/benchmark_protocol.py"])
+        make_extension(
+            "examples.benchmark_protocol",
+            ["examples/benchmark_protocol.py"],
+        )
     )
 
 setup(
