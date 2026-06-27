@@ -1,0 +1,1 @@
+cpdef tuple aiofn_get_openssl_library_paths(str ssl_module_path)
