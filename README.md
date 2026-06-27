@@ -4,11 +4,23 @@
   <img src="aiofastnet.png" alt="aiofastnet" width="520">
 </p>
 
-[![Test status](https://img.shields.io/github/actions/workflow/status/tarasko/aiofastnet/run-tests.yml?branch=master&label=tests)](https://github.com/tarasko/aiofastnet/actions/workflows/run-tests.yml?query=branch%3Amaster)
-[![codecov](https://codecov.io/github/tarasko/aiofastnet/graph/badge.svg?token=TC4IG6K78V)](https://codecov.io/github/tarasko/aiofastnet)
-[![Latest PyPI package version](https://badge.fury.io/py/aiofastnet.svg)](https://pypi.org/project/aiofastnet)
-[![Downloads count](https://img.shields.io/pypi/dm/aiofastnet.svg)](https://pypistats.org/packages/aiofastnet)
-[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/tarasko/aiofastnet?utm_source=badge)
+<p align="center">
+  <a href="https://github.com/tarasko/aiofastnet/actions/workflows/run-tests.yml?query=branch%3Amaster">
+    <img src="https://img.shields.io/github/actions/workflow/status/tarasko/aiofastnet/run-tests.yml?branch=master&label=tests" alt="Test status">
+  </a>
+  <a href="https://codecov.io/github/tarasko/aiofastnet">
+    <img src="https://codecov.io/github/tarasko/aiofastnet/graph/badge.svg?token=TC4IG6K78V" alt="codecov">
+  </a>
+  <a href="https://pypi.org/project/aiofastnet">
+    <img src="https://badge.fury.io/py/aiofastnet.svg" alt="Latest PyPI package version">
+  </a>
+  <a href="https://pypistats.org/packages/aiofastnet">
+    <img src="https://img.shields.io/pypi/dm/aiofastnet.svg" alt="Downloads count">
+  </a>
+  <a href="https://app.codspeed.io/tarasko/aiofastnet?utm_source=badge">
+    <img src="https://img.shields.io/endpoint?url=https://codspeed.io/badge.json" alt="CodSpeed">
+  </a>
+</p>
 
 `aiofastnet` gives your asyncio networking application an instant performance boost,
 lower latency and higher throughput by just adding two lines:
