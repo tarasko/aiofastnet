@@ -1,4 +1,4 @@
-# aiofastnet
+#
 
 <p align="center">
   <img src="aiofastnet.png" alt="aiofastnet" width="520">
