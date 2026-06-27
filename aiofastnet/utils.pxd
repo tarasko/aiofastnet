@@ -84,7 +84,7 @@ cdef extern from *:
         return 0;
     }
 
-    #ifdef __WINDOWS__
+    #if defined(_WIN32)
         #include <windows.h>
 
         // Memory layout is compatible with WSABUF

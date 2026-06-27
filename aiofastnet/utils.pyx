@@ -17,7 +17,7 @@ cdef extern from "Python.h":
 
 cdef extern from *:
     """
-    #ifdef __WINDOWS__
+    #if defined(_WIN32)
 
     #include <winsock2.h>
 
