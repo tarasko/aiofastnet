@@ -1,11 +1,13 @@
 import asyncio
 import logging
+import os
 import ssl
 from pathlib import Path
 
 import pytest
 
 import aiofastnet
+from aiofastnet import openssl_compat
 from aiofastnet import ssl_object
 from tests.utils import TestServer, TestClient
 
@@ -27,6 +29,16 @@ class _Path:
 class _InvalidSocket:
     def fileno(self):
         return -1
+
+
+def test_openssl_discovery_resolves_real_libraries():
+    libs = openssl_compat.OPENSSL_DYN_LIBS
+
+    assert os.path.exists(libs.libssl)
+    assert os.path.exists(libs.libcrypto)
+    assert libs.libssl != libs.libcrypto
+    assert "ssl" in os.path.basename(libs.libssl).lower()
+    assert "crypto" in os.path.basename(libs.libcrypto).lower()
 
 
 def test_ktls_kernel_module_not_loaded(monkeypatch, caplog):

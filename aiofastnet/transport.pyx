@@ -9,7 +9,7 @@ from typing import Optional
 from asyncio.trsock import TransportSocket
 from logging import getLogger
 
-from cpython.ref cimport Py_XDECREF, Py_DECREF
+from cpython.ref cimport Py_XDECREF
 from cpython.memoryview cimport PyMemoryView_FromMemory
 from cpython.buffer cimport PyBUF_READ, PyBUF_WRITABLE
 from cpython.bytes cimport *

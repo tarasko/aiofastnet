@@ -254,3 +254,33 @@ jobs:
       with:
         mode: simulation
         run: pytest -v tests/test_benchmarks.py --codspeed
+
+  resource-leaks:
+    name: resource leaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONDEVMODE: "1"
+      PYTHONMALLOC: debug
+
+    steps:
+    - uses: actions/checkout@v6
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.14"
+    - name: Set up uv
+      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      with:
+        enable-cache: true
+        cache-dependency-glob: |
+          requirements*.txt
+          pyproject.toml
+    - name: Load kTLS kernel module
+      run: sudo modprobe tls
+    - name: Install dependencies
+      run: uv pip install --system -r requirements.txt -r requirements-test.txt
+    - name: Compile Cython extensions
+      run: python setup.py build_ext --inplace
+    - name: Run tests with resource warnings as errors
+      run: pytest -n auto -v -W error::ResourceWarning

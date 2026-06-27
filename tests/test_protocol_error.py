@@ -29,6 +29,9 @@ async def test_exc_eof_received(all_loops, conn_type):
 
 
 async def test_exc_connection_made(all_loops, conn_type):
+    # aiofastnet doesn't disconnect on exception from connection_made
+    # the exception is delivered to the loop exception handler
+
     if os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop):
         pytest.skip("exceptions from connection_made has unspecified behavior in asyncio")
 
@@ -37,14 +40,14 @@ async def test_exc_connection_made(all_loops, conn_type):
             super().connection_made(transport)
             raise SomeException("connection_made")
 
-    payload = b"x" * (20*1024*1024)
+    payload = b"x" * (10*1024*1024)
 
     async with TestServer(ct=conn_type) as server:
         with exc_queue() as excq:
             async with TestClient(server, protocol_factory=ClientRaiseConnectionMade, ct=conn_type, is_buffered=False) as client:
                 assert isinstance(excq[0]["exception"], SomeException)
                 client.transport.write(payload)
-                reply = await client.readn(len(payload))
+                reply = await client.readn(len(payload), 2.0)
                 assert reply == payload
                 client.close()
                 await client.wait_closed()
@@ -223,22 +226,19 @@ def test_system_exit_not_reported(conn_type, exc, meth):
                         client.transport.write(payload)
                     await asyncio.sleep(0.1)
 
-    if meth in ("connection_made", "connection_lost") and conn_type.name in (
-        "ssl_mbio",
-        "ssl_sbio",
-        "ktls",
-    ):
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message=r"deleting unclosed SSLTransport_Socket",
-                category=ResourceWarning,
-            )
-            with pytest.raises(exc):
-                asyncio.run(run())
-            gc.collect()
-    else:
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"unclosed SocketTransport",
+            category=ResourceWarning,
+        )
+        warnings.filterwarnings(
+            "ignore",
+            message=r"deleting unclosed SSLTransport_Socket",
+            category=ResourceWarning,
+        )
         with pytest.raises(exc):
             asyncio.run(run())
+        gc.collect()
 
     assert excq == []

@@ -1,15 +1,77 @@
+import socket
 import sys
 
 from cpython.bytes cimport PyBytes_FromObject, PyBytes_FromStringAndSize, PyBytes_GET_SIZE
 from cpython.buffer cimport PyObject_GetBuffer, PyBuffer_Release, PyBUF_SIMPLE
 from libc cimport errno
 from .constants import EXC_INFO_ATTR
-import socket
 
 
 cdef extern from "Python.h":
     PyObject *PyMemoryView_GET_BASE(PyObject *mview)
     int PyBytes_Check(PyObject *o)
+
+
+# We only use syscall for non-blocking sockets
+# By not requiring nogil we minimize damage from misuse of multithreading by user code.
+
+cdef extern from *:
+    """
+    #if defined(_WIN32)
+
+    #define AIOFN_IS_WINDOWS 1
+    #define AIOFN_EAGAIN WSAEWOULDBLOCK
+    #define AIOFN_EWOULDBLOCK WSAEWOULDBLOCK
+
+    static inline Py_ssize_t aiofn_writev_sys(int fd, aiofn_iovec* iov, int iovcnt)
+    {
+        DWORD bytes_sent = 0;
+        int rc = WSASend(fd, (LPWSABUF)iov, iovcnt, &bytes_sent, 0, NULL, NULL);
+        return rc == SOCKET_ERROR ? -1 : (Py_ssize_t)bytes_sent;
+    }
+
+    static inline void aiofn_set_exc_from_error(int error) {
+        PyErr_SetExcFromWindowsErr(PyExc_OSError, error);
+    }
+
+    static inline int aiofn_get_last_error() { return WSAGetLastError(); }
+
+    #else
+
+    #include <sys/types.h>
+    #include <sys/socket.h>
+
+    #define AIOFN_IS_WINDOWS 0
+    #define AIOFN_EAGAIN EAGAIN
+    #ifdef EWOULDBLOCK
+        #define AIOFN_EWOULDBLOCK EWOULDBLOCK
+    #else
+        #define AIOFN_EWOULDBLOCK EGAIN
+    #endif
+
+    static inline Py_ssize_t aiofn_writev_sys(int fd, aiofn_iovec* iov, int iovcnt)
+    {
+        return writev(fd, iov, iovcnt);
+    }
+
+    static inline void aiofn_set_exc_from_error(int err) {
+        (void)err;
+        PyErr_SetFromErrno(PyExc_OSError);
+    }
+
+    static inline int aiofn_get_last_error() { return errno; }
+    #endif
+    """
+
+    cdef bint AIOFN_IS_WINDOWS
+    cdef int AIOFN_EWOULDBLOCK
+    cdef int AIOFN_EAGAIN
+
+    ssize_t recv(int sockfd, void* buf, size_t len, int flags)
+    ssize_t send(int sockfd, const void* buf, size_t len, int flags)
+    Py_ssize_t aiofn_writev_sys(int fd, aiofn_iovec *iov, int iovcnt)
+    void aiofn_set_exc_from_error(int error)
+    int aiofn_get_last_error()
 
 
 cpdef aiofn_validate_buffer(buffer):
@@ -60,11 +122,9 @@ cpdef object aiofn_maybe_copy_buffer(object buffer):
 
     return PyBytes_FromObject(buffer)
 
-
 cpdef object aiofn_validate_and_maybe_copy_buffer(object buffer):
     aiofn_validate_buffer(buffer)
     return aiofn_maybe_copy_buffer(buffer)
-
 
 cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz):
     # Do not copy bytes content, it is safe to make a memory view
