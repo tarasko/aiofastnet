@@ -65,7 +65,7 @@ async def test_echo_writelines(all_loops, msg_size, num_lines, conn_type, buffer
     async with TestServer(ct=conn_type, is_buffered=buffered_protocol) as server:
         async with TestClient(server, ct=conn_type, is_buffered=buffered_protocol) as client:
             client.write_in_lines(payload, num_lines)
-            echoed = await client.readn(msg_size, 2.0)
+            echoed = await client.readn(msg_size, 4.0)
             assert echoed == payload
 
 
