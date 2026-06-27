@@ -1,4 +1,4 @@
-from .system cimport *
+from cpython.object cimport PyObject
 
 cpdef enum SSLProtocolState:
     UNWRAPPED = 0
@@ -36,6 +36,77 @@ cdef Py_ssize_t aiofn_send(int sockfd, void* buf, Py_ssize_t len) except? -1
 cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* iov, Py_ssize_t iovcnt) except? -1
 cdef aiofn_add_info_and_reraise(info)
 
+
+cdef extern from "pythread.h":
+    unsigned long PyThread_get_thread_ident()
+
+
 cdef extern from *:
     cdef bint unlikely(bint val) noexcept
     cdef bint likely(bint val) noexcept
+
+
+cdef extern from *:
+    """
+    static inline PyObject* aiofn_allocate_bytes(Py_ssize_t sz, char** ptr)
+    {
+        PyObject* obj = PyBytes_FromStringAndSize(NULL, sz);
+        if (obj == NULL)
+        {
+            *ptr = NULL;
+        }
+        else
+        {
+            *ptr = PyBytes_AS_STRING(obj);
+        }
+        return obj;
+    }
+
+    static inline PyObject* aiofn_finalize_bytes(PyObject* obj, Py_ssize_t new_size)
+    {
+        if (new_size == 0)
+        {
+            Py_DECREF(obj);
+            Py_RETURN_NONE;
+        }
+        _PyBytes_Resize(&obj, new_size);
+        return obj;
+    }
+
+    static inline int aiofn_resize_bytes(PyObject** obj, Py_ssize_t new_size, char** ptr)
+    {
+        if (_PyBytes_Resize(obj, new_size) < 0)
+        {
+            *ptr = NULL;
+            return -1;
+        }
+        *ptr = PyBytes_AS_STRING(*obj);
+        return 0;
+    }
+
+    #ifdef __WINDOWS__
+        #include <windows.h>
+
+        // Memory layout is compatible with WSABUF
+        typedef struct
+        {
+            ULONG iov_len;
+            CHAR* iov_base;
+        } aiofn_iovec;
+    #else
+        #include <sys/uio.h>
+        typedef struct iovec aiofn_iovec;
+    #endif
+
+    # define AIOFN_MAX_IOVEC 256
+    """
+
+    PyObject* aiofn_allocate_bytes(Py_ssize_t sz, char** buf) except NULL
+    bytes aiofn_finalize_bytes(PyObject* obj, Py_ssize_t sz)
+    int aiofn_resize_bytes(PyObject** obj, Py_ssize_t sz, char** buf) except -1
+
+    cdef const int AIOFN_MAX_IOVEC
+
+    ctypedef struct aiofn_iovec:
+        void* iov_base
+        size_t iov_len
