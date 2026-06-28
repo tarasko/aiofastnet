@@ -83,8 +83,36 @@ from .openssl cimport (
     i2d_X509,
     init_openssl_compat,
     openssl_compat_last_error,
+    SSL_METHOD,
+    X509_STORE,
+    aiofn_bundled_openssl_available,
+    init_openssl_compat_bundled,
+    aiofn_bundled_set_server_alpn,
+    SSL_CTX_new,
+    TLS_method,
+    SSL_CTX_free,
+    SSL_CTX_set_verify,
+    SSL_CTX_set_options,
+    aiofn_SSL_CTX_set_min_proto_version,
+    aiofn_SSL_CTX_set_max_proto_version,
+    SSL_CTX_get_cert_store,
+    X509_STORE_add_cert,
+    d2i_X509,
+    SSL_CTX_use_certificate_chain_file,
+    SSL_CTX_use_PrivateKey_file,
+    SSL_CTX_check_private_key,
+    SSL_CTX_set_cipher_list,
+    SSL_CTX_set_alpn_protos,
+    SSL_CTX_load_verify_locations,
+    X509_VERIFY_PARAM_set_flags,
+    SSL_CTX_get0_certificate,
 )
-from .openssl_compat import OPENSSL_DYN_LIBS
+from cpython.pycapsule cimport (
+    PyCapsule_New,
+    PyCapsule_GetPointer,
+    PyCapsule_IsValid,
+)
+from .openssl_compat import OPENSSL_DYN_LIBS, BORROW_LIBS
 
 from cpython.object cimport PyObject
 from cpython.bytes cimport PyBytes_FromStringAndSize, PyBytes_AS_STRING
@@ -149,15 +177,45 @@ def _ktls_prerequisites_available() -> bool:
     return True
 
 
+# Selected OpenSSL backend. "borrow" reuses the interpreter's OpenSSL (the
+# SSL_CTX is shared from the Python ssl.SSLContext); "bundled" uses aiofastnet's
+# own statically linked OpenSSL and builds its own SSL_CTX.
+BACKEND = None
+cdef bint _BACKEND_BUNDLED = False
+
+
 cdef _init_openssl():
-    if init_openssl_compat(OPENSSL_DYN_LIBS.libssl_path, OPENSSL_DYN_LIBS.libcrypto_path) != 1:
-        missing_lib = openssl_compat_last_error()
-        if missing_lib != NULL:
+    global BACKEND, _BACKEND_BUNDLED
+
+    if BORROW_LIBS is not None:
+        if init_openssl_compat(OPENSSL_DYN_LIBS.libssl_path, OPENSSL_DYN_LIBS.libcrypto_path) != 1:
+            missing_lib = openssl_compat_last_error()
+            if missing_lib != NULL:
+                raise ImportError(
+                    f"aiofastnet: failed to initialize OpenSSL compatibility layer; "
+                    f"missing symbol: {PyUnicode_FromString(missing_lib)}; "
+                    f"ssl_lib={OPENSSL_DYN_LIBS.libssl}, crypto_lib={OPENSSL_DYN_LIBS.libcrypto}")
+            raise ImportError("aiofastnet: failed to initialize OpenSSL compatibility layer")
+        BACKEND = "borrow"
+        return
+
+    if aiofn_bundled_openssl_available():
+        if init_openssl_compat_bundled() != 1:
+            missing_lib = openssl_compat_last_error()
+            detail = (f"; {PyUnicode_FromString(missing_lib)}"
+                      if missing_lib != NULL else "")
             raise ImportError(
-                f"aiofastnet: failed to initialize OpenSSL compatibility layer; "
-                f"missing symbol: {PyUnicode_FromString(missing_lib)}; "
-                f"ssl_lib={OPENSSL_DYN_LIBS.libssl}, crypto_lib={OPENSSL_DYN_LIBS.libcrypto}")
-        raise ImportError("aiofastnet: failed to initialize OpenSSL compatibility layer")
+                f"aiofastnet: failed to initialize bundled OpenSSL backend{detail}")
+        BACKEND = "bundled"
+        _BACKEND_BUNDLED = True
+        return
+
+    raise ImportError(
+        "aiofastnet requires a Python distribution that is dynamically linked "
+        "against OpenSSL. Your Python appears to be statically linked against "
+        "OpenSSL (common for uv's python-build-standalone), and this aiofastnet "
+        "build does not include a bundled OpenSSL. Either use a dynamically "
+        "linked Python, or install an aiofastnet build with bundled OpenSSL.")
 
 
 _init_openssl()
@@ -185,6 +243,279 @@ cdef SSL_CTX* _get_ssl_ctx_ptr(object py_ctx) except NULL:
     # The guys from python are reluctant to expose it directly:
     # https://bugs.python.org/issue43902
     return (<PySSLContextHack*> <PyObject*> py_ctx).ctx
+
+
+# ---------------------------------------------------------------------------
+# Bundled backend: build our own SSL_CTX from the caller's ssl.SSLContext.
+#
+# Used only when aiofastnet runs on its statically linked OpenSSL (e.g. uv
+# python-build-standalone), where the interpreter's OpenSSL SSL_CTX cannot be
+# borrowed. The built SSL_CTX is cached on the Python context inside a PyCapsule
+# whose destructor frees it, so it is reused across connections.
+# ---------------------------------------------------------------------------
+
+cdef bytes _CAP_NAME_B = b"aiofastnet.bundled_ssl_ctx"
+cdef const char* _CAP_NAME = _CAP_NAME_B
+
+
+cdef void _bundled_ctx_capsule_destructor(object cap) noexcept:
+    if not PyCapsule_IsValid(cap, _CAP_NAME):
+        return
+    cdef void* p = PyCapsule_GetPointer(cap, _CAP_NAME)
+    if p != NULL:
+        SSL_CTX_free(<SSL_CTX*>p)
+
+
+cdef _bundled_ssl_error(str descr):
+    cdef unsigned long e = ERR_peek_last_error()
+    cdef const char* reason = ERR_reason_error_string(e) if e != 0 else NULL
+    msg = PyUnicode_FromString(reason) if reason != NULL else ""
+    ERR_clear_error()
+    return ssl.SSLError(f"aiofastnet bundled backend: {descr}: {msg}")
+
+
+cdef int _tls_version_to_openssl(object v):
+    # ssl.TLSVersion enum values match OpenSSL version constants; the negative
+    # MINIMUM_SUPPORTED / MAXIMUM_SUPPORTED sentinels map to 0 ("auto").
+    cdef long iv = int(v)
+    if iv < 0:
+        return 0
+    return <int>iv
+
+
+cdef int _verify_mode_to_openssl(object verify_mode):
+    # ssl.VerifyMode (CERT_NONE=0, CERT_OPTIONAL=1, CERT_REQUIRED=2) is NOT the
+    # same as OpenSSL's SSL_VERIFY_* bit flags. Map it the way CPython's ssl
+    # module does, otherwise the server never sends a CertificateRequest
+    # (SSL_VERIFY_PEER is required) and the client never aborts on a bad cert.
+    # SSL_VERIFY_NONE=0, SSL_VERIFY_PEER=0x01, SSL_VERIFY_FAIL_IF_NO_PEER_CERT=0x02
+    cdef int vm = int(verify_mode)
+    if vm == 0:        # CERT_NONE
+        return 0
+    elif vm == 1:      # CERT_OPTIONAL
+        return 0x01
+    else:              # CERT_REQUIRED
+        return 0x01 | 0x02
+
+
+cdef bytes _encode_alpn(object protocols):
+    cdef bytearray buf = bytearray()
+    cdef bytes b
+    for proto in protocols:
+        b = proto.encode("ascii") if isinstance(proto, str) else bytes(proto)
+        if len(b) == 0 or len(b) > 255:
+            raise ValueError(f"invalid ALPN protocol: {proto!r}")
+        buf.append(len(b))
+        buf += b
+    return bytes(buf)
+
+
+cdef _bundled_add_ca_der(SSL_CTX* ctx, bytes der):
+    cdef const unsigned char* p = <const unsigned char*>PyBytes_AS_STRING(der)
+    cdef X509* x = d2i_X509(NULL, &p, <long>len(der))
+    if x == NULL:
+        ERR_clear_error()
+        return
+    cdef X509_STORE* store = SSL_CTX_get_cert_store(ctx)
+    # Duplicate adds return an error we deliberately ignore.
+    X509_STORE_add_cert(store, x)
+    ERR_clear_error()
+    X509_free(x)
+
+
+cdef _bundled_load_verify_locations(SSL_CTX* ctx, tuple args, dict kwargs):
+    cafile = kwargs.get("cafile")
+    capath = kwargs.get("capath")
+    if cafile is None and len(args) >= 1:
+        cafile = args[0]
+    if capath is None and len(args) >= 2:
+        capath = args[1]
+    # cadata is already covered by get_ca_certs() on the Python context.
+
+    cdef bytes caf = os.fsencode(cafile) if cafile is not None else None
+    cdef bytes cap = os.fsencode(capath) if capath is not None else None
+    cdef const char* caf_p = <const char*>caf if caf is not None else NULL
+    cdef const char* cap_p = <const char*>cap if cap is not None else NULL
+    if caf_p == NULL and cap_p == NULL:
+        return
+    if SSL_CTX_load_verify_locations(ctx, caf_p, cap_p) != 1:
+        # May already be present via get_ca_certs(); don't hard-fail.
+        ERR_clear_error()
+
+
+cdef _bundled_load_cert_chain(SSL_CTX* ctx, tuple args, dict kwargs):
+    certfile = kwargs.get("certfile")
+    keyfile = kwargs.get("keyfile")
+    password = kwargs.get("password")
+    if certfile is None and len(args) >= 1:
+        certfile = args[0]
+    if keyfile is None and len(args) >= 2:
+        keyfile = args[1]
+    if password is None and len(args) >= 3:
+        password = args[2]
+
+    if certfile is None:
+        raise ssl.SSLError(
+            "aiofastnet bundled backend: load_cert_chain requires a certfile")
+    if password is not None:
+        raise NotImplementedError(
+            "aiofastnet bundled backend: password-protected private keys are "
+            "not supported yet")
+
+    cdef bytes cf = os.fsencode(certfile)
+    if SSL_CTX_use_certificate_chain_file(ctx, <const char*>cf) != 1:
+        raise _bundled_ssl_error("use_certificate_chain_file failed")
+
+    keypath = keyfile if keyfile is not None else certfile
+    cdef bytes kf = os.fsencode(keypath)
+    # SSL_FILETYPE_PEM == 1
+    if SSL_CTX_use_PrivateKey_file(ctx, <const char*>kf, 1) != 1:
+        raise _bundled_ssl_error("use_PrivateKey_file failed")
+    if SSL_CTX_check_private_key(ctx) != 1:
+        raise _bundled_ssl_error("private key does not match certificate")
+
+
+cdef _bundled_set_ciphers(SSL_CTX* ctx, object cipherlist):
+    cdef bytes cb = cipherlist.encode()
+    if SSL_CTX_set_cipher_list(ctx, <const char*>cb) != 1:
+        raise _bundled_ssl_error("set_cipher_list failed")
+
+
+cdef _bundled_set_alpn(SSL_CTX* ctx, object protocols):
+    cdef bytes wire = _encode_alpn(protocols)
+    cdef const unsigned char* p = <const unsigned char*>PyBytes_AS_STRING(wire)
+    cdef unsigned int wlen = <unsigned int>len(wire)
+    # SSL_CTX_set_alpn_protos returns 0 on success (advertised by clients).
+    if SSL_CTX_set_alpn_protos(ctx, p, wlen) != 0:
+        raise _bundled_ssl_error("SSL_CTX_set_alpn_protos failed")
+    # Server-side selection callback (takes ownership of a copy of the list).
+    if aiofn_bundled_set_server_alpn(ctx, p, wlen) != 1:
+        raise ssl.SSLError(
+            "aiofastnet bundled backend: failed to install server ALPN callback")
+
+
+cdef _bundled_replay(SSL_CTX* ctx, tuple entry):
+    cdef str method = entry[0]
+    cdef tuple args = entry[1]
+    cdef dict kwargs = entry[2]
+    if method == "load_verify_locations":
+        _bundled_load_verify_locations(ctx, args, kwargs)
+    elif method == "load_cert_chain":
+        _bundled_load_cert_chain(ctx, args, kwargs)
+    elif method == "set_ciphers":
+        _bundled_set_ciphers(ctx, args[0])
+    elif method == "set_alpn_protocols":
+        _bundled_set_alpn(ctx, args[0])
+
+
+cdef SSL_CTX* _build_bundled_ctx(object py_ctx) except NULL:
+    cdef SSL_CTX* ctx = SSL_CTX_new(TLS_method())
+    cdef unsigned long vflags
+    if ctx == NULL:
+        raise MemoryError("aiofastnet bundled backend: SSL_CTX_new failed")
+    try:
+        aiofn_SSL_CTX_set_min_proto_version(
+            ctx, _tls_version_to_openssl(py_ctx.minimum_version))
+        aiofn_SSL_CTX_set_max_proto_version(
+            ctx, _tls_version_to_openssl(py_ctx.maximum_version))
+        SSL_CTX_set_options(ctx, <uint64_t>int(py_ctx.options))
+        SSL_CTX_set_verify(ctx, _verify_mode_to_openssl(py_ctx.verify_mode), NULL)
+
+        # Certificate-verification flags (CRL checking, X509_STRICT, ...).
+        # NOTE: other context state that cannot be read back from a plain
+        # ssl.SSLContext -- post_handshake_auth, custom hostflags, sni/verify
+        # callbacks -- is not reproduced by the bundled backend yet.
+        vflags = <unsigned long>int(py_ctx.verify_flags)
+        if vflags:
+            X509_VERIFY_PARAM_set_flags(SSL_CTX_get0_param(ctx), vflags)
+
+        # Trust anchors readable from any SSLContext (covers system CAs loaded by
+        # ssl.create_default_context() and any cadata).
+        for der in py_ctx.get_ca_certs(binary_form=True):
+            _bundled_add_ca_der(ctx, der)
+
+        # Replay config that cannot be read back from a plain SSLContext.
+        config = getattr(py_ctx, "_aiofastnet_config", None)
+        if config:
+            for entry in config:
+                _bundled_replay(ctx, entry)
+        return ctx
+    except:
+        SSL_CTX_free(ctx)
+        raise
+
+
+cdef _bundled_missing_server_cert_error():
+    return ssl.SSLError(
+        "aiofastnet bundled backend: the server SSLContext has no certificate. "
+        "On this Python (statically linked OpenSSL), aiofastnet cannot read a "
+        "certificate loaded into a plain ssl.SSLContext. Create the context with "
+        "aiofastnet.SSLContext(...) and call load_cert_chain() on it so aiofastnet "
+        "can replay it onto its own SSL_CTX.")
+
+
+cdef tuple _bundled_ctx_signature(object py_ctx):
+    # Cheap snapshot of everything that feeds the bundled SSL_CTX, so the cache
+    # is rebuilt when the Python context is mutated after first use.
+    #
+    #  * recorded config only grows by append -> its length detects new
+    #    load_cert_chain / load_verify_locations / set_ciphers /
+    #    set_alpn_protocols calls on an aiofastnet.SSLContext.
+    #  * cert_store_stats() is a cheap C-level count that detects trust-store
+    #    mutations (load_verify_locations / load_default_certs) on a *plain*
+    #    ssl.SSLContext, which are not recorded.
+    config = getattr(py_ctx, "_aiofastnet_config", None)
+    cdef dict stats = py_ctx.cert_store_stats()
+    return (
+        int(py_ctx.verify_mode),
+        bool(py_ctx.check_hostname),
+        int(py_ctx.minimum_version),
+        int(py_ctx.maximum_version),
+        int(py_ctx.options),
+        int(py_ctx.verify_flags),
+        stats.get("x509", 0),
+        stats.get("x509_ca", 0),
+        stats.get("crl", 0),
+        len(config) if config is not None else 0,
+    )
+
+
+def aiofn_preflight_server_context(ssl_context):
+    """Validate a server-side SSLContext at server-creation time.
+
+    On the bundled backend this eagerly builds (and caches) the SSL_CTX and
+    ensures it carries a certificate, so a misconfiguration surfaces as a clear
+    error from create_server()/start_server() instead of an opaque per-connection
+    connection reset. No-op on the borrow backend (where the interpreter's own
+    SSL_CTX is shared and already carries whatever was loaded).
+    """
+    if not _BACKEND_BUNDLED or ssl_context is None:
+        return
+    cap = _ensure_bundled_ctx(ssl_context)
+    cdef SSL_CTX* ctx = <SSL_CTX*>PyCapsule_GetPointer(cap, _CAP_NAME)
+    if SSL_CTX_get0_certificate(ctx) == NULL:
+        raise _bundled_missing_server_cert_error()
+
+
+cdef object _ensure_bundled_ctx(object py_ctx):
+    # Return a PyCapsule that owns the bundled SSL_CTX for py_ctx, (re)building
+    # and caching it on the context whenever its configuration signature changes.
+    sig = _bundled_ctx_signature(py_ctx)
+    cap = getattr(py_ctx, "_aiofastnet_bundled_ctx", None)
+    cached_sig = getattr(py_ctx, "_aiofastnet_bundled_sig", None)
+    if (cap is not None and PyCapsule_IsValid(cap, _CAP_NAME)
+            and cached_sig == sig):
+        return cap
+
+    cdef SSL_CTX* ctx = _build_bundled_ctx(py_ctx)
+    cap = PyCapsule_New(<void*>ctx, _CAP_NAME, _bundled_ctx_capsule_destructor)
+    try:
+        py_ctx._aiofastnet_bundled_ctx = cap
+        py_ctx._aiofastnet_bundled_sig = sig
+    except (AttributeError, TypeError):
+        # Couldn't cache on the context; the SSLObject keeps the capsule alive.
+        pass
+    return cap
 
 
 cdef int _print_error_cb(const char* str, size_t len, void* u) noexcept:
@@ -221,7 +552,20 @@ cdef class SSLObject:
             raise ValueError("SSLContext.check_hostname requires server_hostname")
 
         self.ssl_ctx_py = ssl_context
-        self.ssl_ctx = _get_ssl_ctx_ptr(ssl_context)
+        if _BACKEND_BUNDLED:
+            # Build/reuse our own SSL_CTX from the caller's config. Keep a
+            # reference to the owning capsule so the SSL_CTX outlives this object
+            # even if it could not be cached on the Python context.
+            cap = _ensure_bundled_ctx(ssl_context)
+            self._bundled_ctx_cap = cap
+            self.ssl_ctx = <SSL_CTX*>PyCapsule_GetPointer(cap, _CAP_NAME)
+            if server_side and SSL_CTX_get0_certificate(self.ssl_ctx) == NULL:
+                # Defense in depth: create_server() preflights this, but a server
+                # with no certificate can otherwise only fail deep inside the
+                # handshake with an opaque error.
+                raise _bundled_missing_server_cert_error()
+        else:
+            self.ssl_ctx = _get_ssl_ctx_ptr(ssl_context)
 
         self.ssl = NULL
         self.incoming_buf = None

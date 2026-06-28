@@ -15,5 +15,6 @@ playground.py
 !static_mem_bio.c
 !certdecode.c
 !aiofastnet/openssl_compat.c
+!aiofastnet/openssl_bundled.c
 .coverage
 uv.lock

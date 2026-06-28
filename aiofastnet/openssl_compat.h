@@ -22,6 +22,18 @@ extern "C" {
 //#define SSL_ERROR_SYSCALL 5
 //#define SSL_ERROR_ZERO_RETURN 6
 
+#ifdef AIOFASTNET_USE_REAL_OPENSSL_HEADERS
+/* Bundled backend: pull in the real OpenSSL headers so this translation unit can
+ * bind the aiofn_* pointers directly to the statically linked OpenSSL symbols.
+ * The opaque-type/constant shims and the function-rename macros below are skipped
+ * in this mode so the real OpenSSL declarations stay usable. */
+#include <openssl/ssl.h>
+#include <openssl/bio.h>
+#include <openssl/err.h>
+#include <openssl/x509.h>
+#include <openssl/x509v3.h>
+#include <openssl/crypto.h>
+#else
 /* Opaque OpenSSL types */
 typedef struct ssl_ctx_st SSL_CTX;
 typedef struct ssl_st SSL;
@@ -32,15 +44,8 @@ typedef struct x509_st X509;
 typedef struct X509_VERIFY_PARAM_st X509_VERIFY_PARAM;
 typedef struct asn1_string_st ASN1_OCTET_STRING;
 typedef struct stack_st OPENSSL_STACK;
-
-typedef int (*bio_write_fn)(BIO *, const char *, int);
-typedef int (*bio_read_fn)(BIO *, char *, int);
-typedef int (*bio_puts_fn)(BIO *, const char *);
-typedef int (*bio_gets_fn)(BIO *, char *, int);
-typedef long (*bio_ctrl_fn)(BIO *, int, long, void *);
-typedef int (*bio_create_fn)(BIO *);
-typedef int (*bio_destroy_fn)(BIO *);
-typedef int (*err_print_errors_cb_fn)(const char *str, size_t len, void *u);
+typedef struct ssl_method_st SSL_METHOD;
+typedef struct x509_store_st X509_STORE;
 
 #define SSL_VERIFY_PEER 0x01
 
@@ -74,9 +79,27 @@ typedef int (*err_print_errors_cb_fn)(const char *str, size_t len, void *u);
 #define BIO_FLAGS_WRITE 0x02
 #define BIO_FLAGS_RWS 0x07
 #define BIO_FLAGS_SHOULD_RETRY 0x08
+#endif /* AIOFASTNET_USE_REAL_OPENSSL_HEADERS */
+
+/* Callback typedefs for the static-mem BIO_METHOD shim; needed in both modes. */
+typedef int (*bio_write_fn)(BIO *, const char *, int);
+typedef int (*bio_read_fn)(BIO *, char *, int);
+typedef int (*bio_puts_fn)(BIO *, const char *);
+typedef int (*bio_gets_fn)(BIO *, char *, int);
+typedef long (*bio_ctrl_fn)(BIO *, int, long, void *);
+typedef int (*bio_create_fn)(BIO *);
+typedef int (*bio_destroy_fn)(BIO *);
+typedef int (*err_print_errors_cb_fn)(const char *str, size_t len, void *u);
 
 int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path);
 const char *openssl_compat_last_error(void);
+
+/* Bundled backend (static OpenSSL) entry points. When aiofastnet is built
+ * without bundled OpenSSL these are stubbed in openssl_compat.c. */
+int aiofn_bundled_openssl_available(void);
+int init_openssl_compat_bundled(void);
+int aiofn_bundled_set_server_alpn(SSL_CTX *ctx, const unsigned char *protos,
+                                  unsigned int protos_len);
 
 /* Global function pointers */
 
@@ -166,6 +189,32 @@ extern const unsigned char *(*aiofn_ASN1_STRING_get0_data)(const ASN1_OCTET_STRI
 extern int (*aiofn_ASN1_STRING_length)(ASN1_OCTET_STRING *x);
 extern ASN1_OCTET_STRING *(*aiofn_a2i_IPADDRESS)(const char *ipasc);
 
+/* Function pointers used only by the bundled backend to build its own SSL_CTX. */
+extern SSL_CTX *(*aiofn_SSL_CTX_new)(const SSL_METHOD *meth);
+extern const SSL_METHOD *(*aiofn_TLS_method)(void);
+extern void (*aiofn_SSL_CTX_free)(SSL_CTX *ctx);
+extern long (*aiofn_SSL_CTX_ctrl)(SSL_CTX *ctx, int cmd, long larg, void *parg);
+extern void (*aiofn_SSL_CTX_set_verify)(SSL_CTX *ctx, int mode, void *cb);
+extern uint64_t (*aiofn_SSL_CTX_set_options)(SSL_CTX *ctx, uint64_t op);
+extern X509_STORE *(*aiofn_SSL_CTX_get_cert_store)(const SSL_CTX *ctx);
+extern int (*aiofn_X509_STORE_add_cert)(X509_STORE *store, X509 *x);
+extern X509 *(*aiofn_d2i_X509)(X509 **px, const unsigned char **in, long len);
+extern int (*aiofn_SSL_CTX_use_certificate_chain_file)(SSL_CTX *ctx, const char *file);
+extern int (*aiofn_SSL_CTX_use_PrivateKey_file)(SSL_CTX *ctx, const char *file, int type);
+extern int (*aiofn_SSL_CTX_check_private_key)(const SSL_CTX *ctx);
+extern int (*aiofn_SSL_CTX_set_cipher_list)(SSL_CTX *ctx, const char *str);
+extern int (*aiofn_SSL_CTX_set_alpn_protos)(SSL_CTX *ctx, const unsigned char *protos,
+                                            unsigned int protos_len);
+extern int (*aiofn_SSL_CTX_load_verify_locations)(SSL_CTX *ctx, const char *cafile,
+                                                  const char *capath);
+extern int (*aiofn_X509_VERIFY_PARAM_set_flags)(X509_VERIFY_PARAM *param,
+                                                unsigned long flags);
+extern X509 *(*aiofn_SSL_CTX_get0_certificate)(const SSL_CTX *ctx);
+
+/* Helpers wrapping ctrl-macro APIs (implemented in openssl_compat.c). */
+int aiofn_SSL_CTX_set_min_proto_version(SSL_CTX *ctx, int version);
+int aiofn_SSL_CTX_set_max_proto_version(SSL_CTX *ctx, int version);
+
 /* Macro-based APIs */
 int aiofn_BIO_pending(BIO *b);
 long aiofn_BIO_get_mem_data(BIO *b, char **pp);
@@ -175,6 +224,7 @@ int aiofn_BIO_get_ktls_send(BIO *b);
 int aiofn_BIO_get_ktls_recv(BIO *b);
 int aiofn_ERR_GET_LIB(unsigned long e);
 
+#ifndef AIOFASTNET_USE_REAL_OPENSSL_HEADERS
 #define BIO_new aiofn_BIO_new
 #define BIO_free aiofn_BIO_free
 #define BIO_ctrl aiofn_BIO_ctrl
@@ -261,6 +311,25 @@ int aiofn_ERR_GET_LIB(unsigned long e);
 #define ASN1_STRING_get0_data aiofn_ASN1_STRING_get0_data
 #define ASN1_STRING_length aiofn_ASN1_STRING_length
 #define a2i_IPADDRESS aiofn_a2i_IPADDRESS
+
+#define SSL_CTX_new aiofn_SSL_CTX_new
+#define TLS_method aiofn_TLS_method
+#define SSL_CTX_free aiofn_SSL_CTX_free
+#define SSL_CTX_ctrl aiofn_SSL_CTX_ctrl
+#define SSL_CTX_set_verify aiofn_SSL_CTX_set_verify
+#define SSL_CTX_set_options aiofn_SSL_CTX_set_options
+#define SSL_CTX_get_cert_store aiofn_SSL_CTX_get_cert_store
+#define X509_STORE_add_cert aiofn_X509_STORE_add_cert
+#define d2i_X509 aiofn_d2i_X509
+#define SSL_CTX_use_certificate_chain_file aiofn_SSL_CTX_use_certificate_chain_file
+#define SSL_CTX_use_PrivateKey_file aiofn_SSL_CTX_use_PrivateKey_file
+#define SSL_CTX_check_private_key aiofn_SSL_CTX_check_private_key
+#define SSL_CTX_set_cipher_list aiofn_SSL_CTX_set_cipher_list
+#define SSL_CTX_set_alpn_protos aiofn_SSL_CTX_set_alpn_protos
+#define SSL_CTX_load_verify_locations aiofn_SSL_CTX_load_verify_locations
+#define X509_VERIFY_PARAM_set_flags aiofn_X509_VERIFY_PARAM_set_flags
+#define SSL_CTX_get0_certificate aiofn_SSL_CTX_get0_certificate
+#endif /* AIOFASTNET_USE_REAL_OPENSSL_HEADERS */
 
 #ifdef __cplusplus
 }

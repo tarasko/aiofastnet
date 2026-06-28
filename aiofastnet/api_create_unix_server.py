@@ -7,6 +7,7 @@ import stat
 from .api_utils import (
     Server, _logger, _validate_ssl_timeout, _validate_bio_size
 )
+from .ssl_object import aiofn_preflight_server_context
 
 
 class UnixServer(Server):
@@ -47,6 +48,10 @@ async def create_unix_server(
 
     if isinstance(ssl, bool):
         raise TypeError('ssl argument must be an SSLContext or None')
+
+    if ssl is not None:
+        # Surface a clear error at create time (bundled backend); no-op otherwise.
+        aiofn_preflight_server_context(ssl)
 
     ssl_handshake_timeout = _validate_ssl_timeout(
         "ssl_handshake_timeout", ssl_handshake_timeout, ssl)

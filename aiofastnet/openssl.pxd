@@ -38,6 +38,12 @@ cdef extern from "openssl_compat.h":
     ctypedef struct OPENSSL_STACK:
         pass
 
+    ctypedef struct SSL_METHOD:
+        pass
+
+    ctypedef struct X509_STORE:
+        pass
+
     enum:
         SSL_VERIFY_PEER
         SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER
@@ -48,6 +54,34 @@ cdef extern from "openssl_compat.h":
 
     int init_openssl_compat(const char *ssl_lib_path, const char *crypto_lib_path)
     const char* openssl_compat_last_error()
+
+    # Bundled backend (static OpenSSL)
+    int aiofn_bundled_openssl_available()
+    int init_openssl_compat_bundled()
+    int aiofn_bundled_set_server_alpn(SSL_CTX *ctx, const unsigned char *protos,
+                                      unsigned int protos_len)
+
+    # SSL_CTX construction (bundled backend only)
+    SSL_CTX *SSL_CTX_new(const SSL_METHOD *meth)
+    const SSL_METHOD *TLS_method()
+    void SSL_CTX_free(SSL_CTX *ctx)
+    void SSL_CTX_set_verify(SSL_CTX *ctx, int mode, void *cb)
+    uint64_t SSL_CTX_set_options(SSL_CTX *ctx, uint64_t op)
+    int aiofn_SSL_CTX_set_min_proto_version(SSL_CTX *ctx, int version)
+    int aiofn_SSL_CTX_set_max_proto_version(SSL_CTX *ctx, int version)
+    X509_STORE *SSL_CTX_get_cert_store(const SSL_CTX *ctx)
+    int X509_STORE_add_cert(X509_STORE *store, X509 *x)
+    X509 *d2i_X509(X509 **px, const unsigned char **inp, long length)
+    int SSL_CTX_use_certificate_chain_file(SSL_CTX *ctx, const char *file)
+    int SSL_CTX_use_PrivateKey_file(SSL_CTX *ctx, const char *file, int type)
+    int SSL_CTX_check_private_key(const SSL_CTX *ctx)
+    int SSL_CTX_set_cipher_list(SSL_CTX *ctx, const char *str)
+    int SSL_CTX_set_alpn_protos(SSL_CTX *ctx, const unsigned char *protos,
+                                unsigned int protos_len)
+    int SSL_CTX_load_verify_locations(SSL_CTX *ctx, const char *cafile,
+                                      const char *capath)
+    int X509_VERIFY_PARAM_set_flags(X509_VERIFY_PARAM *param, unsigned long flags)
+    X509 *SSL_CTX_get0_certificate(const SSL_CTX *ctx)
 
     int BIO_free(BIO *a)
     int BIO_pending(BIO *b)

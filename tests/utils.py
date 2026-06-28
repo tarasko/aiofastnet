@@ -583,7 +583,17 @@ def make_test_ssl_contexts(cert_file: Union[str, Path], key_file: Union[str, Pat
     cert_file = str(cert_file)
     key_file = str(key_file)
 
-    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    # On the bundled backend (statically linked OpenSSL) aiofastnet builds its own
+    # SSL_CTX and cannot read certs/ciphers/ALPN back from a plain ssl.SSLContext,
+    # so use aiofastnet.SSLContext, which records that config for replay. It is a
+    # drop-in ssl.SSLContext subclass; we only switch when bundled so the borrow
+    # backend keeps covering plain ssl.SSLContext.
+    import aiofastnet
+    from aiofastnet import ssl_object
+    bundled = getattr(ssl_object, "BACKEND", None) == "bundled"
+    server_ctx_cls = aiofastnet.SSLContext if bundled else ssl.SSLContext
+
+    server_context = server_ctx_cls(ssl.PROTOCOL_TLS_SERVER)
     server_context.load_cert_chain(certfile=cert_file, keyfile=key_file)
     server_context.minimum_version = ssl.TLSVersion.TLSv1_2
     server_context.maximum_version = ssl.TLSVersion.TLSv1_2
@@ -591,7 +601,10 @@ def make_test_ssl_contexts(cert_file: Union[str, Path], key_file: Union[str, Pat
     if enable_ktls:
         server_context.options |= ssl.OP_ENABLE_KTLS
 
-    client_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+    if bundled:
+        client_context = aiofastnet.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    else:
+        client_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     client_context.check_hostname = False
     client_context.verify_mode = ssl.CERT_NONE
     client_context.minimum_version = ssl.TLSVersion.TLSv1_2

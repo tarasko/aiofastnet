@@ -1,7 +1,7 @@
-# Fail early if python distribution is statically linked against OpenSSL
 import socket
 
 from .openssl_compat import OPENSSL_DYN_LIBS
+from ._sslcontext import SSLContext
 
 from .api_streams import (
     open_connection,
@@ -24,6 +24,7 @@ from .transport import (
 
 __all__ = [
     'OPENSSL_DYN_LIBS',
+    'SSLContext',
     'open_connection',
     'start_server',
     'create_server',

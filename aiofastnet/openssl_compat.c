@@ -93,6 +93,29 @@ const unsigned char *(*aiofn_ASN1_STRING_get0_data)(const ASN1_OCTET_STRING *x) 
 int (*aiofn_ASN1_STRING_length)(ASN1_OCTET_STRING *x) = NULL;
 ASN1_OCTET_STRING *(*aiofn_a2i_IPADDRESS)(const char *ipasc) = NULL;
 
+/* Bundled-backend SSL_CTX builder pointers (bound by init_openssl_compat_bundled;
+ * left NULL and unused on the borrow backend). */
+SSL_CTX *(*aiofn_SSL_CTX_new)(const SSL_METHOD *meth) = NULL;
+const SSL_METHOD *(*aiofn_TLS_method)(void) = NULL;
+void (*aiofn_SSL_CTX_free)(SSL_CTX *ctx) = NULL;
+long (*aiofn_SSL_CTX_ctrl)(SSL_CTX *ctx, int cmd, long larg, void *parg) = NULL;
+void (*aiofn_SSL_CTX_set_verify)(SSL_CTX *ctx, int mode, void *cb) = NULL;
+uint64_t (*aiofn_SSL_CTX_set_options)(SSL_CTX *ctx, uint64_t op) = NULL;
+X509_STORE *(*aiofn_SSL_CTX_get_cert_store)(const SSL_CTX *ctx) = NULL;
+int (*aiofn_X509_STORE_add_cert)(X509_STORE *store, X509 *x) = NULL;
+X509 *(*aiofn_d2i_X509)(X509 **px, const unsigned char **in, long len) = NULL;
+int (*aiofn_SSL_CTX_use_certificate_chain_file)(SSL_CTX *ctx, const char *file) = NULL;
+int (*aiofn_SSL_CTX_use_PrivateKey_file)(SSL_CTX *ctx, const char *file, int type) = NULL;
+int (*aiofn_SSL_CTX_check_private_key)(const SSL_CTX *ctx) = NULL;
+int (*aiofn_SSL_CTX_set_cipher_list)(SSL_CTX *ctx, const char *str) = NULL;
+int (*aiofn_SSL_CTX_set_alpn_protos)(SSL_CTX *ctx, const unsigned char *protos,
+                                     unsigned int protos_len) = NULL;
+int (*aiofn_SSL_CTX_load_verify_locations)(SSL_CTX *ctx, const char *cafile,
+                                           const char *capath) = NULL;
+int (*aiofn_X509_VERIFY_PARAM_set_flags)(X509_VERIFY_PARAM *param,
+                                         unsigned long flags) = NULL;
+X509 *(*aiofn_SSL_CTX_get0_certificate)(const SSL_CTX *ctx) = NULL;
+
 static const char *g_last_error = NULL;
 static char g_last_error_buf[1024];
 
@@ -423,6 +446,38 @@ int aiofn_BIO_get_ktls_recv(BIO *b) {
 int aiofn_ERR_GET_LIB(unsigned long e) {
     return (int)((e >> 23) & 0xFFUL);
 }
+
+/* SSL_CTX_set_min/max_proto_version are ctrl macros in OpenSSL; wrap them so the
+ * bundled backend can call them through the aiofn_SSL_CTX_ctrl pointer.
+ * SSL_CTRL_SET_MIN_PROTO_VERSION == 123, SSL_CTRL_SET_MAX_PROTO_VERSION == 124. */
+int aiofn_SSL_CTX_set_min_proto_version(SSL_CTX *ctx, int version) {
+    return (int)aiofn_SSL_CTX_ctrl(ctx, 123, version, NULL);
+}
+
+int aiofn_SSL_CTX_set_max_proto_version(SSL_CTX *ctx, int version) {
+    return (int)aiofn_SSL_CTX_ctrl(ctx, 124, version, NULL);
+}
+
+#ifndef AIOFASTNET_BUNDLED_OPENSSL
+/* Stubs used when aiofastnet is built without a statically linked OpenSSL.
+ * The real implementations live in openssl_bundled.c. */
+int aiofn_bundled_openssl_available(void) {
+    return 0;
+}
+
+int init_openssl_compat_bundled(void) {
+    set_last_error("aiofastnet was built without bundled OpenSSL support");
+    return 0;
+}
+
+int aiofn_bundled_set_server_alpn(SSL_CTX *ctx, const unsigned char *protos,
+                                  unsigned int protos_len) {
+    (void)ctx;
+    (void)protos;
+    (void)protos_len;
+    return 0;
+}
+#endif /* AIOFASTNET_BUNDLED_OPENSSL */
 
 const char *openssl_compat_last_error(void) {
     return g_last_error;
