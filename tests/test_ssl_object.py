@@ -32,6 +32,9 @@ class _InvalidSocket:
 
 
 def test_openssl_discovery_resolves_real_libraries():
+    if getattr(ssl_object, "BACKEND", None) == "bundled":
+        pytest.skip("borrow backend only: bundled OpenSSL has no discoverable libs")
+
     libs = openssl_compat.OPENSSL_DYN_LIBS
 
     assert os.path.exists(libs.libssl)

@@ -16,6 +16,7 @@ from typing import (
 )
 
 from .openssl_compat import OpenSSLDynLibs as OpenSSLDynLibs
+from ._sslcontext import SSLContext as SSLContext
 from .transport import (
     Protocol as Protocol,
     Transport as Transport,

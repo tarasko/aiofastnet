@@ -4,15 +4,6 @@ from dataclasses import dataclass
 
 import _ssl
 
-_ssl_module_path = getattr(_ssl, '__file__', None)
-if _ssl_module_path is None:
-    raise ImportError(
-        "aiofastnet requires Python distribution that is dynamically "
-        "linked against OpenSSL. It seems your Python is linked "
-        "statically against OpenSSL (this is common for uv virtual "
-        "envs)"
-    )
-
 
 @dataclass(frozen=True)
 class OpenSSLDynLibs:
@@ -36,21 +27,41 @@ else:
     raise ImportError(f"unsupported platform {os.name}")
 
 
-def _find_openssl_library_paths() -> OpenSSLDynLibs:
-    try:
-        openssl_library_paths = aiofn_get_openssl_library_paths(
-            _ssl_module_path)
-    except OSError as exc:
-        raise ImportError(
-            "aiofastnet could not identify the OpenSSL dynamic libraries "
-            "used by Python's _ssl module"
-        ) from exc
+def find_openssl_library_paths():
+    """Discover the libssl/libcrypto that Python's ``_ssl`` is dynamically linked
+    against, so aiofastnet can reuse the interpreter's OpenSSL (the *borrow*
+    backend).
 
-    libssl_path, libcrypto_path = openssl_library_paths
+    Returns an :class:`OpenSSLDynLibs`, or ``None`` when the interpreter's
+    OpenSSL cannot be borrowed -- e.g. ``_ssl`` is statically linked / has no
+    discoverable shared libssl, as is the case for uv's python-build-standalone
+    distributions. In that case aiofastnet falls back to its own bundled,
+    statically linked OpenSSL (when the extension was compiled with it).
+    """
+    ssl_module_path = getattr(_ssl, "__file__", None)
+    if ssl_module_path is None:
+        # _ssl is a builtin (statically linked into the interpreter); there is no
+        # separate libssl to discover.
+        return None
+    try:
+        libssl_path, libcrypto_path = aiofn_get_openssl_library_paths(
+            ssl_module_path)
+    except OSError:
+        return None
     return OpenSSLDynLibs(libssl_path, libcrypto_path)
 
 
-OPENSSL_DYN_LIBS = _find_openssl_library_paths()
+# Resolved once at import. ``None`` when the interpreter's OpenSSL cannot be
+# borrowed (the bundled backend, if compiled in, is used instead). The actual
+# borrow-vs-bundled decision is made in ssl_object.pyx, which can query the
+# compiled-in bundled availability.
+BORROW_LIBS = find_openssl_library_paths()
+
+# Public, always-valid descriptor. On the bundled backend we expose a
+# descriptive placeholder so logging and ``aiofastnet.OPENSSL_DYN_LIBS`` keep
+# working.
+OPENSSL_DYN_LIBS = BORROW_LIBS if BORROW_LIBS is not None else OpenSSLDynLibs(
+    "<bundled-static-openssl>", "<bundled-static-openssl>")
 
 
 def create_transport_context(server_side, server_hostname):

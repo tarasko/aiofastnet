@@ -9,3 +9,5 @@ include aiofastnet/static_mem_bio.c
 include aiofastnet/static_mem_bio.h
 include aiofastnet/openssl_compat.h
 include aiofastnet/openssl_compat.c
+include aiofastnet/openssl_bundled.c
+include scripts/build_openssl.sh

@@ -14,6 +14,7 @@ import sys
 
 from .api_utils import _is_asyncio_loop, _check_ssl_socket, _logger, _HAS_IPv6, _ensure_resolved, \
     _validate_ssl_timeout, _validate_bio_size, Server
+from .ssl_object import aiofn_preflight_server_context
 from .ssl_transport import SSLTransport_Transport
 from .transport import (aiofn_is_buffered_protocol)
 from .wrapped_transport import (
@@ -56,6 +57,10 @@ async def create_server(
     """
     if isinstance(ssl, bool):
         raise TypeError('ssl argument must be an SSLContext or None')
+
+    if ssl is not None:
+        # Surface a clear error at create time (bundled backend); no-op otherwise.
+        aiofn_preflight_server_context(ssl)
 
     ssl_handshake_timeout = _validate_ssl_timeout("ssl_handshake_timeout", ssl_handshake_timeout, ssl)
     ssl_shutdown_timeout = _validate_ssl_timeout("ssl_shutdown_timeout", ssl_shutdown_timeout, ssl)
