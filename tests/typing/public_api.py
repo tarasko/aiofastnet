@@ -1,6 +1,6 @@
 import asyncio
 import ssl
-from typing import BinaryIO, Callable
+from typing import BinaryIO, Callable, Optional
 
 from typing_extensions import assert_type
 
@@ -82,4 +82,4 @@ async def check_public_api(
     assert_type(aiofastnet.aiofn_is_buffered_protocol(protocol), bool)
     assert_type(aiofastnet.Protocol(), aiofastnet.Protocol)
     assert_type(aiofastnet.Transport(), aiofastnet.Transport)
-    assert_type(aiofastnet.OPENSSL_DYN_LIBS.libssl, str)
+    assert_type(aiofastnet.OPENSSL_DYN_LIBS, Optional[aiofastnet.OpenSSLDynLibs])

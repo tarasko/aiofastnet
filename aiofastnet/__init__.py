@@ -1,4 +1,3 @@
-# Fail early if python distribution is statically linked against OpenSSL
 import socket
 
 from .openssl_compat import OPENSSL_DYN_LIBS

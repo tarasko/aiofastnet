@@ -34,6 +34,7 @@ from .utils cimport (
 )
 from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
 from .ssl_engine_direct cimport SSLEngineDirect
+from .ssl_engine_fallback cimport SSLEngineFallback
 from .transport cimport Transport, Protocol, WriteWatermarks
 from .transport import aiofn_is_buffered_protocol
 from .openssl_compat import OPENSSL_DYN_LIBS, create_transport_context
@@ -49,8 +50,17 @@ def _log_ktls_deactivation_reason(conn) -> None:
     _logger.warning(
         "%r: Kernel TLS was not enabled PROBABLY because OpenSSL was built on a machine with an old linux kernel (<5.19)",
         conn)
+    if OPENSSL_DYN_LIBS is None:
+        _logger.warning("%r: OpenSSL dynamic libraries were not discovered; using stdlib SSL fallback", conn)
+        return
     _logger.warning("%r: Loaded libssl: %s", conn, OPENSSL_DYN_LIBS.libssl)
     _logger.warning("%r: Loaded libcrypto: %s", conn, OPENSSL_DYN_LIBS.libcrypto)
+
+
+cdef bint _use_fallback_ssl_engine = (
+    os.environ.get("AIOFN_FORCE_FALLBACK") is not None or
+    OPENSSL_DYN_LIBS is None
+)
 
 
 cdef class SendFileRequest:
@@ -240,23 +250,36 @@ cdef class SSLTransportBase(Transport):
 
         self._set_protocol(app_protocol)
 
-        self._ssl_object = SSLEngineDirect(
-            sslcontext,
-            server_side,
-            self._server_hostname,
-            ssl_incoming_bio_size,
-            ssl_outgoing_bio_size,
-            sock=sock
-        )
+        if _use_fallback_ssl_engine:
+            self._ssl_object = SSLEngineFallback(
+                sslcontext,
+                server_side,
+                self._server_hostname,
+                ssl_incoming_bio_size,
+                ssl_outgoing_bio_size,
+                sock=sock
+            )
+        else:
+            self._ssl_object = SSLEngineDirect(
+                sslcontext,
+                server_side,
+                self._server_hostname,
+                ssl_incoming_bio_size,
+                ssl_outgoing_bio_size,
+                sock=sock
+            )
 
         if self._server is not None:
             self._server._attach(self)
 
-        if self._is_debug:
+        if self._is_debug and OPENSSL_DYN_LIBS is not None:
             _logger.debug("%r: libssl: %s", self, OPENSSL_DYN_LIBS.libssl)
             _logger.debug("%r: libcrypto: %s", self, OPENSSL_DYN_LIBS.libcrypto)
             _logger.debug("%r: %s", self, ssl.OPENSSL_VERSION)
             _logger.info("%r: SSL_sendfile loaded=%d", self, self._ssl_object.sendfile_available())
+        elif self._is_debug:
+            _logger.debug("%r: using stdlib SSL fallback engine", self)
+            _logger.debug("%r: %s", self, ssl.OPENSSL_VERSION)
 
     def __repr__(self):
         if self._sock_fd_obj is not None:
@@ -375,7 +398,11 @@ cdef class SSLTransportBase(Transport):
             allowed = True
         elif self._state == SSLProtocolState.DO_HANDSHAKE and new_state == SSLProtocolState.WRAPPED:
             allowed = True
-        elif self._state == SSLProtocolState.WRAPPED and new_state in (SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN, SSLProtocolState.DO_HANDSHAKE):
+        elif self._state == SSLProtocolState.WRAPPED and new_state in (
+            SSLProtocolState.FLUSHING,
+            SSLProtocolState.SHUTDOWN,
+            SSLProtocolState.DO_HANDSHAKE,
+        ):
             allowed = True
         elif self._state == SSLProtocolState.FLUSHING and new_state == SSLProtocolState.SHUTDOWN:
             allowed = True

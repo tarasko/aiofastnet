@@ -154,7 +154,21 @@ def _ktls_prerequisites_available() -> bool:
     return True
 
 
+cdef bint _openssl_initialized = False
+
+
 cdef _init_openssl():
+    global _openssl_initialized
+
+    if _openssl_initialized:
+        return
+
+    if OPENSSL_DYN_LIBS is None:
+        raise ImportError(
+            "aiofastnet direct SSL engine requires Python distribution that is dynamically "
+            "linked against OpenSSL. Use SSLEngineFallback for statically linked OpenSSL builds."
+        )
+
     if init_openssl_compat(OPENSSL_DYN_LIBS.libssl_path, OPENSSL_DYN_LIBS.libcrypto_path) != 1:
         missing_lib = openssl_compat_last_error()
         if missing_lib != NULL:
@@ -164,8 +178,7 @@ cdef _init_openssl():
                 f"ssl_lib={OPENSSL_DYN_LIBS.libssl}, crypto_lib={OPENSSL_DYN_LIBS.libcrypto}")
         raise ImportError("aiofastnet: failed to initialize OpenSSL compatibility layer")
 
-
-_init_openssl()
+    _openssl_initialized = True
 
 
 ctypedef struct PySSLContextHack:
@@ -220,6 +233,7 @@ cdef class SSLEngineDirect:
     def __init__(self, ssl_context, bint server_side, str server_hostname,
                  Py_ssize_t read_buffer_size, Py_ssize_t write_buffer_size,
                  sock=None):
+        _init_openssl()
         ERR_clear_error()
 
         if not server_side and ssl_context.check_hostname and not server_hostname:

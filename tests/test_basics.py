@@ -47,22 +47,24 @@ async def test_ktls_enabled(ktls_conn_type):
 
 
 async def test_ssl_sbio_enabled(selector_loop, ssl_sbio_conn_type):
+    expected_membio = os.environ.get("AIOFN_FORCE_FALLBACK") is not None
+
     async with TestServer(ct=ssl_sbio_conn_type) as server:
         async with TestClient(server, ct=ssl_sbio_conn_type) as client:
             server_client = await server.get_any_server_client()
 
-            assert not client.transport.get_extra_info("ssl_incoming_use_membio")
-            assert not client.transport.get_extra_info("ssl_outgoing_use_membio")
+            assert client.transport.get_extra_info("ssl_incoming_use_membio") is expected_membio
+            assert client.transport.get_extra_info("ssl_outgoing_use_membio") is expected_membio
             assert not client.transport.get_extra_info("ktls_send_enabled")
             assert not client.transport.get_extra_info("ktls_recv_enabled")
-            assert not server_client.transport.get_extra_info("ssl_incoming_use_membio")
-            assert not server_client.transport.get_extra_info("ssl_outgoing_use_membio")
+            assert server_client.transport.get_extra_info("ssl_incoming_use_membio") is expected_membio
+            assert server_client.transport.get_extra_info("ssl_outgoing_use_membio") is expected_membio
             assert not server_client.transport.get_extra_info("ktls_send_enabled")
             assert not server_client.transport.get_extra_info("ktls_recv_enabled")
 
 
 async def test_ssl_membio_enabled(selector_loop, ssl_conn_type):
-    expected = ssl_conn_type.name in ("ssl_mbio", "stls")
+    expected = os.environ.get("AIOFN_FORCE_FALLBACK") is not None or ssl_conn_type.name in ("ssl_mbio", "stls")
 
     async with TestServer(ct=ssl_conn_type) as server:
         async with TestClient(server, ct=ssl_conn_type) as client:
