@@ -154,11 +154,7 @@ def _ktls_prerequisites_available() -> bool:
 
 
 cdef _init_openssl():
-    if OPENSSL_DYN_LIBS is None:
-        raise ImportError(
-            "aiofastnet direct SSL engine requires Python distribution that is dynamically "
-            "linked against OpenSSL. Use SSLEngineFallback for statically linked OpenSSL builds."
-        )
+    assert OPENSSL_DYN_LIBS is not None
 
     if init_openssl_compat(OPENSSL_DYN_LIBS.libssl_path, OPENSSL_DYN_LIBS.libcrypto_path) != 1:
         missing_lib = openssl_compat_last_error()
@@ -851,4 +847,3 @@ cdef class SSLEngineDirect(SSLEngine):
             if path:
                 os.unlink(path)
 
-SSLObject = SSLEngineDirect

@@ -8,8 +8,18 @@ import pytest
 
 import aiofastnet
 from aiofastnet import openssl_compat
-from aiofastnet import ssl_engine_direct as ssl_object
 from tests.utils import TestServer, TestClient
+
+
+def _import_ssl_engine_direct():
+    if os.environ.get("AIOFN_FORCE_FALLBACK") is not None or openssl_compat.OPENSSL_DYN_LIBS is None:
+        pytest.skip("direct SSL engine is unavailable")
+
+    try:
+        from aiofastnet import ssl_engine_direct
+    except ImportError as exc:
+        pytest.skip(f"direct SSL engine is unavailable: {exc}")
+    return ssl_engine_direct
 
 
 def _test_cert_der():
@@ -33,6 +43,8 @@ class _InvalidSocket:
 
 def test_openssl_discovery_resolves_real_libraries():
     libs = openssl_compat.OPENSSL_DYN_LIBS
+    if libs is None:
+        pytest.skip("OpenSSL dynamic libraries were not discovered")
 
     assert os.path.exists(libs.libssl)
     assert os.path.exists(libs.libcrypto)
@@ -42,42 +54,48 @@ def test_openssl_discovery_resolves_real_libraries():
 
 
 def test_ktls_kernel_module_not_loaded(monkeypatch, caplog):
-    monkeypatch.setattr(ssl_object, "Path", lambda path: _Path(False))
+    ssl_engine_direct = _import_ssl_engine_direct()
+
+    monkeypatch.setattr(ssl_engine_direct, "Path", lambda path: _Path(False))
     monkeypatch.setattr(
-        ssl_object,
+        ssl_engine_direct,
         "_linux_kernel_at_least",
         lambda major, minor: pytest.fail("kernel version should not be checked"),
     )
 
     with caplog.at_level(logging.WARNING, logger="aiofastnet.ssl"):
-        assert not ssl_object._ktls_prerequisites_available()
+        assert not ssl_engine_direct._ktls_prerequisites_available()
 
     assert "kernel module 'tls' is not loaded" in caplog.text
     assert "Falling back to memory BIO" in caplog.text
 
 
 def test_ktls_kernel_too_old(monkeypatch, caplog):
-    monkeypatch.setattr(ssl_object, "Path", lambda path: _Path(True))
+    ssl_engine_direct = _import_ssl_engine_direct()
+
+    monkeypatch.setattr(ssl_engine_direct, "Path", lambda path: _Path(True))
     monkeypatch.setattr(
-        ssl_object, "_linux_kernel_at_least", lambda major, minor: False
+        ssl_engine_direct, "_linux_kernel_at_least", lambda major, minor: False
     )
 
     with caplog.at_level(logging.WARNING, logger="aiofastnet.ssl"):
-        assert not ssl_object._ktls_prerequisites_available()
+        assert not ssl_engine_direct._ktls_prerequisites_available()
 
     assert "Linux kernel version is < 5.19" in caplog.text
     assert "Falling back to memory BIO" in caplog.text
 
 
 def test_ktls_openssl_too_old(monkeypatch, caplog):
-    monkeypatch.setattr(ssl_object, "Path", lambda path: _Path(True))
+    ssl_engine_direct = _import_ssl_engine_direct()
+
+    monkeypatch.setattr(ssl_engine_direct, "Path", lambda path: _Path(True))
     monkeypatch.setattr(
-        ssl_object, "_linux_kernel_at_least", lambda major, minor: True
+        ssl_engine_direct, "_linux_kernel_at_least", lambda major, minor: True
     )
-    monkeypatch.setattr(ssl_object.ssl, "OPENSSL_VERSION_INFO", (1, 1, 1, 0, 0))
+    monkeypatch.setattr(ssl_engine_direct.ssl, "OPENSSL_VERSION_INFO", (1, 1, 1, 0, 0))
 
     with caplog.at_level(logging.WARNING, logger="aiofastnet.ssl"):
-        assert not ssl_object._ktls_prerequisites_available()
+        assert not ssl_engine_direct._ktls_prerequisites_available()
 
     assert "OpenSSL >= 3.0 is required" in caplog.text
     assert "Falling back to memory BIO" in caplog.text
@@ -89,15 +107,17 @@ def test_ktls_openssl_too_old(monkeypatch, caplog):
     not hasattr(ssl, "OP_ENABLE_KTLS"),
     reason="ssl.OP_ENABLE_KTLS is unavailable",
 )
-def test_ssl_object_uses_memory_bio_when_ktls_kernel_unavailable(monkeypatch):
+def test_ssl_engine_direct_uses_memory_bio_when_ktls_kernel_unavailable(monkeypatch):
+    ssl_engine_direct = _import_ssl_engine_direct()
+
     monkeypatch.setattr(
-        ssl_object, "_ktls_prerequisites_available", lambda: False
+        ssl_engine_direct, "_ktls_prerequisites_available", lambda: False
     )
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
     context.options |= ssl.OP_ENABLE_KTLS
 
-    ssl_object.SSLObject(
+    ssl_engine_direct.SSLEngineDirect(
         context,
         False,
         None,
@@ -107,10 +127,12 @@ def test_ssl_object_uses_memory_bio_when_ktls_kernel_unavailable(monkeypatch):
     )
 
 
-def test_ssl_get_channel_binding_before_handshake():
+def test_ssl_engine_direct_get_channel_binding_before_handshake():
+    ssl_engine_direct = _import_ssl_engine_direct()
+
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
-    ssl_obj = ssl_object.SSLObject(
+    ssl_engine = ssl_engine_direct.SSLEngineDirect(
         context,
         False,
         None,
@@ -118,13 +140,15 @@ def test_ssl_get_channel_binding_before_handshake():
         1024,
     )
 
-    assert ssl_obj.get_channel_binding() is None
+    assert ssl_engine.get_channel_binding() is None
 
 
-def test_ssl_get_channel_binding_rejects_unknown_type():
+def test_ssl_engine_direct_get_channel_binding_rejects_unknown_type():
+    ssl_engine_direct = _import_ssl_engine_direct()
+
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
-    ssl_obj = ssl_object.SSLObject(
+    ssl_engine = ssl_engine_direct.SSLEngineDirect(
         context,
         False,
         None,
@@ -136,13 +160,15 @@ def test_ssl_get_channel_binding_rejects_unknown_type():
         ValueError,
         match="'tls-exporter' channel binding type not implemented",
     ):
-        ssl_obj.get_channel_binding("tls-exporter")
+        ssl_engine.get_channel_binding("tls-exporter")
 
 
-def test_ssl_certificate_chains_before_handshake():
+def test_ssl_engine_direct_certificate_chains_before_handshake():
+    ssl_engine_direct = _import_ssl_engine_direct()
+
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
-    ssl_obj = ssl_object.SSLObject(
+    ssl_engine = ssl_engine_direct.SSLEngineDirect(
         context,
         False,
         None,
@@ -150,13 +176,15 @@ def test_ssl_certificate_chains_before_handshake():
         1024,
     )
 
-    assert ssl_obj.get_verified_chain() == []
-    assert ssl_obj.get_unverified_chain() == []
-    assert ssl_obj.shared_ciphers() is None
-    assert ssl_obj.session_reused is False
+    assert ssl_engine.get_verified_chain() == []
+    assert ssl_engine.get_unverified_chain() == []
+    assert ssl_engine.shared_ciphers() is None
+    assert ssl_engine.session_reused is False
 
 
-async def test_create_connection_propagates_ssl_object_init_exception(monkeypatch):
+async def test_create_connection_propagates_ssl_engine_direct_init_exception(monkeypatch):
+    ssl_engine_direct = _import_ssl_engine_direct()
+
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
     expected_error = RuntimeError("init hook boom")
@@ -164,7 +192,7 @@ async def test_create_connection_propagates_ssl_object_init_exception(monkeypatc
     def boom():
         raise expected_error
 
-    monkeypatch.setattr(ssl_object, "_set_sslobject_init_test_hook", boom)
+    monkeypatch.setattr(ssl_engine_direct, "_set_sslobject_init_test_hook", boom)
 
     async with TestServer() as server:
         with pytest.raises(RuntimeError, match="init hook boom") as exc_info:
@@ -180,7 +208,9 @@ async def test_create_connection_propagates_ssl_object_init_exception(monkeypatc
 
 
 @pytest.mark.parametrize("server_hostname", ["", ".aiofastnet.org"])
-def test_ssl_object_rejects_invalid_server_hostname(server_hostname):
+def test_ssl_engine_direct_rejects_invalid_server_hostname(server_hostname):
+    ssl_engine_direct = _import_ssl_engine_direct()
+
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
 
@@ -188,7 +218,7 @@ def test_ssl_object_rejects_invalid_server_hostname(server_hostname):
         ValueError,
         match="server_hostname cannot be an empty string or start with a leading dot",
     ):
-        ssl_object.SSLObject(
+        ssl_engine_direct.SSLEngineDirect(
             context,
             False,
             server_hostname,
@@ -272,7 +302,7 @@ async def test_ssl_certificate_chains_with_client_auth(ssl_conn_type):
             assert server_ssl_object.get_unverified_chain() == [expected_der]
 
 
-async def test_ssl_object_connection_attributes(ssl_conn_type):
+async def test_ssl_engine_connection_attributes(ssl_conn_type):
     async with TestServer(ct=ssl_conn_type) as server:
         async with TestClient(server, ct=ssl_conn_type) as client:
             client_ssl_object = client.transport.get_extra_info("ssl_object")
@@ -361,9 +391,9 @@ async def test_ssl_hostname_verification_mismatch(
                 pass
 
 
-async def test_ssl_object_methods_mockable(ssl_conn_type):
+async def test_ssl_extra_info_object_methods_mockable(ssl_conn_type):
     async with TestServer(ct=ssl_conn_type) as server:
         async with TestClient(server, ct=ssl_conn_type) as client:
-            ssl_object: aiofastnet.SSLObject = client.transport.get_extra_info('ssl_object')
-            ssl_object.compression = lambda: "zlib"
-            assert ssl_object.compression() == "zlib"
+            ssl_obj = client.transport.get_extra_info('ssl_object')
+            ssl_obj.compression = lambda: "zlib"
+            assert ssl_obj.compression() == "zlib"
