@@ -72,7 +72,7 @@ cdef class SSLEngineFallback(SSLEngine):
                 _logger.debug("%r: SSLObject.do_handshake(), %s", conn, ssl_error_name(ssl_error))
             if ssl_error in (SSLError.SSL_ERROR_WANT_READ, SSLError.SSL_ERROR_WANT_WRITE):
                 return ssl_error
-            raise RuntimeError(f"unexpected SSLObject.do_handshake error: {ssl_error_name(ssl_error)}") from exc
+            raise
 
         if unlikely(self._is_debug):
             _logger.debug("%r: SSLObject.do_handshake() complete", conn)
@@ -89,7 +89,7 @@ cdef class SSLEngineFallback(SSLEngine):
                 return ssl_error
             if ssl_error == SSLError.SSL_ERROR_ZERO_RETURN:
                 return SSLError.SSL_ERROR_NONE
-            raise RuntimeError(f"unexpected SSLObject.unwrap error: {ssl_error_name(ssl_error)}") from exc
+            raise
 
         if unlikely(self._is_debug):
             _logger.debug("%r: SSLObject.unwrap() complete", conn)
@@ -120,7 +120,7 @@ cdef class SSLEngineFallback(SSLEngine):
                     SSLError.SSL_ERROR_ZERO_RETURN,
                 ):
                     return ssl_error
-                raise RuntimeError(f"unexpected SSLObject.read error: {ssl_error_name(ssl_error)}") from exc
+                raise
 
             data_len = PyBytes_GET_SIZE(data)
             if data_len == 0:
@@ -153,7 +153,7 @@ cdef class SSLEngineFallback(SSLEngine):
                     _logger.debug("%r: SSLObject.write(data_len=%d), %s", conn, data_len, ssl_error_name(ssl_error))
                 if ssl_error in (SSLError.SSL_ERROR_WANT_READ, SSLError.SSL_ERROR_WANT_WRITE):
                     return ssl_error
-                raise RuntimeError(f"unexpected SSLObject.write error: {ssl_error_name(ssl_error)}") from exc
+                raise
 
             if last_bytes_written <= 0:
                 raise RuntimeError("SSLObject.write made no progress")
