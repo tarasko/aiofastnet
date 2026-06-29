@@ -1,4 +1,22 @@
+import asyncio
+import ssl
+
+
 cdef class SSLEngine:
+    def __init__(self, ssl_context, bint server_side, str server_hostname):
+        if not server_side and ssl_context.check_hostname and not server_hostname:
+            raise ValueError("SSLContext.check_hostname requires server_hostname")
+
+        self.ssl_context = ssl_context
+        self.server_hostname = server_hostname
+        self.server_side = server_side
+        self.ktls_requested = (ssl_context.options & getattr(ssl, "OP_ENABLE_KTLS", 0)) != 0
+
+        try:
+            self._is_debug = asyncio.get_running_loop().get_debug()
+        except RuntimeError:
+            self._is_debug = False
+
     cdef int ktls_send_enabled(self) except -1:
         raise NotImplementedError()
 

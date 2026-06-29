@@ -1,4 +1,3 @@
-import asyncio
 import ssl
 
 from cpython.bytearray cimport PyByteArray_AS_STRING
@@ -6,7 +5,7 @@ from cpython.bytes cimport PyBytes_AS_STRING, PyBytes_GET_SIZE, PyBytes_FromStri
 from libc.limits cimport INT_MAX
 from libc.string cimport memcpy
 
-from .ssl_engine cimport SSLError, ssl_error_name
+from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
 from .utils cimport unlikely
 
 import logging
@@ -14,31 +13,29 @@ import logging
 cdef object _logger = logging.getLogger('aiofastnet.ssl')
 
 
-cdef class SSLEngineFallback:
+cdef class SSLEngineFallback(SSLEngine):
+    cdef:
+        object ssl_object
+        object incoming
+        object outgoing
+        bytearray incoming_buf
+        bytes outgoing_data
+
     def __init__(self, ssl_context, bint server_side, str server_hostname,
                  Py_ssize_t read_buffer_size, Py_ssize_t write_buffer_size,
                  sock=None):
-        if not server_side and ssl_context.check_hostname and not server_hostname:
-            raise ValueError("SSLContext.check_hostname requires server_hostname")
+        SSLEngine.__init__(self, ssl_context, server_side, server_hostname)
 
         self.incoming = ssl.MemoryBIO()
         self.outgoing = ssl.MemoryBIO()
         self.incoming_buf = bytearray(read_buffer_size)
         self.outgoing_data = b""
-        self.server_hostname = server_hostname
-        self.server_side = server_side
-        self.ktls_requested = (ssl_context.options & getattr(ssl, "OP_ENABLE_KTLS", 0)) != 0
         self.ssl_object = ssl_context.wrap_bio(
             self.incoming,
             self.outgoing,
             server_side=server_side,
             server_hostname=server_hostname,
         )
-
-        try:
-            self._is_debug = asyncio.get_running_loop().get_debug()
-        except RuntimeError:
-            self._is_debug = False
 
     cdef inline SSLError _translate_ssl_error(self, exc) except SSLError.PYTHON_EXC:
         if isinstance(exc, ssl.SSLWantReadError):

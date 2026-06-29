@@ -12,7 +12,11 @@ cdef class SSLEngine:
     cdef dict __dict__
 
     cdef:
+        readonly object ssl_context
+        readonly str server_hostname
+        readonly bint server_side
         readonly bint ktls_requested
+        bint _is_debug
 
     cdef int ktls_send_enabled(self) except -1
     cdef int ktls_recv_enabled(self) except -1

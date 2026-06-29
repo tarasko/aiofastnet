@@ -33,9 +33,8 @@ from .utils cimport (
     unlikely
 )
 from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
-from .ssl_engine_direct cimport SSLEngineDirect
-from .ssl_engine_fallback cimport SSLEngineFallback
 from .transport cimport Transport, Protocol, WriteWatermarks
+from . import ssl_engine_direct, ssl_engine_fallback
 from .transport import aiofn_is_buffered_protocol
 from .openssl_compat import OPENSSL_DYN_LIBS, create_transport_context
 
@@ -251,7 +250,7 @@ cdef class SSLTransportBase(Transport):
         self._set_protocol(app_protocol)
 
         if _use_fallback_ssl_engine:
-            self._ssl_object = SSLEngineFallback(
+            self._ssl_object = ssl_engine_fallback.SSLEngineFallback(
                 sslcontext,
                 server_side,
                 self._server_hostname,
@@ -260,7 +259,7 @@ cdef class SSLTransportBase(Transport):
                 sock=sock
             )
         else:
-            self._ssl_object = SSLEngineDirect(
+            self._ssl_object = ssl_engine_direct.SSLEngineDirect(
                 sslcontext,
                 server_side,
                 self._server_hostname,

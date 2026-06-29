@@ -1,5 +1,3 @@
-import asyncio
-
 from .openssl cimport (
     ASN1_OCTET_STRING,
     ASN1_OCTET_STRING_free,
@@ -86,7 +84,7 @@ from .openssl cimport (
     init_openssl_compat,
     openssl_compat_last_error,
 )
-from .ssl_engine cimport SSLError, ssl_error_name
+from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
 from .utils cimport unlikely
 from .openssl_compat import OPENSSL_DYN_LIBS
 
@@ -99,6 +97,7 @@ from cpython.bytearray cimport (
 )
 from cpython.unicode cimport PyUnicode_FromString, PyUnicode_FromStringAndSize
 from libc.limits cimport INT_MAX
+from libc.stdint cimport uint64_t
 
 import os
 import platform
@@ -229,17 +228,26 @@ cdef Py_ssize_t _bio_pending(BIO* bio) except -1:
     return pending
 
 
-cdef class SSLEngineDirect:
+cdef class SSLEngineDirect(SSLEngine):
+    # Wraps raw openssl pointers and provide some methods of ssl.SSLObject that may be
+    # interesting for the user.
+
+    cdef:
+        SSL_CTX* ssl_ctx
+        bytearray incoming_buf
+        bytearray outgoing_buf
+        BIO* incoming
+        BIO* outgoing
+        SSL* ssl
+
     def __init__(self, ssl_context, bint server_side, str server_hostname,
                  Py_ssize_t read_buffer_size, Py_ssize_t write_buffer_size,
                  sock=None):
         _init_openssl()
         ERR_clear_error()
 
-        if not server_side and ssl_context.check_hostname and not server_hostname:
-            raise ValueError("SSLContext.check_hostname requires server_hostname")
+        SSLEngine.__init__(self, ssl_context, server_side, server_hostname)
 
-        self.ssl_ctx_py = ssl_context
         self.ssl_ctx = _get_ssl_ctx_ptr(ssl_context)
 
         self.incoming_buf = None
@@ -248,20 +256,10 @@ cdef class SSLEngineDirect:
         self.outgoing = NULL
         self.ssl = NULL
 
-        self.server_hostname = server_hostname
-        self.server_side = server_side
-
         cdef bint force_socket_bio = getattr(ssl_context, "_aiofastnet_force_socket_bio", False)
-
-        self.ktls_requested = (ssl_context.options & getattr(ssl, "OP_ENABLE_KTLS", 0)) != 0
 
         # force_socket_bio is only used for testing, tests should not use it together with OP_ENABLE_KTLS
         assert not self.ktls_requested or (self.ktls_requested and not force_socket_bio)
-
-        try:
-            self._is_debug = asyncio.get_running_loop().get_debug()
-        except RuntimeError:
-            self._is_debug = False
 
         cdef bint ktls_prerequisites_available = (
             _ktls_prerequisites_available() if self.ktls_requested else False
@@ -363,7 +361,7 @@ cdef class SSLEngineDirect:
 
     @property
     def context(self):
-        return self.ssl_ctx_py
+        return self.ssl_context
 
     @property
     def session_reused(self):
@@ -426,7 +424,7 @@ cdef class SSLEngineDirect:
         if peer_cert == NULL:
             return None
 
-        cdef int verification = self.ssl_ctx_py.verify_mode
+        cdef int verification = self.ssl_context.verify_mode
         try:
             if binary_form:
                 return self._certificate_to_der(peer_cert)
@@ -793,7 +791,7 @@ cdef class SSLEngineDirect:
                     ERR_clear_error()
                     raise ssl.SSLError("SSL_set_tlsext_host_name failed")
 
-            if self.ssl_ctx_py.check_hostname:
+            if self.ssl_context.check_hostname:
                 ssl_verification_params = SSL_get0_param(self.ssl)
                 if ip == NULL:
                     if not X509_VERIFY_PARAM_set1_host(ssl_verification_params, server_hostname_ptr, len(server_hostname_b)):
