@@ -32,28 +32,10 @@ from .utils cimport (
     aiofn_add_info_and_reraise,
     unlikely
 )
-from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
 from .transport cimport Transport, Protocol, WriteWatermarks
 from .transport import aiofn_is_buffered_protocol
 from .openssl_compat import OPENSSL_DYN_LIBS, create_transport_context
-
-
-cdef object _logger = getLogger('aiofastnet.ssl')
-cdef size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
-cdef Py_ssize_t DATA_RECEIVED_MAX_SIZE = constants.DATA_RECEIVED_MAX_SIZE
-
-
-def _log_ktls_deactivation_reason(conn) -> None:
-    # Give the user a clue for a cause that cannot be detected before the handshake.
-    _logger.warning(
-        "%r: Kernel TLS was not enabled PROBABLY because OpenSSL was built on a machine with an old linux kernel (<5.19)",
-        conn)
-    if OPENSSL_DYN_LIBS is None:
-        _logger.warning("%r: OpenSSL dynamic libraries were not discovered; using stdlib SSL fallback", conn)
-        return
-    _logger.warning("%r: Loaded libssl: %s", conn, OPENSSL_DYN_LIBS.libssl)
-    _logger.warning("%r: Loaded libcrypto: %s", conn, OPENSSL_DYN_LIBS.libcrypto)
-
+from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
 
 cdef bint _use_fallback_ssl_engine = (
     os.environ.get("AIOFN_FORCE_FALLBACK") is not None or
@@ -64,6 +46,11 @@ if _use_fallback_ssl_engine:
     from .ssl_engine_fallback import SSLEngineFallback as SSLEngineImpl
 else:
     from .ssl_engine_direct import SSLEngineDirect as SSLEngineImpl
+
+
+cdef object _logger = getLogger('aiofastnet.ssl')
+cdef size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
+cdef Py_ssize_t DATA_RECEIVED_MAX_SIZE = constants.DATA_RECEIVED_MAX_SIZE
 
 
 cdef class SendFileRequest:
@@ -265,14 +252,14 @@ cdef class SSLTransportBase(Transport):
         if self._server is not None:
             self._server._attach(self)
 
-        if self._is_debug and OPENSSL_DYN_LIBS is not None:
-            _logger.debug("%r: libssl: %s", self, OPENSSL_DYN_LIBS.libssl)
-            _logger.debug("%r: libcrypto: %s", self, OPENSSL_DYN_LIBS.libcrypto)
+        if self._is_debug:
             _logger.debug("%r: %s", self, ssl.OPENSSL_VERSION)
-            _logger.info("%r: SSL_sendfile loaded=%d", self, self._ssl_engine.sendfile_available())
-        elif self._is_debug:
-            _logger.debug("%r: using stdlib SSL fallback engine", self)
-            _logger.debug("%r: %s", self, ssl.OPENSSL_VERSION)
+            if OPENSSL_DYN_LIBS is not None:
+                _logger.debug("%r: libssl: %s", self, OPENSSL_DYN_LIBS.libssl)
+                _logger.debug("%r: libcrypto: %s", self, OPENSSL_DYN_LIBS.libcrypto)
+                _logger.info("%r: SSL_sendfile loaded=%d", self, self._ssl_engine.sendfile_available())
+            else:
+                _logger.debug("%r: using stdlib SSL fallback engine", self)
 
     def __repr__(self):
         if self._sock_fd_obj is not None:
@@ -466,7 +453,22 @@ cdef class SSLTransportBase(Transport):
             return
 
         self._set_state(SSLProtocolState.WRAPPED)
+        self._sendfile_compatible = self._ssl_engine.sendfile_available() and self._ssl_engine.ktls_send_enabled()
 
+        self._log_ssl_engine_state()
+
+        ssl_object = self._ssl_engine.get_ssl_object()
+
+        self._extra.update(
+            peercert=ssl_object.getpeercert(),
+            cipher=ssl_object.cipher(),
+            compression=ssl_object.compression()
+        )
+        self._wakeup_waiter()
+        self._call_protocol_connection_made()
+        self._loop.call_soon(self._retry_ssl_read)
+
+    cdef inline _log_ssl_engine_state(self):
         ssl_object = self._ssl_engine.get_ssl_object()
 
         _logger.debug("%r: cipher %s", self, ssl_object.cipher())
@@ -479,18 +481,18 @@ cdef class SSLTransportBase(Transport):
             (not self._ssl_engine.ssl_incoming_use_membio() and not self._ssl_engine.ktls_recv_enabled()) or
             (not self._ssl_engine.ssl_outgoing_use_membio() and not self._ssl_engine.ktls_send_enabled())
         ):
-            _log_ktls_deactivation_reason(self)
+            # Give the user a clue for a cause that cannot be detected before the handshake.
+            if OPENSSL_DYN_LIBS is None:
+                _logger.warning(
+                    "%r: Kernel TLS was not enabled because Python is linked statically against OpenSSL libraries (is it uv managed python?); using stdlib SSL fallback",
+                    self)
+            else:
+                _logger.warning(
+                    "%r: Kernel TLS was not enabled PROBABLY because OpenSSL was built on a machine with an old linux kernel (<5.19)",
+                    self)
+                _logger.warning("%r: Loaded libssl: %s", self, OPENSSL_DYN_LIBS.libssl)
+                _logger.warning("%r: Loaded libcrypto: %s", self, OPENSSL_DYN_LIBS.libcrypto)
 
-        self._sendfile_compatible = self._ssl_engine.sendfile_available() and self._ssl_engine.ktls_send_enabled()
-
-        self._extra.update(
-            peercert=ssl_object.getpeercert(),
-            cipher=ssl_object.cipher(),
-            compression=ssl_object.compression()
-        )
-        self._wakeup_waiter()
-        self._call_protocol_connection_made()
-        self._loop.call_soon(self._retry_ssl_read)
 
     cpdef _do_read(self):
         if self._read_paused:
