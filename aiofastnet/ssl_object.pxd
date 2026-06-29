@@ -3,6 +3,7 @@ from libc.stdint cimport uint64_t
 
 
 cpdef enum SSLError:
+    PYTHON_EXC = -1
     SSL_ERROR_NONE = 0
     SSL_ERROR_SSL = 1
     SSL_ERROR_WANT_READ = 2
@@ -34,6 +35,9 @@ cdef class SSLObject:
         readonly bint server_side
         readonly bint ktls_requested
 
+    cdef:
+        bint _is_debug
+
     cpdef object version(self)
     cpdef tuple cipher(self)
     cpdef object shared_ciphers(self)
@@ -48,12 +52,13 @@ cdef class SSLObject:
     cpdef int ktls_recv_enabled(self)
 
     # Used by SSLProtocol
-    # These methods wrap SSL* operations
-    cdef inline int get_error(self, int ret) noexcept
+    # These methods wrap SSL* operations and eventual SSL_get_error
     cdef inline int do_handshake(self) noexcept
     cdef inline int shutdown(self) noexcept
-    cdef inline int read(self, void *buf, size_t num) noexcept
-    cdef inline int write(self, const void *buf, size_t num) noexcept
+    cdef inline SSLError read(self, conn, char *buf, Py_ssize_t buf_len, Py_ssize_t* bytes_read) except PYTHON_EXC
+    cdef inline SSLError write(self, conn, char *data_ptr, Py_ssize_t data_len, Py_ssize_t* bytes_written) except PYTHON_EXC
+
+    cdef inline SSLError get_error(self, int ret) noexcept
     cdef inline Py_ssize_t pending(self) noexcept
     cdef inline allow_renegotiation(self)
     cdef inline int renegotiate(self) noexcept
