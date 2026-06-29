@@ -410,23 +410,14 @@ cdef class SSLTransportBase(Transport):
             self._handle_error("Error occurred during read")
 
     cdef inline _do_handshake(self):
-        cdef:
-            int rc
-            int ssl_error
+        cdef SSLError ssl_error
 
         while True:
-            rc = self._ssl_object.do_handshake()
-            if rc == 1:
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_do_handshake() = %d", self, rc)
+            ssl_error = self._ssl_object.do_handshake(self)
+            if ssl_error == SSLError.SSL_ERROR_NONE:
                 self._on_handshake_complete(None)
                 self._flush_outgoing_bio()
                 return
-
-            ssl_error = self._ssl_object.get_error(rc)
-            if unlikely(self._is_debug):
-                _logger.debug("%r: SSL_do_handshake() = %d, %s",
-                              self, rc, ssl_error_name(ssl_error))
 
             if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
                 if self._should_retry_after_want_write():
@@ -438,7 +429,7 @@ cdef class SSLTransportBase(Transport):
                 self._flush_outgoing_bio()
                 return
 
-            raise self._ssl_object.make_exc_from_ssl_error("ssl handshake failed", ssl_error)
+            raise RuntimeError(f"unexpected SSL_do_handshake error: {ssl_error_name(ssl_error)}")
 
     cdef inline _on_handshake_complete(self, handshake_exc):
         if self._handshake_timeout_handle is not None:
@@ -622,33 +613,17 @@ cdef class SSLTransportBase(Transport):
             self._do_shutdown()
 
     cdef inline _do_shutdown(self):
-        cdef:
-            int rc
-            int ssl_error
+        cdef SSLError ssl_error
 
         self._do_read_into_void()
 
         while True:
-            rc = self._ssl_object.shutdown()
-
-            # From openssl docs
-            # Unlike most other function, returning 0 does not indicate an
-            # error. SSL_get_error(3) should not get called, it may
-            # misleadingly indicate an error even though no error occurred.
-            # 0 - means we have successfully sent close_notify, but we still
-            # expect peer to reply.
-
-            if rc in (1, 0):
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_shutdown()=%d", self, rc)
-
+            ssl_error = self._ssl_object.shutdown(self)
+            if ssl_error == SSLError.SSL_ERROR_NONE:
                 self._flush_outgoing_bio()
-
-                if rc == 1:
-                    self._on_shutdown_complete(None)
+                self._on_shutdown_complete(None)
                 return
 
-            ssl_error = self._ssl_object.get_error(rc)
             if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
                 if self._should_retry_after_want_write():
                     continue
@@ -656,10 +631,10 @@ cdef class SSLTransportBase(Transport):
                     return
 
             if ssl_error == SSLError.SSL_ERROR_WANT_READ:
+                self._flush_outgoing_bio()
                 return
 
-            raise self._ssl_object.make_exc_from_ssl_error(
-                "SSL_shutdown failed", ssl_error)
+            raise RuntimeError(f"unexpected SSL_shutdown error: {ssl_error_name(ssl_error)}")
 
     cdef inline _on_shutdown_complete(self, shutdown_exc):
         if self._shutdown_timeout_handle is not None:

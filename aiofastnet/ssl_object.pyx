@@ -490,11 +490,50 @@ cdef class SSLObject:
     cdef SSLError get_error(self, int ret) noexcept:
         return <SSLError>SSL_get_error(self.ssl, ret)
 
-    cdef int do_handshake(self) noexcept:
-        return SSL_do_handshake(self.ssl)
+    cdef inline SSLError do_handshake(self, conn) except PYTHON_EXC:
+        cdef:
+            int rc
+            SSLError ssl_error
 
-    cdef int shutdown(self) noexcept:
-        return SSL_shutdown(self.ssl)
+        rc = SSL_do_handshake(self.ssl)
+        if rc == 1:
+            if unlikely(self._is_debug):
+                _logger.debug("%r: SSL_do_handshake() = %d", conn, rc)
+            return SSL_ERROR_NONE
+
+        ssl_error = self.get_error(rc)
+        if unlikely(self._is_debug):
+            _logger.debug("%r: SSL_do_handshake() = %d, %s", conn, rc, ssl_error_name(ssl_error))
+
+        if ssl_error in (SSLError.SSL_ERROR_WANT_READ, SSLError.SSL_ERROR_WANT_WRITE):
+            return ssl_error
+
+        raise self.make_exc_from_ssl_error("ssl handshake failed", ssl_error)
+
+    cdef inline SSLError shutdown(self, conn) except PYTHON_EXC:
+        cdef:
+            int rc
+            SSLError ssl_error
+
+        rc = SSL_shutdown(self.ssl)
+        if rc == 1:
+            if unlikely(self._is_debug):
+                _logger.debug("%r: SSL_shutdown()=%d", conn, rc)
+            return SSL_ERROR_NONE
+
+        if rc == 0:
+            if unlikely(self._is_debug):
+                _logger.debug("%r: SSL_shutdown()=%d, %s", conn, rc, ssl_error_name(SSL_ERROR_WANT_READ))
+            return SSL_ERROR_WANT_READ
+
+        ssl_error = self.get_error(rc)
+        if unlikely(self._is_debug):
+            _logger.debug("%r: SSL_shutdown()=%d, %s", conn, rc, ssl_error_name(ssl_error))
+
+        if ssl_error in (SSLError.SSL_ERROR_WANT_READ, SSLError.SSL_ERROR_WANT_WRITE):
+            return ssl_error
+
+        raise self.make_exc_from_ssl_error("SSL_shutdown failed", ssl_error)
 
     cdef inline SSLError read(self, conn, char *buf, Py_ssize_t buf_len, Py_ssize_t* bytes_read) except PYTHON_EXC:
         cdef:
