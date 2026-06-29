@@ -8,7 +8,7 @@ import pytest
 
 import aiofastnet
 from aiofastnet import openssl_compat
-from aiofastnet import ssl_object
+from aiofastnet import ssl_engine_direct as ssl_object
 from tests.utils import TestServer, TestClient
 
 

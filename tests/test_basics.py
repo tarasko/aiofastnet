@@ -36,10 +36,12 @@ async def test_ktls_enabled(ktls_conn_type):
         async with TestClient(server, ct=ktls_conn_type) as client:
             server_client = await server.get_any_server_client()
 
-            assert client.transport.get_extra_info("ssl_socket_bio_enabled")
+            assert not client.transport.get_extra_info("ssl_incoming_use_membio")
+            assert not client.transport.get_extra_info("ssl_outgoing_use_membio")
             assert client.transport.get_extra_info("ktls_send_enabled")
             assert client.transport.get_extra_info("ktls_recv_enabled")
-            assert server_client.transport.get_extra_info("ssl_socket_bio_enabled")
+            assert not server_client.transport.get_extra_info("ssl_incoming_use_membio")
+            assert not server_client.transport.get_extra_info("ssl_outgoing_use_membio")
             assert server_client.transport.get_extra_info("ktls_send_enabled")
             assert server_client.transport.get_extra_info("ktls_recv_enabled")
 
@@ -49,12 +51,27 @@ async def test_ssl_sbio_enabled(selector_loop, ssl_sbio_conn_type):
         async with TestClient(server, ct=ssl_sbio_conn_type) as client:
             server_client = await server.get_any_server_client()
 
-            assert client.transport.get_extra_info("ssl_socket_bio_enabled")
+            assert not client.transport.get_extra_info("ssl_incoming_use_membio")
+            assert not client.transport.get_extra_info("ssl_outgoing_use_membio")
             assert not client.transport.get_extra_info("ktls_send_enabled")
             assert not client.transport.get_extra_info("ktls_recv_enabled")
-            assert server_client.transport.get_extra_info("ssl_socket_bio_enabled")
+            assert not server_client.transport.get_extra_info("ssl_incoming_use_membio")
+            assert not server_client.transport.get_extra_info("ssl_outgoing_use_membio")
             assert not server_client.transport.get_extra_info("ktls_send_enabled")
             assert not server_client.transport.get_extra_info("ktls_recv_enabled")
+
+
+async def test_ssl_membio_enabled(selector_loop, ssl_conn_type):
+    expected = ssl_conn_type.name in ("ssl_mbio", "stls")
+
+    async with TestServer(ct=ssl_conn_type) as server:
+        async with TestClient(server, ct=ssl_conn_type) as client:
+            server_client = await server.get_any_server_client()
+
+            assert client.transport.get_extra_info("ssl_incoming_use_membio") is expected
+            assert client.transport.get_extra_info("ssl_outgoing_use_membio") is expected
+            assert server_client.transport.get_extra_info("ssl_incoming_use_membio") is expected
+            assert server_client.transport.get_extra_info("ssl_outgoing_use_membio") is expected
 
 
 @pytest.mark.parametrize("msg_size", [1, 32, 64, 256 * 1024, 6 * 1024 * 1024, 20 * 1024 * 1024])
