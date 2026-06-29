@@ -494,16 +494,16 @@ cdef class SSLEngineDirect(SSLEngine):
     cpdef Py_ssize_t pending(self) except -1:
         return <Py_ssize_t>SSL_pending(self.ssl)
 
-    cdef bint ssl_incoming_use_membio(self) except -1:
+    cdef bint ssl_incoming_use_membio(self) noexcept:
         return self.incoming != NULL
 
-    cdef bint ssl_outgoing_use_membio(self) except -1:
+    cdef bint ssl_outgoing_use_membio(self) noexcept:
         return self.outgoing != NULL
 
-    cdef int ktls_send_enabled(self) except -1:
+    cdef int ktls_send_enabled(self) noexcept:
         return BIO_get_ktls_send(SSL_get_wbio(self.ssl))
 
-    cdef int ktls_recv_enabled(self) except -1:
+    cdef int ktls_recv_enabled(self) noexcept:
         return BIO_get_ktls_recv(SSL_get_rbio(self.ssl))
 
     cdef object get_ssl_object(self):

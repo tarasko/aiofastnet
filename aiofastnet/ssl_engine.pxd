@@ -18,10 +18,10 @@ cdef class SSLEngine:
         readonly bint ktls_requested
         bint _is_debug
 
-    cdef int ktls_send_enabled(self) except -1
-    cdef int ktls_recv_enabled(self) except -1
-    cdef bint ssl_incoming_use_membio(self) except -1
-    cdef bint ssl_outgoing_use_membio(self) except -1
+    cdef int ktls_send_enabled(self) noexcept
+    cdef int ktls_recv_enabled(self) noexcept
+    cdef bint ssl_incoming_use_membio(self) noexcept
+    cdef bint ssl_outgoing_use_membio(self) noexcept
 
     cdef object get_ssl_object(self)
 

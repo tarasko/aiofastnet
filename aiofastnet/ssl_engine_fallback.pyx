@@ -48,16 +48,16 @@ cdef class SSLEngineFallback(SSLEngine):
             raise ConnectionResetError() from exc
         raise exc
 
-    cdef int ktls_send_enabled(self) except -1:
+    cdef int ktls_send_enabled(self) noexcept:
         return 0
 
-    cdef int ktls_recv_enabled(self) except -1:
+    cdef int ktls_recv_enabled(self) noexcept:
         return 0
 
-    cdef bint ssl_incoming_use_membio(self) except -1:
+    cdef bint ssl_incoming_use_membio(self) noexcept:
         return True
 
-    cdef bint ssl_outgoing_use_membio(self) except -1:
+    cdef bint ssl_outgoing_use_membio(self) noexcept:
         return True
 
     cdef object get_ssl_object(self):

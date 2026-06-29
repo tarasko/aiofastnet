@@ -17,17 +17,17 @@ cdef class SSLEngine:
         except RuntimeError:
             self._is_debug = False
 
-    cdef int ktls_send_enabled(self) except -1:
-        raise NotImplementedError()
+    cdef int ktls_send_enabled(self) noexcept:
+        return 0
 
-    cdef int ktls_recv_enabled(self) except -1:
-        raise NotImplementedError()
+    cdef int ktls_recv_enabled(self) noexcept:
+        return 0
 
-    cdef bint ssl_incoming_use_membio(self) except -1:
-        raise NotImplementedError()
+    cdef bint ssl_incoming_use_membio(self) noexcept:
+        return False
 
-    cdef bint ssl_outgoing_use_membio(self) except -1:
-        raise NotImplementedError()
+    cdef bint ssl_outgoing_use_membio(self) noexcept:
+        return False
 
     cdef get_ssl_object(self):
         raise NotImplementedError()
