@@ -57,27 +57,25 @@ cdef class SSLObject:
     cdef inline SSLError shutdown(self, conn) except PYTHON_EXC
     cdef inline SSLError read(self, conn, char *buf, Py_ssize_t buf_len, Py_ssize_t* bytes_read) except PYTHON_EXC
     cdef inline SSLError write(self, conn, char *data_ptr, Py_ssize_t data_len, Py_ssize_t* bytes_written) except PYTHON_EXC
-    cdef inline int sendfile(self, int fd, Py_ssize_t offset, size_t size) noexcept
-
-    cdef inline int sendfile_available(self) noexcept
-    cdef inline SSLError get_error(self, int ret) noexcept
-    cdef inline Py_ssize_t pending(self) noexcept
-    cdef inline allow_renegotiation(self)
-    cdef inline int renegotiate(self) noexcept
-
-    # These methods wrape BIO* operations
-    cdef inline int outgoing_bio_reset(self) noexcept
-    cdef inline Py_ssize_t outgoing_bio_pending(self) except -1
-    cdef inline Py_ssize_t outgoing_bio_get_data(self, char** pp) noexcept
-    cdef inline outgoing_bio_consume(self, Py_ssize_t nbytes)
+    cdef inline SSLError sendfile(self, conn, int fd, Py_ssize_t offset, Py_ssize_t count, Py_ssize_t* bytes_written) except PYTHON_EXC
 
     cdef inline Py_ssize_t incoming_bio_pending(self) except -1
     cdef inline incoming_bio_get_write_buf(self, char **pp, Py_ssize_t *space)
     cdef inline incoming_bio_produce(self, Py_ssize_t nbytes)
 
-    cdef inline make_exc_from_ssl_error(self, str descr, int err_code)
+    cdef inline int sendfile_available(self) noexcept
+    cdef inline Py_ssize_t pending(self) noexcept
+    cdef inline allow_renegotiation(self)
+    cdef inline int renegotiate(self) noexcept
+
+    # These methods wrap BIO* operations
+    cdef inline int outgoing_bio_reset(self) noexcept
+    cdef inline Py_ssize_t outgoing_bio_pending(self) except -1
+    cdef inline Py_ssize_t outgoing_bio_get_data(self, char** pp) noexcept
+    cdef inline outgoing_bio_consume(self, Py_ssize_t nbytes)
 
     # Implementation details
+    cdef inline _make_exc_from_ssl_error(self, str descr, int err_code)
     cdef inline bytes _certificate_to_der(self, X509* certificate)
     cdef inline list _certificate_chain_to_der(self, OPENSSL_STACK* chain)
     cdef inline _exc_from_err_last_error(self, str descr)

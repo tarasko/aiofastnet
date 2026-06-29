@@ -1233,39 +1233,27 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         * completing req.waiter when the request finishes or fails.
         """
 
-        cdef Py_ssize_t bytes_written
+        cdef:
+            Py_ssize_t bytes_written
+            SSLError ssl_error
 
         while True:
-            bytes_written = self._ssl_object.sendfile(req.fd, req.offset, <size_t>req.count)
-            if bytes_written >= 0:
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_sendfile(..., offset=%d, size=%d) = %d", self,
-                                  req.offset, req.count, bytes_written)
+            ssl_error = self._ssl_object.sendfile(self, req.fd, req.offset, req.count, &bytes_written)
+            req.offset += bytes_written
+            req.count -= bytes_written
 
-                req.offset += bytes_written
-                req.count -= bytes_written
-                if req.count == 0:
-                    return True
-                else:
+            if ssl_error == SSLError.SSL_ERROR_NONE:
+                return True
+
+            if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
+                if self._should_retry_after_want_write():
                     continue
-            else:
-                ssl_error = self._ssl_object.get_error(bytes_written)
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_sendfile(..., offset=%d, size=%d) = %d, %s",
-                                  self, req.offset, req.count, bytes_written,
-                                  ssl_error_name(ssl_error))
+                return False
 
-                if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
-                    self._ensure_writer()
-                    return False
-                elif ssl_error == SSLError.SSL_ERROR_WANT_READ:
-                    return False
+            if ssl_error == SSLError.SSL_ERROR_WANT_READ:
+                return False
 
-                # When socket BIO is used, SSL_sendfile may fail with SSL_ERROR_SYSCALL went peer close socket.
-                # Treat it as lost connection.
-                exc = ConnectionResetError() if ssl_error == SSLError.SSL_ERROR_SYSCALL else \
-                    self._ssl_object.make_exc_from_ssl_error("SSL_sendfile failed", ssl_error)
-                raise exc
+            raise RuntimeError(f"unexpected SSL_sendfile error: {ssl_error_name(ssl_error)}")
 
     cdef _read_ready(self):
         if unlikely(self._is_debug):

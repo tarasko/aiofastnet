@@ -487,9 +487,6 @@ cdef class SSLObject:
     cpdef int ktls_recv_enabled(self):
         return BIO_get_ktls_recv(SSL_get_rbio(self.ssl))
 
-    cdef SSLError get_error(self, int ret) noexcept:
-        return <SSLError>SSL_get_error(self.ssl, ret)
-
     cdef inline SSLError do_handshake(self, conn) except PYTHON_EXC:
         cdef:
             int rc
@@ -501,14 +498,14 @@ cdef class SSLObject:
                 _logger.debug("%r: SSL_do_handshake() = %d", conn, rc)
             return SSL_ERROR_NONE
 
-        ssl_error = self.get_error(rc)
+        ssl_error = <SSLError>SSL_get_error(self.ssl, rc)
         if unlikely(self._is_debug):
             _logger.debug("%r: SSL_do_handshake() = %d, %s", conn, rc, ssl_error_name(ssl_error))
 
         if ssl_error in (SSLError.SSL_ERROR_WANT_READ, SSLError.SSL_ERROR_WANT_WRITE):
             return ssl_error
 
-        raise self.make_exc_from_ssl_error("ssl handshake failed", ssl_error)
+        raise self._make_exc_from_ssl_error("ssl handshake failed", ssl_error)
 
     cdef inline SSLError shutdown(self, conn) except PYTHON_EXC:
         cdef:
@@ -526,14 +523,14 @@ cdef class SSLObject:
                 _logger.debug("%r: SSL_shutdown()=%d, %s", conn, rc, ssl_error_name(SSL_ERROR_WANT_READ))
             return SSL_ERROR_WANT_READ
 
-        ssl_error = self.get_error(rc)
+        ssl_error = <SSLError>SSL_get_error(self.ssl, rc)
         if unlikely(self._is_debug):
             _logger.debug("%r: SSL_shutdown()=%d, %s", conn, rc, ssl_error_name(ssl_error))
 
         if ssl_error in (SSLError.SSL_ERROR_WANT_READ, SSLError.SSL_ERROR_WANT_WRITE):
             return ssl_error
 
-        raise self.make_exc_from_ssl_error("SSL_shutdown failed", ssl_error)
+        raise self._make_exc_from_ssl_error("SSL_shutdown failed", ssl_error)
 
     cdef inline SSLError read(self, conn, char *buf, Py_ssize_t buf_len, Py_ssize_t* bytes_read) except PYTHON_EXC:
         cdef:
@@ -557,7 +554,7 @@ cdef class SSLObject:
                 buf_len -= rc
                 continue
 
-            ssl_error = <SSLError>self.get_error(rc)
+            ssl_error = <SSLError>SSL_get_error(self.ssl, rc)
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSL_read(buf_len=%d)=%d, %s", conn, read_len, rc, ssl_error_name(ssl_error))
 
@@ -571,7 +568,7 @@ cdef class SSLObject:
             if unlikely(ssl_error == SSLError.SSL_ERROR_SYSCALL):
                 raise ConnectionResetError()
 
-            exc = self.make_exc_from_ssl_error("SSL_read failed", ssl_error)
+            exc = self._make_exc_from_ssl_error("SSL_read failed", ssl_error)
             if getattr(exc, "reason", None) == "UNEXPECTED_EOF_WHILE_READING":
                 raise ConnectionResetError() from exc
             raise exc
@@ -596,14 +593,14 @@ cdef class SSLObject:
 
                 continue
 
-            ssl_error = <SSLError>self.get_error(last_bytes_written)
+            ssl_error = <SSLError>SSL_get_error(self.ssl, last_bytes_written)
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSL_write(..., data_len=%d)=%d, %s",
                               conn, data_len, last_bytes_written,
                               ssl_error_name(ssl_error))
 
             if unlikely(ssl_error == SSLError.SSL_ERROR_SSL):
-                raise self.make_exc_from_ssl_error("SSL_write failed", ssl_error)
+                raise self._make_exc_from_ssl_error("SSL_write failed", ssl_error)
 
             # When socket BIO is used, SSL_write may fail with any of these.
             # Treat them as lost connection
@@ -611,6 +608,38 @@ cdef class SSLObject:
                 raise ConnectionResetError()
 
             return ssl_error
+
+        return SSL_ERROR_NONE
+
+    cdef inline SSLError sendfile(self, conn, int fd, Py_ssize_t offset, Py_ssize_t count, Py_ssize_t* bytes_written) except PYTHON_EXC:
+        cdef:
+            Py_ssize_t last_bytes_written
+            SSLError ssl_error
+
+        bytes_written[0] = 0
+        while count != 0:
+            last_bytes_written = SSL_sendfile(self.ssl, fd, offset, <size_t>count, 0)
+            if last_bytes_written > 0:
+                if unlikely(self._is_debug):
+                    _logger.debug("%r: SSL_sendfile(..., offset=%d, size=%d) = %d", conn, offset, count, last_bytes_written)
+
+                bytes_written[0] += last_bytes_written
+                offset += last_bytes_written
+                count -= last_bytes_written
+                continue
+
+            ssl_error = <SSLError>SSL_get_error(self.ssl, last_bytes_written)
+            if unlikely(self._is_debug):
+                _logger.debug("%r: SSL_sendfile(..., offset=%d, size=%d) = %d, %s",
+                              conn, offset, count, last_bytes_written, ssl_error_name(ssl_error))
+
+            if ssl_error in (SSLError.SSL_ERROR_WANT_READ, SSLError.SSL_ERROR_WANT_WRITE):
+                return ssl_error
+
+            if ssl_error == SSLError.SSL_ERROR_SYSCALL:
+                raise ConnectionResetError()
+
+            raise self._make_exc_from_ssl_error("SSL_sendfile failed", ssl_error)
 
         return SSL_ERROR_NONE
 
@@ -666,10 +695,7 @@ cdef class SSLObject:
     cdef int sendfile_available(self) noexcept:
         return <void*>SSL_sendfile != NULL
 
-    cdef int sendfile(self, int fd, Py_ssize_t offset, size_t size) noexcept:
-        return SSL_sendfile(self.ssl, fd, offset, size, 0)
-
-    cdef make_exc_from_ssl_error(self, str descr, int err_code):
+    cdef _make_exc_from_ssl_error(self, str descr, int err_code):
         assert err_code != SSL_ERROR_NONE, "check logic"
 
         if err_code == SSL_ERROR_WANT_READ:
