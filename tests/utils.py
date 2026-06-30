@@ -511,7 +511,13 @@ async def TestServer(protocol_factory=None,
                 client_waiters=client_waiters,
             )
         finally:
-            server.close()
+            try:
+                server.close()
+            except AttributeError:
+                # On windows proactor close() may cause:
+                #   AttributeError: 'NoneType' object has no attribute '_stop_serving'
+                # because loop has been already closed
+                pass
             for w in client_waiters:
                 if not w.done():
                     w.set_exception(RuntimeError("server finished"))
