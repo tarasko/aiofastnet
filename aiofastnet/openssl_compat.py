@@ -31,7 +31,7 @@ else:
 
 
 def _find_openssl_library_paths() -> Optional[OpenSSLDynLibs]:
-    if os.environ.get("AIOFN_FORCE_FALLBACK") is not None or _ssl_module_path is None:
+    if _ssl_module_path is None:
         return None
 
     try:

@@ -37,15 +37,12 @@ from .transport import aiofn_is_buffered_protocol
 from .openssl_compat import OPENSSL_DYN_LIBS, create_transport_context
 from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
 
-cdef bint _use_fallback_ssl_engine = (
-    os.environ.get("AIOFN_FORCE_FALLBACK") is not None or
-    OPENSSL_DYN_LIBS is None
-)
 
-if _use_fallback_ssl_engine:
-    from .ssl_engine_fallback import SSLEngineFallback as SSLEngineImpl
+from .ssl_engine_fallback import SSLEngineFallback
+if OPENSSL_DYN_LIBS is not None:
+    from .ssl_engine_direct import SSLEngineDirect
 else:
-    from .ssl_engine_direct import SSLEngineDirect as SSLEngineImpl
+    SSLEngineDirect = None
 
 
 cdef object _logger = getLogger('aiofastnet.ssl')
@@ -239,6 +236,12 @@ cdef class SSLTransportBase(Transport):
         self._app_state = AppProtocolState.STATE_INIT
 
         self._set_protocol(app_protocol)
+
+        cdef bint force_fallback_ssl = getattr(sslcontext, "_aiofastnet_force_fallback_ssl", False)
+        if force_fallback_ssl or SSLEngineDirect is None:
+            SSLEngineImpl = SSLEngineFallback
+        else:
+            SSLEngineImpl = SSLEngineDirect
 
         self._ssl_engine = SSLEngineImpl(
             sslcontext,

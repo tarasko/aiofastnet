@@ -48,7 +48,7 @@ async def test_ktls_enabled(ktls_conn_type):
 
 
 async def test_ssl_sbio_enabled(selector_loop, ssl_sbio_conn_type):
-    expected_membio = os.environ.get("AIOFN_FORCE_FALLBACK") is not None
+    expected_membio = aiofastnet.OPENSSL_DYN_LIBS is None
 
     async with TestServer(ct=ssl_sbio_conn_type) as server:
         async with TestClient(server, ct=ssl_sbio_conn_type) as client:
@@ -65,7 +65,7 @@ async def test_ssl_sbio_enabled(selector_loop, ssl_sbio_conn_type):
 
 
 async def test_ssl_membio_enabled(selector_loop, ssl_conn_type):
-    expected = os.environ.get("AIOFN_FORCE_FALLBACK") is not None or ssl_conn_type.name in ("ssl_mbio", "stls")
+    expected = aiofastnet.OPENSSL_DYN_LIBS is None or ssl_conn_type.name in ("ssl_mbio", "ssl_mbio_fall", "stls", "stls_fall")
 
     async with TestServer(ct=ssl_conn_type) as server:
         async with TestClient(server, ct=ssl_conn_type) as client:
@@ -482,6 +482,9 @@ async def test_ssl_renegotiate_midstream(all_loops, ssl_conn_type):
 
     if ssl_conn_type.name == 'ktls':
         pytest.skip("kTLS doesn't support renegotiation")
+
+    if ssl_conn_type.name in ("ssl_mbio_fall", "stls_fall"):
+        pytest.skip("fallback SSL engine doesn't support renegotiation")
 
     if aiofastnet.OPENSSL_DYN_LIBS is None:
         pytest.skip("Renegotiate is not available in standalone python")

@@ -13,7 +13,7 @@ from tests.utils import TestServer, TestClient
 
 
 def _import_ssl_engine_direct():
-    if os.environ.get("AIOFN_FORCE_FALLBACK") is not None or openssl_compat.OPENSSL_DYN_LIBS is None:
+    if openssl_compat.OPENSSL_DYN_LIBS is None:
         pytest.skip("direct SSL engine is unavailable")
 
     try:

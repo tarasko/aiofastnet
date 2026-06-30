@@ -339,7 +339,7 @@ class ConnectionType:
                 return
             pytest.skip("sendfile is not supported in Windows")
 
-        if self.name in ("ssl_mbio", "ssl_sbio", "stls"):
+        if self.name in ("ssl_mbio", "ssl_mbio_fall", "ssl_sbio", "stls", "stls_fall"):
             pytest.skip("SSL_sendfile is not supported for non-kernel TLS")
 
         if self.name == "ktls" and sys.platform != "linux":
@@ -347,7 +347,7 @@ class ConnectionType:
 
     @property
     def use_start_tls(self):
-        return self.name == "stls"
+        return self.name in ("stls", "stls_fall")
 
 
 def _make_ktls_conn_type():
@@ -396,8 +396,10 @@ def sendfile_conn_type(request):
                                           )
                  ),
     "ssl_mbio",
+    "ssl_mbio_fall",
     "ssl_sbio",
     "stls",     # Use SSLTransport_Transport by using start_tls
+    "stls_fall",     # Use SSLTransport_Transport with SSLEngineFallback
     pytest.param("ktls",
                  marks=[
                         pytest.mark.skipif(sys.version_info < (3, 12), reason="kTLS tests require Python >= 3.12"),
@@ -429,8 +431,11 @@ def _make_conn_type_from_param(request):
     if request.param in ("tcp", "unix"):
         return ConnectionType(name=request.param)
     else:
-        if request.param in ("ssl_mbio", "stls"):
+        if request.param in ("ssl_mbio", "ssl_mbio_fall", "stls", "stls_fall"):
             server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
+            if request.param in ("ssl_mbio_fall", "stls_fall"):
+                server_context._aiofastnet_force_fallback_ssl = True
+                client_context._aiofastnet_force_fallback_ssl = True
             return ConnectionType(request.param, server_context, client_context)
         elif request.param == "ssl_sbio":
             return _make_ssl_sbio_conn_type()
@@ -442,8 +447,10 @@ def _make_conn_type_from_param(request):
 
 @pytest.fixture(params=[
     "ssl_mbio",
+    "ssl_mbio_fall",
     "ssl_sbio",
     "stls",     # Use SSLTransport_Transport by using start_tls
+    "stls_fall",     # Use SSLTransport_Transport with SSLEngineFallback
     pytest.param("ktls",
                  marks=pytest.mark.skipif(sys.version_info < (3, 12),
                                           reason="kTLS tests require Python >= 3.12"
