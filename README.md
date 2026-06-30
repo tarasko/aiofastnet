@@ -341,9 +341,9 @@ Also, aiofastnet can batch data and reduce amount of syscalls when KTLS is not u
 KTLS requires support from all of these layers:
 
 - The `tls` kernel module loaded.
-- OpenSSL built with KTLS support on a machine with suitable kernel headers.
 - Python's `_ssl` module dynamically linked against shared OpenSSL libraries
   that aiofastnet can discover. This is pretty much any python except for python shipped with `uv`.
+- OpenSSL built with KTLS support on a machine with suitable kernel headers.
 - An `ssl.SSLContext` with `ssl.OP_ENABLE_KTLS` enabled.
 - A TLS version and cipher suite supported by the kernel TLS implementation.
 
@@ -352,6 +352,13 @@ To load the kernel module:
 ```console
 $ sudo modprobe tls
 ```
+
+To check if python is linked-dynamically against OpenSSL:
+
+```console
+$ python -c "import aiofastnet; print(aiofastnet.OPENSSL_DYN_LIBS)"
+```
+If it prints None, then python is linked statically and KTLS can't be used.
 
 To enable KTLS on Python SSL contexts (available in Python 3.12+):
 
