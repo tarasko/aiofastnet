@@ -4,8 +4,8 @@
 # * add ssl.OP_ENABLE_KTLS to ssl_context.options
 # * load kernel tls module with 'sudo modprobe tls' if not loaded yet.
 
-# Make sure you have a relatively new Linux kernel (>5.19) and proper OpenSSL build (>3.0).
-# OpenSSL should have been build on a machine with Linux kernel >5.19.
+# Make sure you have a relatively new Linux kernel (>5.1) and proper OpenSSL build (>3.0).
+# OpenSSL should have been build on a machine with Linux kernel >5.1.
 # Check README.md for details
 
 
