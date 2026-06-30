@@ -79,7 +79,7 @@ def test_ktls_kernel_too_old(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger="aiofastnet.ssl"):
         assert not ssl_engine_direct._ktls_prerequisites_available()
 
-    assert "Linux kernel version is < 5.19" in caplog.text
+    assert "Linux kernel version is < 5.1" in caplog.text
     assert "Falling back to memory BIO" in caplog.text
 
 
