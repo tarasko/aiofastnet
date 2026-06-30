@@ -35,7 +35,7 @@ cdef class SSLEngineFallback(SSLEngine):
         self._outgoing = ssl.MemoryBIO()
         self._incoming_buf = bytearray(read_buffer_size)
         self._outgoing_data = b""
-        self._write_max_size = 64*1024
+        self._write_max_size = write_max_size
 
         self.ssl_object = ssl_context.wrap_bio(
             self._incoming,
