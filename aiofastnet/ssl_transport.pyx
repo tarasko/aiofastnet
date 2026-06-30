@@ -257,12 +257,12 @@ cdef class SSLTransportBase(Transport):
 
         if self._is_debug:
             _logger.debug("%r: %s", self, ssl.OPENSSL_VERSION)
-            if OPENSSL_DYN_LIBS is not None:
+            if isinstance(self._ssl_engine, SSLEngineFallback):
+                _logger.debug("%r: using stdlib SSL fallback engine", self)
+            else:
                 _logger.debug("%r: libssl: %s", self, OPENSSL_DYN_LIBS.libssl)
                 _logger.debug("%r: libcrypto: %s", self, OPENSSL_DYN_LIBS.libcrypto)
                 _logger.info("%r: SSL_sendfile loaded=%d", self, self._ssl_engine.sendfile_available())
-            else:
-                _logger.debug("%r: using stdlib SSL fallback engine", self)
 
     def __repr__(self):
         if self._sock_fd_obj is not None:
