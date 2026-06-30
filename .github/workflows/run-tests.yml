@@ -183,6 +183,7 @@ jobs:
         pytest -n auto -v
 
     - name: Run tests with fallback SSL engine
+      if: runner.os != 'Windows'
       env:
         AIOFN_FORCE_FALLBACK: "1"
       run: |

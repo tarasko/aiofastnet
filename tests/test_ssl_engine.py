@@ -288,6 +288,9 @@ async def test_ssl_certificate_chains(ssl_conn_type):
 
 
 async def test_ssl_certificate_chains_with_client_auth(ssl_conn_type):
+    if sys.version_info < (3, 13):
+        pytest.skip("SSLObject get_verified_chain/get_unverified_chain only available since 3.13")
+
     expected_der = _test_cert_der()
 
     ssl_conn_type.server_ssl_context.verify_mode = ssl.CERT_REQUIRED
