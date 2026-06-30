@@ -32,24 +32,22 @@ from .utils cimport (
     aiofn_add_info_and_reraise,
     unlikely
 )
-from .ssl_object cimport (SSLObject, SSLError, ssl_error_name)
 from .transport cimport Transport, Protocol, WriteWatermarks
 from .transport import aiofn_is_buffered_protocol
 from .openssl_compat import OPENSSL_DYN_LIBS, create_transport_context
+from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
+
+
+from .ssl_engine_fallback import SSLEngineFallback
+if OPENSSL_DYN_LIBS is not None:
+    from .ssl_engine_direct import SSLEngineDirect
+else:
+    SSLEngineDirect = None
 
 
 cdef object _logger = getLogger('aiofastnet.ssl')
 cdef size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
 cdef Py_ssize_t DATA_RECEIVED_MAX_SIZE = constants.DATA_RECEIVED_MAX_SIZE
-
-
-def _log_ktls_deactivation_reason(conn) -> None:
-    # Give the user a clue for a cause that cannot be detected before the handshake.
-    _logger.warning(
-        "%r: Kernel TLS was not enabled PROBABLY because OpenSSL was built on a machine with an old linux kernel (<5.19)",
-        conn)
-    _logger.warning("%r: Loaded libssl: %s", conn, OPENSSL_DYN_LIBS.libssl)
-    _logger.warning("%r: Loaded libcrypto: %s", conn, OPENSSL_DYN_LIBS.libcrypto)
 
 
 cdef class SendFileRequest:
@@ -109,7 +107,7 @@ cdef class SSLTransportBase(Transport):
         bint _connection_lost_scheduled # Has connection_lost() already been scheduled?
         size_t _closed_write_count
 
-        SSLObject _ssl_object
+        SSLEngine _ssl_engine
         list _write_backlog
         Py_ssize_t _write_backlog_size
 
@@ -239,7 +237,13 @@ cdef class SSLTransportBase(Transport):
 
         self._set_protocol(app_protocol)
 
-        self._ssl_object = SSLObject(
+        cdef bint force_fallback_ssl = getattr(sslcontext, "_aiofastnet_force_fallback_ssl", False)
+        if force_fallback_ssl or SSLEngineDirect is None:
+            SSLEngineImpl = SSLEngineFallback
+        else:
+            SSLEngineImpl = SSLEngineDirect
+
+        self._ssl_engine = SSLEngineImpl(
             sslcontext,
             server_side,
             self._server_hostname,
@@ -252,10 +256,13 @@ cdef class SSLTransportBase(Transport):
             self._server._attach(self)
 
         if self._is_debug:
-            _logger.debug("%r: libssl: %s", self, OPENSSL_DYN_LIBS.libssl)
-            _logger.debug("%r: libcrypto: %s", self, OPENSSL_DYN_LIBS.libcrypto)
             _logger.debug("%r: %s", self, ssl.OPENSSL_VERSION)
-            _logger.info("%r: SSL_sendfile loaded=%d", self, self._ssl_object.sendfile_available())
+            if isinstance(self._ssl_engine, SSLEngineFallback):
+                _logger.debug("%r: using stdlib SSL fallback engine", self)
+            else:
+                _logger.debug("%r: libssl: %s", self, OPENSSL_DYN_LIBS.libssl)
+                _logger.debug("%r: libcrypto: %s", self, OPENSSL_DYN_LIBS.libcrypto)
+                _logger.info("%r: SSL_sendfile loaded=%d", self, self._ssl_engine.sendfile_available())
 
     def __repr__(self):
         if self._sock_fd_obj is not None:
@@ -264,7 +271,7 @@ cdef class SSLTransportBase(Transport):
             info = ["fd=n/a"]
 
         info.append(self.__class__.__name__)
-        if self._ssl_object.server_side:
+        if self._server_side:
             info.append("server")
         else:
             info.append("client")
@@ -288,17 +295,19 @@ cdef class SSLTransportBase(Transport):
     cpdef get_extra_info(self, name, default=None):
         self._check_thread("get_extra_info")
         if name == 'ssl_object':
-            return self._ssl_object
+            return self._ssl_engine.get_ssl_object()
         elif name == 'ssl_protocol':
             return self
         elif name == 'ssl_layer_num':
             return self._ssl_layer_num
-        elif name == 'ssl_socket_bio_enabled':
-            return bool(self._ssl_object.socket_bio_enabled())
+        elif name == 'ssl_incoming_use_membio':
+            return bool(self._ssl_engine.ssl_incoming_use_membio())
+        elif name == 'ssl_outgoing_use_membio':
+            return bool(self._ssl_engine.ssl_outgoing_use_membio())
         elif name == 'ktls_send_enabled':
-            return bool(self._ssl_object.ktls_send_enabled())
+            return bool(self._ssl_engine.ktls_send_enabled())
         elif name == 'ktls_recv_enabled':
-            return bool(self._ssl_object.ktls_recv_enabled())
+            return bool(self._ssl_engine.ktls_recv_enabled())
         return self._extra.get(name, default)
 
     cpdef set_protocol(self, protocol):
@@ -349,8 +358,8 @@ cdef class SSLTransportBase(Transport):
         if self._app_protocol_aiofn and self._app_protocol is not None:
             total += (<Protocol> self._app_protocol).get_local_write_buffer_size()
 
-        if self._ssl_object is not None and self._ssl_object.outgoing != NULL:
-            total += self._ssl_object.outgoing_bio_pending()
+        if self._ssl_engine is not None and self._ssl_engine.ssl_outgoing_use_membio():
+            total += self._ssl_engine.outgoing_bio_pending()
 
         return total
 
@@ -372,7 +381,11 @@ cdef class SSLTransportBase(Transport):
             allowed = True
         elif self._state == SSLProtocolState.DO_HANDSHAKE and new_state == SSLProtocolState.WRAPPED:
             allowed = True
-        elif self._state == SSLProtocolState.WRAPPED and new_state in (SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN, SSLProtocolState.DO_HANDSHAKE):
+        elif self._state == SSLProtocolState.WRAPPED and new_state in (
+            SSLProtocolState.FLUSHING,
+            SSLProtocolState.SHUTDOWN,
+            SSLProtocolState.DO_HANDSHAKE,
+        ):
             allowed = True
         elif self._state == SSLProtocolState.FLUSHING and new_state == SSLProtocolState.SHUTDOWN:
             allowed = True
@@ -410,23 +423,14 @@ cdef class SSLTransportBase(Transport):
             self._handle_error("Error occurred during read")
 
     cdef inline _do_handshake(self):
-        cdef:
-            int rc
-            int ssl_error
+        cdef SSLError ssl_error
 
         while True:
-            rc = self._ssl_object.do_handshake()
-            if rc == 1:
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_do_handshake() = %d", self, rc)
+            ssl_error = self._ssl_engine.do_handshake(self)
+            if ssl_error == SSLError.SSL_ERROR_NONE:
                 self._on_handshake_complete(None)
                 self._flush_outgoing_bio()
                 return
-
-            ssl_error = self._ssl_object.get_error(rc)
-            if unlikely(self._is_debug):
-                _logger.debug("%r: SSL_do_handshake() = %d, %s",
-                              self, rc, ssl_error_name(ssl_error))
 
             if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
                 if self._should_retry_after_want_write():
@@ -438,7 +442,7 @@ cdef class SSLTransportBase(Transport):
                 self._flush_outgoing_bio()
                 return
 
-            raise self._ssl_object.make_exc_from_ssl_error("ssl handshake failed", ssl_error)
+            raise RuntimeError(f"unexpected SSL_do_handshake error: {ssl_error_name(ssl_error)}")
 
     cdef inline _on_handshake_complete(self, handshake_exc):
         if self._handshake_timeout_handle is not None:
@@ -452,29 +456,46 @@ cdef class SSLTransportBase(Transport):
             return
 
         self._set_state(SSLProtocolState.WRAPPED)
+        self._sendfile_compatible = self._ssl_engine.sendfile_available() and self._ssl_engine.ktls_send_enabled()
 
-        _logger.debug("%r: cipher %s", self, self._ssl_object.cipher())
-        _logger.debug("%r: KTLS SEND: %s",
-                      self, 'enabled' if self._ssl_object.ktls_send_enabled() else 'disabled')
-        _logger.debug("%r: KTLS RECV: %s",
-                      self, 'enabled' if self._ssl_object.ktls_recv_enabled() else 'disabled')
+        self._log_ssl_engine_state()
 
-        if self._ssl_object.ktls_requested and (
-            (self._ssl_object.incoming == NULL and not self._ssl_object.ktls_recv_enabled()) or
-            (self._ssl_object.outgoing == NULL and not self._ssl_object.ktls_send_enabled())
-        ):
-            _log_ktls_deactivation_reason(self)
-
-        self._sendfile_compatible = self._ssl_object.sendfile_available() and self._ssl_object.ktls_send_enabled()
+        ssl_object = self._ssl_engine.get_ssl_object()
 
         self._extra.update(
-            peercert=self._ssl_object.getpeercert(),
-            cipher=self._ssl_object.cipher(),
-            compression=self._ssl_object.compression()
+            peercert=ssl_object.getpeercert(),
+            cipher=ssl_object.cipher(),
+            compression=ssl_object.compression()
         )
         self._wakeup_waiter()
         self._call_protocol_connection_made()
         self._loop.call_soon(self._retry_ssl_read)
+
+    cdef inline _log_ssl_engine_state(self):
+        ssl_object = self._ssl_engine.get_ssl_object()
+
+        _logger.debug("%r: cipher %s", self, ssl_object.cipher())
+        _logger.debug("%r: KTLS SEND: %s",
+                      self, 'enabled' if self._ssl_engine.ktls_send_enabled() else 'disabled')
+        _logger.debug("%r: KTLS RECV: %s",
+                      self, 'enabled' if self._ssl_engine.ktls_recv_enabled() else 'disabled')
+
+        if self._ssl_engine.ktls_requested and (
+            (not self._ssl_engine.ssl_incoming_use_membio() and not self._ssl_engine.ktls_recv_enabled()) or
+            (not self._ssl_engine.ssl_outgoing_use_membio() and not self._ssl_engine.ktls_send_enabled())
+        ):
+            # Give the user a clue for a cause that cannot be detected before the handshake.
+            if OPENSSL_DYN_LIBS is None:
+                _logger.warning(
+                    "%r: Kernel TLS was not enabled because Python is linked statically against OpenSSL libraries (is it uv managed python?); using stdlib SSL fallback",
+                    self)
+            else:
+                _logger.warning(
+                    "%r: Kernel TLS was not enabled PROBABLY because OpenSSL was built on a machine with an old linux kernel (<5.19)",
+                    self)
+                _logger.warning("%r: Loaded libssl: %s", self, OPENSSL_DYN_LIBS.libssl)
+                _logger.warning("%r: Loaded libcrypto: %s", self, OPENSSL_DYN_LIBS.libcrypto)
+
 
     cpdef _do_read(self):
         if self._read_paused:
@@ -497,30 +518,16 @@ cdef class SSLTransportBase(Transport):
         cdef:
             char* buf_ptr
             Py_ssize_t buf_len
-            int last_bytes_read = 0
+            Py_ssize_t last_bytes_read = 0
             Py_ssize_t total_bytes_read = 0
-            int last_error = 0
+            SSLError last_error = SSLError.SSL_ERROR_NONE
 
         while True:
             app_buffer = self._call_protocol_get_buffer(&buf_ptr, &buf_len)
 
-            while buf_len > 0:
-                last_bytes_read = self._ssl_object.read(buf_ptr, buf_len)
-                if last_bytes_read <= 0:
-                    last_error = self._ssl_object.get_error(last_bytes_read)
-                    if unlikely(self._is_debug):
-                        _logger.debug("%r: SSL_read(buf_len=%d)=%d, %s",
-                                      self, buf_len, last_bytes_read,
-                                      ssl_error_name(last_error))
-                    break
-
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_read(buf_len=%d)=%d",
-                                  self, buf_len, last_bytes_read)
-
-                buf_ptr += last_bytes_read
-                buf_len -= last_bytes_read
-                total_bytes_read += last_bytes_read
+            last_error = self._ssl_engine.read(self, buf_ptr, buf_len, &last_bytes_read)
+            buf_len -= last_bytes_read
+            total_bytes_read += last_bytes_read
 
             if total_bytes_read > 0:
                 self._call_protocol_buffer_updated(total_bytes_read)
@@ -537,10 +544,10 @@ cdef class SSLTransportBase(Transport):
 
     cdef inline _do_read__copied(self):
         cdef:
-            int bytes_read
+            Py_ssize_t bytes_read
             char* bytes_buffer_ptr = NULL
             PyObject* bytes_obj = NULL
-            int last_error = 0
+            SSLError last_error = SSLError.SSL_ERROR_NONE
             Py_ssize_t total_bytes_read
 
         while True:
@@ -548,32 +555,8 @@ cdef class SSLTransportBase(Transport):
             total_bytes_read = 0
 
             try:
-                while total_bytes_read < DATA_RECEIVED_MAX_SIZE:
-                    bytes_read = self._ssl_object.read(
-                        bytes_buffer_ptr,
-                        DATA_RECEIVED_MAX_SIZE - total_bytes_read
-                    )
-
-                    if unlikely(bytes_read <= 0):
-                        last_error = self._ssl_object.get_error(bytes_read)
-                        if unlikely(self._is_debug):
-                            _logger.debug("%r: SSL_read(buf_len=%d)=%d, total=%d, %s",
-                                          self,
-                                          DATA_RECEIVED_MAX_SIZE - total_bytes_read,
-                                          bytes_read,
-                                          total_bytes_read,
-                                          ssl_error_name(last_error))
-                        break
-
-                    if unlikely(self._is_debug):
-                        _logger.debug("%r: SSL_read(buf_len=%d)=%d, total=%d",
-                                      self,
-                                      DATA_RECEIVED_MAX_SIZE - total_bytes_read,
-                                      bytes_read,
-                                      total_bytes_read + bytes_read)
-
-                    bytes_buffer_ptr += bytes_read
-                    total_bytes_read += bytes_read
+                last_error = self._ssl_engine.read(self, bytes_buffer_ptr, DATA_RECEIVED_MAX_SIZE, &bytes_read)
+                total_bytes_read += bytes_read
             except:
                 Py_XDECREF(bytes_obj)
                 raise
@@ -588,7 +571,7 @@ cdef class SSLTransportBase(Transport):
             if total_bytes_read < DATA_RECEIVED_MAX_SIZE and not self._should_retry_read(last_error):
                 return
 
-    cdef inline bint _should_retry_read(self, int last_error) except -1:
+    cdef inline bint _should_retry_read(self, SSLError last_error) except -1:
         if last_error == SSLError.SSL_ERROR_WANT_READ:
             return False
 
@@ -600,23 +583,7 @@ cdef class SSLTransportBase(Transport):
             self._start_shutdown()
             return False
 
-        # this may happen when socket BIO is used for reading and remote peer has
-        # abruptly closed connection.
-        # In such case OpenSSL reports SSL_ERROR_SYSCALL or a generic error
-        # SSLError:
-        #   library: 'SSL ROUTINES'
-        #   reason: 'UNEXPECTED_EOF_WHILE_READING'
-        #
-        # To be consistent with TLS with memory BIO/TCP use,
-        # we report connection_lost with ConnectionResetError()
-        if last_error == SSLError.SSL_ERROR_SYSCALL:
-            raise ConnectionResetError()
-
-        exc = self._ssl_object.make_exc_from_ssl_error("SSL_read failed", last_error)
-        if exc.reason == 'UNEXPECTED_EOF_WHILE_READING':
-            raise ConnectionResetError() from exc
-        else:
-            raise exc
+        raise RuntimeError(f"unexpected SSL_read error: {ssl_error_name(last_error)}")
 
     cdef inline _start_shutdown(self):
         if self._state in (SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN, SSLProtocolState.UNWRAPPED):
@@ -655,26 +622,13 @@ cdef class SSLTransportBase(Transport):
     cdef inline _do_read_into_void(self):
         cdef:
             bytearray buffer = PyByteArray_FromStringAndSize(NULL, 16 * 1024)
-            int bytes_read
-            int ssl_error
+            Py_ssize_t bytes_read
+            SSLError ssl_error
 
         while True:
-            while True:
-                bytes_read = self._ssl_object.read(
-                    PyByteArray_AS_STRING(buffer),
-                    PyByteArray_GET_SIZE(buffer))
-                if bytes_read <= 0:
-                    break
-
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_read(buf_len=%d)=%d",
-                                  self, PyByteArray_GET_SIZE(buffer), bytes_read)
-
-            ssl_error = self._ssl_object.get_error(bytes_read)
-            if unlikely(self._is_debug):
-                _logger.debug("%r: SSL_read(buf_len=%d, ...)=%d, %s",
-                              self, PyByteArray_GET_SIZE(buffer),
-                              bytes_read, ssl_error_name(ssl_error))
+            ssl_error = self._ssl_engine.read(self, PyByteArray_AS_STRING(buffer), PyByteArray_GET_SIZE(buffer), &bytes_read)
+            if ssl_error == SSLError.SSL_ERROR_NONE:
+                continue
 
             if not self._should_retry_read(ssl_error):
                 return
@@ -689,33 +643,17 @@ cdef class SSLTransportBase(Transport):
             self._do_shutdown()
 
     cdef inline _do_shutdown(self):
-        cdef:
-            int rc
-            int ssl_error
+        cdef SSLError ssl_error
 
         self._do_read_into_void()
 
         while True:
-            rc = self._ssl_object.shutdown()
-
-            # From openssl docs
-            # Unlike most other function, returning 0 does not indicate an
-            # error. SSL_get_error(3) should not get called, it may
-            # misleadingly indicate an error even though no error occurred.
-            # 0 - means we have successfully sent close_notify, but we still
-            # expect peer to reply.
-
-            if rc in (1, 0):
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_shutdown()=%d", self, rc)
-
+            ssl_error = self._ssl_engine.shutdown(self)
+            if ssl_error == SSLError.SSL_ERROR_NONE:
                 self._flush_outgoing_bio()
-
-                if rc == 1:
-                    self._on_shutdown_complete(None)
+                self._on_shutdown_complete(None)
                 return
 
-            ssl_error = self._ssl_object.get_error(rc)
             if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
                 if self._should_retry_after_want_write():
                     continue
@@ -723,10 +661,10 @@ cdef class SSLTransportBase(Transport):
                     return
 
             if ssl_error == SSLError.SSL_ERROR_WANT_READ:
+                self._flush_outgoing_bio()
                 return
 
-            raise self._ssl_object.make_exc_from_ssl_error(
-                "SSL_shutdown failed", ssl_error)
+            raise RuntimeError(f"unexpected SSL_shutdown error: {ssl_error_name(ssl_error)}")
 
     cdef inline _on_shutdown_complete(self, shutdown_exc):
         if self._shutdown_timeout_handle is not None:
@@ -944,29 +882,17 @@ cdef class SSLTransportBase(Transport):
         self._maybe_resume_protocol()
 
     cdef inline _write_impl(self, data, char* data_ptr, Py_ssize_t data_len):
-        cdef:
-            int bytes_written
-            int ssl_error
+        cdef Py_ssize_t bytes_written
+        cdef SSLError ssl_error
 
-        while data_len != 0:
-            bytes_written = self._ssl_object.write(data_ptr, data_len)
-            if bytes_written > 0:
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_write(..., data_len=%d)=%d", self, data_len, bytes_written)
+        while True:
+            ssl_error = self._ssl_engine.write(self, data_ptr, data_len, &bytes_written)
 
-                data_ptr += bytes_written
-                data_len -= bytes_written
+            if ssl_error == SSLError.SSL_ERROR_NONE:
+                return
 
-                if data_len == 0:
-                    return None
-
-                continue
-
-            ssl_error = self._ssl_object.get_error(bytes_written)
-            if unlikely(self._is_debug):
-                _logger.debug("%r: SSL_write(..., data_len=%d)=%d, %s",
-                              self, data_len, bytes_written,
-                              ssl_error_name(ssl_error))
+            data_ptr += bytes_written
+            data_len -= bytes_written
 
             if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
                 if self._should_retry_after_want_write():
@@ -976,13 +902,6 @@ cdef class SSLTransportBase(Transport):
 
             if ssl_error == SSLError.SSL_ERROR_WANT_READ:
                 return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
-
-            # When socket BIO is used, SSL_write may fail with any of these.
-            # Treat them as lost connection
-            if ssl_error in (SSLError.SSL_ERROR_SYSCALL, SSLError.SSL_ERROR_ZERO_RETURN):
-                raise ConnectionResetError()
-
-            raise self._ssl_object.make_exc_from_ssl_error("SSL_write failed", ssl_error)
 
     cdef inline _call_protocol_connection_made(self):
         if self._app_state == AppProtocolState.STATE_INIT:
@@ -1083,8 +1002,9 @@ cdef class SSLTransportBase(Transport):
                 'protocol': self,
             })
 
+    # Used for testing only
     def _allow_renegotiation(self):
-        self._ssl_object.allow_renegotiation()
+        self._ssl_engine.allow_renegotiation()
 
     # Used for testing only
     def _renegotiate(self):
@@ -1100,7 +1020,7 @@ cdef class SSLTransportBase(Transport):
         cdef int rc
 
         try:
-            rc = self._ssl_object.renegotiate()
+            rc = self._ssl_engine.renegotiate()
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSL_renegotiate()=%d", self, rc)
 
@@ -1237,7 +1157,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         Returns True if write operations can continue.
         True is also returned if memory bio is not used, is such case _flush_outgoing_bio is no-op. 
         """
-        if self._ssl_object.outgoing == NULL:
+        if not self._ssl_engine.ssl_outgoing_use_membio():
             return True
 
         if self._write_had_eagain:
@@ -1250,7 +1170,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             bint had_successful_writes = False
 
         while True:
-            sz = self._ssl_object.outgoing_bio_get_data(&ptr)
+            sz = self._ssl_engine.outgoing_bio_get_data(&ptr)
             if sz == 0:
                 return True
 
@@ -1263,7 +1183,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                 return had_successful_writes
 
             had_successful_writes = True
-            self._ssl_object.outgoing_bio_consume(bytes_sent)
+            self._ssl_engine.outgoing_bio_consume(bytes_sent)
             if bytes_sent == sz:
                 return True
 
@@ -1274,7 +1194,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         """
         Return True if we should retry the last operation after we got SSL_ERROR_WANT_WRITE
         """
-        if self._ssl_object.outgoing != NULL:
+        if self._ssl_engine.ssl_outgoing_use_membio():
             return self._flush_outgoing_bio()
         else:
             self._ensure_writer()
@@ -1344,39 +1264,27 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         * completing req.waiter when the request finishes or fails.
         """
 
-        cdef Py_ssize_t bytes_written
+        cdef:
+            Py_ssize_t bytes_written
+            SSLError ssl_error
 
         while True:
-            bytes_written = self._ssl_object.sendfile(req.fd, req.offset, <size_t>req.count)
-            if bytes_written >= 0:
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_sendfile(..., offset=%d, size=%d) = %d", self,
-                                  req.offset, req.count, bytes_written)
+            ssl_error = self._ssl_engine.sendfile(self, req.fd, req.offset, req.count, &bytes_written)
+            req.offset += bytes_written
+            req.count -= bytes_written
 
-                req.offset += bytes_written
-                req.count -= bytes_written
-                if req.count == 0:
-                    return True
-                else:
+            if ssl_error == SSLError.SSL_ERROR_NONE:
+                return True
+
+            if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
+                if self._should_retry_after_want_write():
                     continue
-            else:
-                ssl_error = self._ssl_object.get_error(bytes_written)
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: SSL_sendfile(..., offset=%d, size=%d) = %d, %s",
-                                  self, req.offset, req.count, bytes_written,
-                                  ssl_error_name(ssl_error))
+                return False
 
-                if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
-                    self._ensure_writer()
-                    return False
-                elif ssl_error == SSLError.SSL_ERROR_WANT_READ:
-                    return False
+            if ssl_error == SSLError.SSL_ERROR_WANT_READ:
+                return False
 
-                # When socket BIO is used, SSL_sendfile may fail with SSL_ERROR_SYSCALL went peer close socket.
-                # Treat it as lost connection.
-                exc = ConnectionResetError() if ssl_error == SSLError.SSL_ERROR_SYSCALL else \
-                    self._ssl_object.make_exc_from_ssl_error("SSL_sendfile failed", ssl_error)
-                raise exc
+            raise RuntimeError(f"unexpected SSL_sendfile error: {ssl_error_name(ssl_error)}")
 
     cdef _read_ready(self):
         if unlikely(self._is_debug):
@@ -1391,9 +1299,9 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             Py_ssize_t bytes_read
 
         try:
-            if self._ssl_object.incoming != NULL:
+            if self._ssl_engine.ssl_incoming_use_membio():
                 while not self._read_paused:
-                    self._ssl_object.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
+                    self._ssl_engine.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
                     bytes_read = aiofn_recv(self._sock_fd, buf_ptr, buf_len)
 
                     if unlikely(self._is_debug):
@@ -1406,7 +1314,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                         self._process_eof()
                         return
 
-                    self._ssl_object.incoming_bio_produce(bytes_read)
+                    self._ssl_engine.incoming_bio_produce(bytes_read)
                     self._incoming_bio_updated()
             else:
                 self._incoming_bio_updated()
@@ -1564,7 +1472,7 @@ cdef class SSLTransport_Transport(SSLTransportBase):
         self._connection_lost_scheduled = True
         if self._write_backlog_size:
             self._clear_write_backlog(exc)
-        self._ssl_object.outgoing_bio_reset()
+        self._ssl_engine.outgoing_bio_reset()
 
         if self._state != SSLProtocolState.DO_HANDSHAKE:
             if self._app_state == AppProtocolState.STATE_CON_MADE or \
@@ -1588,21 +1496,21 @@ cdef class SSLTransport_Transport(SSLTransportBase):
             self._handshake_timeout_handle = None
 
     cdef inline get_buffer_c(self, Py_ssize_t n, char** buf_ptr, Py_ssize_t* buf_len):
-        self._ssl_object.incoming_bio_get_write_buf(buf_ptr, buf_len)
+        self._ssl_engine.incoming_bio_get_write_buf(buf_ptr, buf_len)
 
     cdef inline get_buffer(self, Py_ssize_t n):
         cdef:
             char* buf_ptr
             Py_ssize_t buf_len
 
-        self._ssl_object.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
+        self._ssl_engine.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
         return PyMemoryView_FromMemory(buf_ptr, buf_len, PyBUF_WRITE)
 
     cdef inline buffer_updated(self, Py_ssize_t nbytes):
         if unlikely(self._is_debug):
             _logger.debug("%r: buffer_updated(%d)", self, nbytes)
 
-        self._ssl_object.incoming_bio_produce(nbytes)
+        self._ssl_engine.incoming_bio_produce(nbytes)
         try:
             self._incoming_bio_updated()
         except:
@@ -1688,7 +1596,7 @@ cdef class SSLTransport_Transport(SSLTransportBase):
             char* ptr
             long sz
 
-        sz = self._ssl_object.outgoing_bio_get_data(&ptr)
+        sz = self._ssl_engine.outgoing_bio_get_data(&ptr)
         if sz == 0:
             return True
 
@@ -1697,7 +1605,7 @@ cdef class SSLTransport_Transport(SSLTransportBase):
         else:
             self._transport.write(PyBytes_FromStringAndSize(ptr, sz))
 
-        self._ssl_object.outgoing_bio_consume(sz)
+        self._ssl_engine.outgoing_bio_consume(sz)
         if unlikely(self._is_debug):
             _logger.debug("%r: flushed %d bytes from outgoing BIO", self, sz)
 

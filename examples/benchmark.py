@@ -19,7 +19,7 @@ except ImportError:
     uvloop = None
 
 
-async def run_benchmark(args, loop_kind: str, use_aiofastnet: bool, transport_kind: str, msg_size: int):
+async def run_benchmark(args, loop_kind: str, variant: str, transport_kind: str, msg_size: int):
     if args.asyncio_debug:
         asyncio.get_running_loop().set_debug(True)
 
@@ -27,6 +27,13 @@ async def run_benchmark(args, loop_kind: str, use_aiofastnet: bool, transport_ki
 
     server_ssl_ctx, client_ssl_ctx = build_ssl_contexts(enable_ktls=False) \
         if transport_kind == "ssl" else (None, None)
+
+    if variant == "aiofastnet_fb":
+        if server_ssl_ctx is not None:
+            server_ssl_ctx._aiofastnet_force_fallback_ssl = True
+            client_ssl_ctx._aiofastnet_force_fallback_ssl = True
+
+    use_aiofastnet = "aiofastnet" in variant
 
     requests = await run_pair(
         use_aiofastnet,
@@ -39,7 +46,7 @@ async def run_benchmark(args, loop_kind: str, use_aiofastnet: bool, transport_ki
         args.sndbuf_size,
     )
     rps = requests/args.duration
-    print(f"{transport_kind}-{loop_kind}-{'aiofastnet' if use_aiofastnet else 'native'}-{msg_size}: {rps:.2f}")
+    print(f"{transport_kind}-{loop_kind}-{variant}-{msg_size}: {rps:.2f}")
 
     return rps
 
@@ -254,7 +261,7 @@ def main():
     parser.add_argument(
         "--variant",
         default="native,aiofastnet",
-        help="Comma-separated backend variants (native,aiofastnet)",
+        help="Comma-separated backend variants, any of (native,aiofastnet_fb,aiofastnet)",
     )
     parser.add_argument("--transport", default="ssl,tcp", help="Comma-separated transport types (tcp,ssl)")
     parser.add_argument("--duration", type=float, default=5.0, help="Benchmark duration in seconds" )
@@ -311,13 +318,15 @@ def main():
             all_results[transport_kind][msg_size] = {}
             for loop_kind in args.loops:
                 for variant in args.variants:
-                    use_aiofastnet = variant == "aiofastnet"
                     loop_factory = uvloop.Loop if loop_kind == "uvloop" else asyncio.SelectorEventLoop
                     rps = asyncio.run(
-                        run_benchmark(args, loop_kind, use_aiofastnet, transport_kind, msg_size),
+                        run_benchmark(args, loop_kind, variant, transport_kind, msg_size),
                         loop_factory=loop_factory,
                     )
-                    name = f"{loop_kind}{'+aiofastnet' if use_aiofastnet else ''}"
+                    if variant == "native":
+                        name = loop_kind
+                    else:
+                        name = f"{loop_kind}+{variant}"
                     all_results[transport_kind][msg_size][name] = rps
 
     if not args.no_plot:

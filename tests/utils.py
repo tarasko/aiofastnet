@@ -339,7 +339,7 @@ class ConnectionType:
                 return
             pytest.skip("sendfile is not supported in Windows")
 
-        if self.name in ("ssl_mbio", "ssl_sbio", "stls"):
+        if self.name in ("ssl_mbio", "ssl_mbio_fall", "ssl_sbio", "stls", "stls_fall"):
             pytest.skip("SSL_sendfile is not supported for non-kernel TLS")
 
         if self.name == "ktls" and sys.platform != "linux":
@@ -347,10 +347,12 @@ class ConnectionType:
 
     @property
     def use_start_tls(self):
-        return self.name == "stls"
+        return self.name in ("stls", "stls_fall")
 
 
 def _make_ktls_conn_type():
+    if aiofastnet.OPENSSL_DYN_LIBS is None:
+        pytest.skip("kTLS is not available with standalone python")
     if sys.version_info < (3, 12):
         pytest.skip("kTLS tests require Python >= 3.12")
     if sys.platform != "linux":
@@ -362,18 +364,27 @@ def _make_ktls_conn_type():
     return ConnectionType("ktls", server_context, client_context)
 
 
-@pytest.fixture
-def ktls_conn_type():
-    return _make_ktls_conn_type()
-
-
 def _make_ssl_sbio_conn_type():
+    if aiofastnet.OPENSSL_DYN_LIBS is None:
+        pytest.skip("Socket BIO is not available with standalone python")
+
     server_context, client_context = make_test_ssl_contexts(
         "tests/test.crt", "tests/test.key", False
     )
     server_context._aiofastnet_force_socket_bio = True
     client_context._aiofastnet_force_socket_bio = True
     return ConnectionType("ssl_sbio", server_context, client_context)
+
+
+def _make_unix_conn_type():
+    if os.name == "nt":
+        pytest.skip("Unix sockets are not supported on Windows")
+
+    return ConnectionType("unix", None, None)
+
+@pytest.fixture
+def ktls_conn_type():
+    return _make_ktls_conn_type()
 
 
 @pytest.fixture
@@ -388,20 +399,13 @@ def sendfile_conn_type(request):
 
 @pytest.fixture(params=[
     "tcp",
-    pytest.param("unix",
-                 marks=pytest.mark.skipif(os.name == "nt",
-                                          reason="Unix sockets are not supported on Windows"
-                                          )
-                 ),
+    "unix",
     "ssl_mbio",
+    "ssl_mbio_fall",
     "ssl_sbio",
     "stls",     # Use SSLTransport_Transport by using start_tls
-    pytest.param("ktls",
-                 marks=[
-                        pytest.mark.skipif(sys.version_info < (3, 12), reason="kTLS tests require Python >= 3.12"),
-                        pytest.mark.skipif(sys.platform != "linux", reason="kTLS is available only on Linux")
-                 ]
-                 )
+    "stls_fall",     # Use SSLTransport_Transport with SSLEngineFallback
+    "ktls",
 ])
 def conn_type(request):
     return _make_conn_type_from_param(request)
@@ -410,43 +414,42 @@ def conn_type(request):
 @pytest.fixture(params=[
     "tcp",
     "ssl_mbio",
+    "ssl_mbio_fall",
     "ssl_sbio",
-    "stls",     # Use SSLTransport_Transport by using start_tls
-    pytest.param("ktls",
-                 marks=[
-                        pytest.mark.skipif(sys.version_info < (3, 12), reason="kTLS tests require Python >= 3.12"),
-                        pytest.mark.skipif(sys.platform != "linux", reason="kTLS is available only on Linux")
-                 ]
-                 )
+    "stls",
+    "stls_fall",
+    "ktls",
 ])
 def benchmark_conn_type(request):
     return _make_conn_type_from_param(request)
 
 
 def _make_conn_type_from_param(request):
-    if request.param in ("tcp", "unix"):
+    if request.param == "tcp":
         return ConnectionType(name=request.param)
+    elif request.param == "unix":
+        return _make_unix_conn_type()
+    elif request.param in ("ssl_mbio", "ssl_mbio_fall", "stls", "stls_fall"):
+        server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
+        if request.param in ("ssl_mbio_fall", "stls_fall"):
+            server_context._aiofastnet_force_fallback_ssl = True
+            client_context._aiofastnet_force_fallback_ssl = True
+        return ConnectionType(request.param, server_context, client_context)
+    elif request.param == "ssl_sbio":
+        return _make_ssl_sbio_conn_type()
+    elif request.param == "ktls":
+        return _make_ktls_conn_type()
     else:
-        if request.param in ("ssl_mbio", "stls"):
-            server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
-            return ConnectionType(request.param, server_context, client_context)
-        elif request.param == "ssl_sbio":
-            return _make_ssl_sbio_conn_type()
-        elif request.param == "ktls":
-            return _make_ktls_conn_type()
-        else:
-            raise ValueError(f"unknown connection type {request.param!r}")
+        raise ValueError(f"unknown connection type {request.param!r}")
 
 
 @pytest.fixture(params=[
     "ssl_mbio",
+    "ssl_mbio_fall",
     "ssl_sbio",
     "stls",     # Use SSLTransport_Transport by using start_tls
-    pytest.param("ktls",
-                 marks=pytest.mark.skipif(sys.version_info < (3, 12),
-                                          reason="kTLS tests require Python >= 3.12"
-                                          )
-                 )
+    "stls_fall",     # Use SSLTransport_Transport with SSLEngineFallback
+    "ktls"
 ])
 def ssl_conn_type(request):
     return _make_conn_type_from_param(request)
@@ -508,7 +511,13 @@ async def TestServer(protocol_factory=None,
                 client_waiters=client_waiters,
             )
         finally:
-            server.close()
+            try:
+                server.close()
+            except AttributeError:
+                # On windows proactor close() may cause:
+                #   AttributeError: 'NoneType' object has no attribute '_stop_serving'
+                # because loop has been already closed
+                pass
             for w in client_waiters:
                 if not w.done():
                     w.set_exception(RuntimeError("server finished"))

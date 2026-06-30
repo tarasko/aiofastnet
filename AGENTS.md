@@ -4,4 +4,4 @@ Read README.md for project description.
 
 # Code style
 
-* Max line width: 120
+* Max line width: 150

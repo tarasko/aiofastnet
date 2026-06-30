@@ -1,4 +1,3 @@
-# Fail early if python distribution is statically linked against OpenSSL
 import socket
 
 from .openssl_compat import OPENSSL_DYN_LIBS
@@ -52,5 +51,5 @@ if hasattr(socket, 'AF_UNIX'):
     ))
 
 
-__version__ = "0.18.0"
+__version__ = "0.19.0"
 __author__ = "Taras Kozlov"
