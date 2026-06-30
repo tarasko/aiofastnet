@@ -543,12 +543,14 @@ async def TestServer(protocol_factory=None,
         else:
             path = None
             if ct.use_start_tls:
-                server_protocol_factory = lambda: ServerStartTLSProtocol(
-                    protocol_factory,
-                    ct.server_ssl_context,
-                    ssl_handshake_timeout=ssl_handshake_timeout,
-                    ssl_shutdown_timeout=ssl_shutdown_timeout,
-                )
+                def server_protocol_factory():
+                    return ServerStartTLSProtocol(
+                        protocol_factory,
+                        ct.server_ssl_context,
+                        ssl_handshake_timeout=ssl_handshake_timeout,
+                        ssl_shutdown_timeout=ssl_shutdown_timeout,
+                    )
+
                 server_ssl_context = None
                 server_ssl_handshake_timeout = None
                 server_ssl_shutdown_timeout = None
