@@ -333,16 +333,23 @@ async def test_ssl_engine_connection_attributes(ssl_conn_type):
 
 
 async def test_ssl_shared_ciphers(ssl_conn_type):
+    expected_shared_ciphers = [
+        ("ECDHE-RSA-AES128-GCM-SHA256", "TLSv1.2", 128),
+    ]
+
     async with TestServer(ct=ssl_conn_type) as server:
         async with TestClient(server, ct=ssl_conn_type) as client:
             client_ssl_object = client.transport.get_extra_info("ssl_object")
             server_client = await server.get_any_server_client()
             server_ssl_object = server_client.transport.get_extra_info("ssl_object")
 
-            assert client_ssl_object.shared_ciphers() is None
-            assert server_ssl_object.shared_ciphers() == [
-                ("ECDHE-RSA-AES128-GCM-SHA256", "TLSv1.2", 128),
-            ]
+            client_shared_ciphers = client_ssl_object.shared_ciphers()
+            if sys.version_info < (3, 10) and isinstance(client_ssl_object, ssl.SSLObject):
+                if client_shared_ciphers is not None:
+                    assert expected_shared_ciphers[0] in client_shared_ciphers
+            else:
+                assert client_shared_ciphers is None
+            assert server_ssl_object.shared_ciphers() == expected_shared_ciphers
 
 
 async def test_ssl_getpeercert_binary_form(ssl_conn_type):
