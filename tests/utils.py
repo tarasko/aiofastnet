@@ -425,7 +425,7 @@ def benchmark_conn_type(request):
 
 
 def _make_conn_type_from_param(request):
-    if request.param in ("tcp", "unix"):
+    if request.param == "tcp":
         return ConnectionType(name=request.param)
     elif request.param == "unix":
         return _make_unix_conn_type()
