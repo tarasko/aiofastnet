@@ -182,6 +182,38 @@ jobs:
       run: |
         pytest -n auto -v
 
+  build-uv:
+    name: build uv (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v6
+    - name: Set up uv python
+      # important: do not use system python
+      env:
+        UV_PYTHON_PREFERENCE: only-managed
+      uses: astral-sh/setup-uv@v8.2.0
+      with:
+        python-version: '3.14'
+        activate-environment: true
+
+    - name: Install dependencies
+      run: uv pip install -r requirements.txt -r requirements-test.txt
+
+    - name: Compile Cython extensions
+      run: uv run python setup.py build_ext --inplace
+
+    - name: Show aiofastnet OpenSSL dynamic libraries
+      run: uv run python -c "import aiofastnet; print('aiofastnet.OPENSSL_DYN_LIBS:', aiofastnet.OPENSSL_DYN_LIBS)"
+
+    - name: Run tests
+      run: uv run pytest -n auto -v
+
   build-musllinux:
     name: musllinux (${{ matrix.python-tag }})
     runs-on: ubuntu-latest
