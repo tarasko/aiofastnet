@@ -16,10 +16,7 @@ def _import_ssl_engine_direct():
     if openssl_compat.OPENSSL_DYN_LIBS is None:
         pytest.skip("direct SSL engine is unavailable")
 
-    try:
-        from aiofastnet import ssl_engine_direct
-    except ImportError as exc:
-        pytest.skip(f"direct SSL engine is unavailable: {exc}")
+    from aiofastnet import ssl_engine_direct
     return ssl_engine_direct
 
 
@@ -346,7 +343,7 @@ async def test_ssl_shared_ciphers(ssl_conn_type):
             client_shared_ciphers = client_ssl_object.shared_ciphers()
             if sys.version_info >= (3, 10) or not isinstance(client_ssl_object, ssl.SSLObject):
                 assert client_shared_ciphers is None
-            assert server_ssl_object.shared_ciphers() == expected_shared_ciphers
+                assert server_ssl_object.shared_ciphers() == expected_shared_ciphers
 
 
 async def test_ssl_getpeercert_binary_form(ssl_conn_type):
