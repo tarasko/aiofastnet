@@ -112,7 +112,7 @@ cdef class SSLEngineFallback(SSLEngine):
 
         bytes_read[0] = 0
         while buf_len != 0:
-            if self.ssl_object.pending() == 0 and self._incoming.pending == 0:
+            if <Py_ssize_t>self.ssl_object.pending() == 0 and <Py_ssize_t>self._incoming.pending == 0:
                 return SSLError.SSL_ERROR_WANT_READ
 
             read_len = INT_MAX if buf_len > INT_MAX else <int>buf_len
