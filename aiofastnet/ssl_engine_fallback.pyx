@@ -198,9 +198,6 @@ cdef class SSLEngineFallback(SSLEngine):
             return
         self._incoming.write(PyBytes_FromStringAndSize(PyByteArray_AS_STRING(self._incoming_buf), nbytes))
 
-    cdef int sendfile_available(self) except -1:
-        return 0
-
     cdef allow_renegotiation(self):
         pass
 

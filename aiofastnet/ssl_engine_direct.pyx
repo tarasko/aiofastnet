@@ -349,7 +349,7 @@ cdef class SSLEngineDirect(SSLEngine):
 
     @property
     def context(self):
-        return self.ssl_context
+        return self.ssl_ctx_py
 
     @property
     def session_reused(self):
@@ -412,7 +412,7 @@ cdef class SSLEngineDirect(SSLEngine):
         if peer_cert == NULL:
             return None
 
-        cdef int verification = self.ssl_context.verify_mode
+        cdef int verification = self.ssl_ctx_py.verify_mode
         try:
             if binary_form:
                 return self._certificate_to_der(peer_cert)
@@ -696,7 +696,7 @@ cdef class SSLEngineDirect(SSLEngine):
     cdef int renegotiate(self) except -1:
         return SSL_renegotiate(self.ssl)
 
-    cdef int sendfile_available(self) except -1:
+    cdef bint sendfile_available(self) noexcept:
         return <void*>SSL_sendfile != NULL
 
     cdef _make_exc_from_ssl_error(self, str descr, int err_code):
@@ -779,7 +779,7 @@ cdef class SSLEngineDirect(SSLEngine):
                     ERR_clear_error()
                     raise ssl.SSLError("SSL_set_tlsext_host_name failed")
 
-            if self.ssl_context.check_hostname:
+            if self.ssl_ctx_py.check_hostname:
                 ssl_verification_params = SSL_get0_param(self.ssl)
                 if ip == NULL:
                     if not X509_VERIFY_PARAM_set1_host(ssl_verification_params, server_hostname_ptr, len(server_hostname_b)):

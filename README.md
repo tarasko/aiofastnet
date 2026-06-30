@@ -68,7 +68,7 @@ provides the same kind of internal implementation you would find in `asyncio`
 and `uvloop`, but with much better optimization.
 
 As a cherry on top, `aiofastnet` supports [Kernel TLS](https://www.kernel.org/doc/html/latest/networking/tls.html)
-out of the box on Linux.
+on Linux when the direct OpenSSL engine is available.
 
 ## Benchmark
 
@@ -82,8 +82,9 @@ much of your total runtime is spent in transport/SSL plumbing.
 
 Source: [examples/benchmark.py](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark.py)
 
-In these benchmarks, `aiofastnet` is up to 2.7x faster than standard
-`asyncio` and up to 1.6x faster than uvloop for TLS connections.
+In these benchmarks, using the direct OpenSSL engine, `aiofastnet` is up to
+2.7x faster than standard `asyncio` and up to 1.6x faster than uvloop for TLS
+connections.
 
 `aiofastnet` is fully compatible with free-threaded Python builds and scales
 as expected when multiple event loops run in parallel across multiple threads.
@@ -100,10 +101,13 @@ Source: [examples/benchmark_threaded.py](https://github.com/tarasko/aiofastnet/b
   and familiar loop-level networking operations.
 - **Works with the event loop you already use**. `aiofastnet` works with
   stock `asyncio` loops, `uvloop`, and `winloop`.
-- **Particularly strong for SSL-heavy workloads**. `aiofastnet` uses OpenSSL
-  more directly and avoids extra copies in the data path.
-- **Kernel TLS support on Linux**. Native `sendfile` for TLS connections through `SSL_sendfile`. 
-   `aiohttp` will be able to send FileResponse more efficiently over TLS connections.
+- **Particularly strong for SSL-heavy workloads**. When Python exposes OpenSSL
+  through dynamic libraries, `aiofastnet` uses OpenSSL more directly and avoids
+  extra copies in the data path. With standalone Python builds it falls back to
+  the standard `ssl` module while keeping aiofastnet's transport behavior.
+- **Kernel TLS support on Linux**. When the direct OpenSSL engine is available,
+  native `sendfile` for TLS connections can use `SSL_sendfile`. `aiohttp` can
+  send `FileResponse` more efficiently over TLS connections.
 - **Safer transport write() / writelines() behavior**. If the socket cannot accept
   everything immediately, only `bytes` and `memoryview` objects backed by
   `bytes` are retained without copying. Other objects, including
@@ -264,13 +268,19 @@ transport implementation. For transports created through `aiofastnet`, a
 compatibility wrapper preserves the documented `write()` /
 `writelines()` buffer-safety behavior.
 
-`aiofastnet` requires a Python distribution whose `ssl` module is dynamically
-linked against OpenSSL. Some self-contained Python distributions statically link
-OpenSSL instead of using separate `libssl` / `libcrypto` shared libraries. In
-that case `aiofastnet` cannot load the matching `libssl` / `libcrypto` symbols,
-and `import aiofastnet` will fail with an `ImportError` describing the OpenSSL
-dynamic-library problem. This is known to affect uv-managed Python installations
-because they use standalone Python builds.
+`aiofastnet` works with both dynamically linked Python distributions and
+standalone Python builds that statically link OpenSSL, including uv-managed
+Python installations.
+
+For TLS connections, `aiofastnet` has two SSL engines:
+
+- The direct OpenSSL engine is used when Python's `_ssl` module is dynamically
+  linked against discoverable `libssl` / `libcrypto` shared libraries. This is
+  the fastest path and enables OpenSSL-specific features such as KTLS.
+- The fallback SSL engine is used when those OpenSSL libraries are not
+  discoverable, for example with standalone Python builds. It uses the standard
+  `ssl` module and is fully functional, but the SSL hot path cannot be optimized
+  as aggressively.
 
 You can check what `aiofastnet` found with:
 
@@ -278,30 +288,32 @@ You can check what `aiofastnet` found with:
 $ python -c "import aiofastnet; print(aiofastnet.OPENSSL_DYN_LIBS)"
 ```
 
-Possible workarounds:
+If this prints `None`, aiofastnet is using the fallback SSL engine. TCP and
+Unix-domain socket transports still use aiofastnet's native implementation.
+TLS still works, but SSL throughput may be lower than with a dynamically linked
+OpenSSL build.
 
-- Use a system Python, `actions/setup-python`, pyenv, Conda, or another Python
-  distribution that provides OpenSSL as dynamic libraries.
-- If you use uv only for environment and package management, create the virtual
-  environment from an existing system interpreter:
+If maximum TLS performance or KTLS support matters, use a Python distribution
+whose `_ssl` module is dynamically linked against shared OpenSSL libraries, such
+as the Python provided by `actions/setup-python`, many system Python builds,
+pyenv, or Conda. If you use uv only for environment and package management and
+want the direct engine, create the virtual environment from such an interpreter:
 
-  ```console
-  $ uv venv --no-managed-python --python python
-  ```
-
-- Use `virtualenv` with a system Python interpreter, since `virtualenv` does
-  not download its own Python builds.
-- Build or install Python so that `_ssl` is a dynamic extension linked against
-  shared OpenSSL libraries.
+```console
+$ uv venv --no-managed-python --python python
+```
 
 ## Asyncio Compatibility
 
 `aiofastnet` is a drop-in replacement and is expected to behave like the
-corresponding asyncio API, with one notable exception: aiofastnet implements
-its own `SSLObject` type, and `transport.get_extra_info("ssl_object")` returns
-it instead of `ssl.SSLObject`.
+corresponding asyncio API, with one notable exception on the direct SSL path:
+aiofastnet implements its own SSL object, and
+`transport.get_extra_info("ssl_object")` returns it instead of `ssl.SSLObject`.
+When the fallback SSL engine is used, `get_extra_info("ssl_object")` returns the
+standard `ssl.SSLObject`.
 
-Compared with `ssl.SSLObject`, the following public methods are absent:
+On the direct SSL object, compared with `ssl.SSLObject`, the following public
+methods are absent:
 
 - `do_handshake()`
 - `read()`
@@ -311,7 +323,7 @@ Compared with `ssl.SSLObject`, the following public methods are absent:
 - `selected_npn_protocol()`
 - `verify_client_post_handshake()`
 
-The following public attribute is also absent:
+The following public attribute is also absent on the direct SSL object:
 
 - `session`
 
@@ -334,6 +346,8 @@ KTLS requires support from all of these layers:
 
 - The `tls` kernel module loaded.
 - OpenSSL built with KTLS support on a machine with suitable kernel headers.
+- Python's `_ssl` module dynamically linked against shared OpenSSL libraries
+  that aiofastnet can discover.
 - An `ssl.SSLContext` with `ssl.OP_ENABLE_KTLS` enabled.
 - A TLS version and cipher suite supported by the kernel TLS implementation.
 
@@ -355,10 +369,12 @@ client_context = ssl.create_default_context()
 client_context.options |= ssl.OP_ENABLE_KTLS
 ```
 
-The OpenSSL library used by Python must itself have KTLS support. Python
-distributions often ship their own `libssl` and `libcrypto`, and those
-libraries may have been built on older systems where KTLS was not available.
-That can be true even when the host running your program has a newer kernel.
+The OpenSSL library used by Python must itself have KTLS support and must be
+available to aiofastnet as dynamic `libssl` / `libcrypto` libraries. Python
+distributions often ship their own OpenSSL libraries, and those libraries may
+have been built on older systems where KTLS was not available. That can be true
+even when the host running your program has a newer kernel. Standalone Python
+builds that use aiofastnet's fallback SSL engine do not support KTLS.
 
 Check which OpenSSL Python is using:
 

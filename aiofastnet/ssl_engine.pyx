@@ -7,7 +7,7 @@ cdef class SSLEngine:
         if not server_side and ssl_context.check_hostname and not server_hostname:
             raise ValueError("SSLContext.check_hostname requires server_hostname")
 
-        self.ssl_context = ssl_context
+        self.ssl_ctx_py = ssl_context
         self.server_hostname = server_hostname
         self.server_side = server_side
         self.ktls_requested = (ssl_context.options & getattr(ssl, "OP_ENABLE_KTLS", 0)) != 0
@@ -53,8 +53,8 @@ cdef class SSLEngine:
     cdef incoming_bio_produce(self, Py_ssize_t nbytes):
         raise NotImplementedError()
 
-    cdef int sendfile_available(self) except -1:
-        raise NotImplementedError()
+    cdef bint sendfile_available(self) noexcept:
+        return False
 
     cdef allow_renegotiation(self):
         raise NotImplementedError()

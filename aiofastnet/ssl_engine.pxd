@@ -12,7 +12,7 @@ cdef class SSLEngine:
     cdef dict __dict__
 
     cdef:
-        readonly object ssl_context
+        readonly object ssl_ctx_py
         readonly str server_hostname
         readonly bint server_side
         readonly bint ktls_requested
@@ -34,7 +34,7 @@ cdef class SSLEngine:
     cdef incoming_bio_get_write_buf(self, char **pp, Py_ssize_t *space)
     cdef incoming_bio_produce(self, Py_ssize_t nbytes)
 
-    cdef int sendfile_available(self) except -1
+    cdef bint sendfile_available(self) noexcept
     cdef allow_renegotiation(self)
     cdef int renegotiate(self) except -1
 
