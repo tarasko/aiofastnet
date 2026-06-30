@@ -305,11 +305,7 @@ class ServerStartTLSProtocol(asyncio.Protocol):
 
     def connection_made(self, transport):
         self._transport = transport
-        try:
-            transport.pause_reading()
-        except (AttributeError, NotImplementedError):
-            pass
-
+        transport.pause_reading()
         self._protocol = self._protocol_factory()
         self._start_tls_task = asyncio.get_running_loop().create_task(self._start_tls())
 
@@ -619,7 +615,26 @@ async def TestClient(server_or_host, port=None,
                 lambda: protocol_factory(is_buffered),
                 path=path if path is not None else host,
             )
-        elif ct.use_start_tls or ct.client_ssl_context is None:
+        elif ct.use_start_tls:
+            client = protocol_factory(is_buffered)
+            transport, _ = await create_connection(
+                loop,
+                asyncio.Protocol,
+                host=host,
+                port=port,
+            )
+            transport = await start_tls(
+                loop,
+                transport,
+                client,
+                ct.client_ssl_context,
+                server_side=False,
+                server_hostname=server_hostname,
+                ssl_handshake_timeout=ssl_handshake_timeout,
+                ssl_shutdown_timeout=ssl_shutdown_timeout,
+            )
+            client.connection_made(transport)
+        elif ct.client_ssl_context is None:
             transport, client = await create_connection(
                 loop,
                 lambda: protocol_factory(is_buffered),
@@ -637,12 +652,6 @@ async def TestClient(server_or_host, port=None,
                 ssl_handshake_timeout=ssl_handshake_timeout,
                 ssl_shutdown_timeout=ssl_shutdown_timeout
             )
-        if ct.use_start_tls:
-            await client.start_tls(ct.client_ssl_context,
-                                   server_hostname=server_hostname,
-                                   ssl_handshake_timeout=ssl_handshake_timeout,
-                                   ssl_shutdown_timeout=ssl_shutdown_timeout
-                                   )
 
         yield client
     finally:
