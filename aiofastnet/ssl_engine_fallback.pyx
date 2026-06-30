@@ -6,6 +6,7 @@ from cpython.bytearray cimport PyByteArray_AS_STRING
 from cpython.bytes cimport PyBytes_AS_STRING, PyBytes_GET_SIZE, PyBytes_FromStringAndSize
 from libc.limits cimport INT_MAX
 from libc.string cimport memcpy
+from libc.math cimport ceil
 
 from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
 from .utils cimport unlikely
@@ -35,7 +36,7 @@ cdef class SSLEngineFallback(SSLEngine):
         self._outgoing = ssl.MemoryBIO()
         self._incoming_buf = bytearray(read_buffer_size)
         self._outgoing_data = b""
-        self._write_max_size = 64*1024
+        self._write_max_size = write_max_size
 
         self.ssl_object = ssl_context.wrap_bio(
             self._incoming,
@@ -111,7 +112,7 @@ cdef class SSLEngineFallback(SSLEngine):
 
         bytes_read[0] = 0
         while buf_len != 0:
-            if self.ssl_object.pending() == 0 and self._incoming.pending == 0:
+            if <Py_ssize_t>self.ssl_object.pending() == 0 and <Py_ssize_t>self._incoming.pending == 0:
                 return SSLError.SSL_ERROR_WANT_READ
 
             read_len = INT_MAX if buf_len > INT_MAX else <int>buf_len
@@ -152,8 +153,11 @@ cdef class SSLEngineFallback(SSLEngine):
         if unlikely(available_for_writing == 0):
             return SSLError.SSL_ERROR_WANT_WRITE
 
+        cdef Py_ssize_t max_tls_rec_size = 16 * 1024
+
         # Always let to write the whole TLS record to prevent records of non-optimal size.
-        available_for_writing = max(16*1024, available_for_writing)
+        # Round up to the nearest 16 kb boundary
+        available_for_writing = <Py_ssize_t>(ceil((<double>available_for_writing)/max_tls_rec_size) * max_tls_rec_size)
 
         # We need to limit writing size, because ssl.SSLObject.write just writes until all data is written,
         # and memory bio grows without limits
