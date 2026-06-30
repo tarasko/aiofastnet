@@ -268,10 +268,6 @@ transport implementation. For transports created through `aiofastnet`, a
 compatibility wrapper preserves the documented `write()` /
 `writelines()` buffer-safety behavior.
 
-`aiofastnet` works with both dynamically linked Python distributions and
-standalone Python builds that statically link OpenSSL, including uv-managed
-Python installations.
-
 For TLS connections, `aiofastnet` has two SSL engines:
 
 - The direct OpenSSL engine is used when Python's `_ssl` module is dynamically
@@ -347,7 +343,7 @@ KTLS requires support from all of these layers:
 - The `tls` kernel module loaded.
 - OpenSSL built with KTLS support on a machine with suitable kernel headers.
 - Python's `_ssl` module dynamically linked against shared OpenSSL libraries
-  that aiofastnet can discover.
+  that aiofastnet can discover. This is pretty much any python except for python shipped with `uv`.
 - An `ssl.SSLContext` with `ssl.OP_ENABLE_KTLS` enabled.
 - A TLS version and cipher suite supported by the kernel TLS implementation.
 
