@@ -515,12 +515,6 @@ async def TestServer(protocol_factory=None,
                      is_buffered=False,
                      ssl_handshake_timeout=None,
                      ssl_shutdown_timeout=None):
-    if ct.use_start_tls:
-        if ssl_handshake_timeout is not None and ssl_handshake_timeout <= 0:
-            raise ValueError(f"ssl_handshake_timeout should be a positive number, got {ssl_handshake_timeout}")
-        if ssl_shutdown_timeout is not None and ssl_shutdown_timeout <= 0:
-            raise ValueError(f"ssl_shutdown_timeout should be a positive number, got {ssl_shutdown_timeout}")
-
     loop = asyncio.get_running_loop()
     clients = set()
     client_waiters = []
