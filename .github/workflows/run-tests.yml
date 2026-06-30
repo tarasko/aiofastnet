@@ -284,5 +284,3 @@ jobs:
       run: python setup.py build_ext --inplace
     - name: Run tests
       run: pytest -n auto -v -W error::ResourceWarning
-    - name: Run tests with fallback engine
-      run: pytest -n auto -v -W error::ResourceWarning
