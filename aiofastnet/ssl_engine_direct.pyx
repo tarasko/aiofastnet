@@ -135,10 +135,10 @@ def _ktls_prerequisites_available() -> bool:
             "Falling back to memory BIO.")
         return False
 
-    if not _linux_kernel_at_least(5, 19):
+    if not _linux_kernel_at_least(5, 1):
         _logger.warning(
             "Kernel TLS was requested but is unavailable because the Linux "
-            "kernel version is < 5.19. Falling back to memory BIO.")
+            "kernel version is < 5.1. Falling back to memory BIO.")
         return False
 
     if ssl.OPENSSL_VERSION_INFO[:3] < (3, 0, 0):
