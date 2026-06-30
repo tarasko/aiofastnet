@@ -217,8 +217,11 @@ cdef class SSLEngineFallback(SSLEngine):
         return PyBytes_GET_SIZE(self._outgoing_data) + self._outgoing.pending
 
     cdef Py_ssize_t outgoing_bio_get_data(self, char** pp) except -1:
-        if PyBytes_GET_SIZE(self._outgoing_data) == 0 and self._outgoing.pending:
-            self._outgoing_data = self._outgoing.read()
+        if self._outgoing.pending:
+            if PyBytes_GET_SIZE(self._outgoing_data) == 0:
+                self._outgoing_data = self._outgoing.read()
+            else:
+                self._outgoing_data += self._outgoing.read()
 
         pp[0] = PyBytes_AS_STRING(self._outgoing_data)
         return PyBytes_GET_SIZE(self._outgoing_data)
