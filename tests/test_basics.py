@@ -10,6 +10,7 @@ from contextlib import contextmanager
 
 import pytest
 
+import aiofastnet
 from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Protocol, SocketTransport, Transport
 from aiofastnet.ssl_transport import SSLTransport_Socket, SSLTransport_Transport
@@ -481,6 +482,9 @@ async def test_ssl_renegotiate_midstream(all_loops, ssl_conn_type):
 
     if ssl_conn_type.name == 'ktls':
         pytest.skip("kTLS doesn't support renegotiation")
+
+    if aiofastnet.OPENSSL_DYN_LIBS is None:
+        pytest.skip("Renegotiate is not available in standalone python")
 
     preface = b"A" * (4 * 1024)
     payload = b"B" * (4 * 1024)

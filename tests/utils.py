@@ -355,6 +355,8 @@ def _make_ktls_conn_type():
         pytest.skip("kTLS tests require Python >= 3.12")
     if sys.platform != "linux":
         pytest.skip("kTLS is available only on Linux")
+    if aiofastnet.OPENSSL_DYN_LIBS is None:
+        pytest.skip("kTLS is not available with standalone python")
 
     server_context, client_context = make_test_ssl_contexts(
         "tests/test.crt", "tests/test.key", True
