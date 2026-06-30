@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import ssl
+import sys
 from pathlib import Path
 
 import pytest
@@ -176,8 +177,9 @@ def test_ssl_engine_direct_certificate_chains_before_handshake():
         1024,
     )
 
-    assert ssl_engine.get_verified_chain() == []
-    assert ssl_engine.get_unverified_chain() == []
+    if sys.version_info >= (3, 13):
+        assert ssl_engine.get_verified_chain() == []
+        assert ssl_engine.get_unverified_chain() == []
     assert ssl_engine.shared_ciphers() is None
     assert ssl_engine.session_reused is False
 
@@ -268,6 +270,9 @@ async def test_ssl_get_channel_binding(ssl_conn_type):
 
 
 async def test_ssl_certificate_chains(ssl_conn_type):
+    if sys.version_info < (3, 13):
+        pytest.skip("SSLObject get_verified_chain/get_unverified_chain only available since 3.13")
+
     expected_der = _test_cert_der()
 
     async with TestServer(ct=ssl_conn_type) as server:
