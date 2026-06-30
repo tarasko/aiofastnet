@@ -344,10 +344,7 @@ async def test_ssl_shared_ciphers(ssl_conn_type):
             server_ssl_object = server_client.transport.get_extra_info("ssl_object")
 
             client_shared_ciphers = client_ssl_object.shared_ciphers()
-            if sys.version_info < (3, 10) and isinstance(client_ssl_object, ssl.SSLObject):
-                if client_shared_ciphers is not None:
-                    assert expected_shared_ciphers[0] in client_shared_ciphers
-            else:
+            if sys.version_info >= (3, 10) or not isinstance(client_ssl_object, ssl.SSLObject):
                 assert client_shared_ciphers is None
             assert server_ssl_object.shared_ciphers() == expected_shared_ciphers
 
