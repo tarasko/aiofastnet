@@ -5,6 +5,12 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.19.0
+------------------
+
+* aiofastnet now works with uv standalone python; ssl layer is slightly slower than when regular python is used
+but it still faster than ssl layer in asyncio and uvloop.
+
 0.18.0
 ------------------
 
