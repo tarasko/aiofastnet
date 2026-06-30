@@ -23,7 +23,7 @@ SSL_BIO_SIZE_DEFAULTS = {
     # Static size for the outgoing SSL BIO
     # Indicates how much encrypted data is accumulated before we call syscall send
     # Make sure we can fit 4 full TLS records (including TLS header)
-    "ssl_outgoing_bio_size": int(4 * (16 * 1024 + 64))
+    "ssl_outgoing_bio_size": int(16 * (16 * 1024 + 64))
 }
 
 DATA_RECEIVED_MAX_SIZE = 256 * 1024
