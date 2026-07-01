@@ -33,7 +33,7 @@ import aiofastnet
 aiofastnet.install_policy()
 ```
 
-Are you using aiohttp, asyncpg, websockets, uvicorn, or any other library that 
+Are you using aiohttp, asyncpg, websockets, uvicorn, or any other library that
 relies on asyncio networking? They become faster if you enable aiofastnet.
 The difference is especially noticeable when SSL is used.
 
@@ -53,7 +53,7 @@ The difference is especially noticeable when SSL is used.
 - [`loop.sendfile()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sendfile)
 
 asyncio libraries use these loop primitives to establish communication channels.
-The current implementations in both `asyncio` and `uvloop` are far from optimal,
+The current implementations in both `asyncio` and `uvloop` are not optimal,
 especially for SSL/TLS connections.
 
 Calling `aiofastnet.install_policy()` replaces these primitives with
@@ -68,7 +68,7 @@ provides the same kind of internal implementation you would find in `asyncio`
 and `uvloop`, but with much better optimization.
 
 As a cherry on top, `aiofastnet` supports [Kernel TLS](https://www.kernel.org/doc/html/latest/networking/tls.html)
-on Linux when the direct OpenSSL engine is available.
+on Linux.
 
 ## Benchmark
 
@@ -82,7 +82,7 @@ much of your total runtime is spent in transport/SSL plumbing.
 
 Source: [examples/benchmark.py](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark.py)
 
-In these benchmarks, using the direct OpenSSL engine, `aiofastnet` is up to
+In these benchmarks, `aiofastnet` is up to
 2.7x faster than standard `asyncio` and up to 1.6x faster than uvloop for TLS
 connections.
 
@@ -101,13 +101,10 @@ Source: [examples/benchmark_threaded.py](https://github.com/tarasko/aiofastnet/b
   and familiar loop-level networking operations.
 - **Works with the event loop you already use**. `aiofastnet` works with
   stock `asyncio` loops, `uvloop`, and `winloop`.
-- **Particularly strong for SSL-heavy workloads**. When Python exposes OpenSSL
-  through dynamic libraries, `aiofastnet` uses OpenSSL more directly and avoids
-  extra copies in the data path. With standalone Python builds it falls back to
-  the standard `ssl` module while keeping aiofastnet's transport behavior.
-- **Kernel TLS support on Linux**. When the direct OpenSSL engine is available,
-  native `sendfile` for TLS connections can use `SSL_sendfile`. `aiohttp` can
-  send `FileResponse` more efficiently over TLS connections.
+- **Particularly strong for SSL-heavy workloads**. `aiofastnet` uses OpenSSL directly and avoids
+  extra memory copying and unnecessary Python plumbing in the data path.
+- **Kernel TLS support on Linux**. Enable native `sendfile` for SSL. `aiohttp` can
+  send `FileResponse` more efficiently over secure connections.
 - **Safer transport write() / writelines() behavior**. If the socket cannot accept
   everything immediately, only `bytes` and `memoryview` objects backed by
   `bytes` are retained without copying. Other objects, including
@@ -132,7 +129,7 @@ $ pip install aiofastnet
 `aiofastnet` requires Python 3.9 or greater.
 
 For applications, the easiest way to enable `aiofastnet` is to use an event
-loop factory. 
+loop factory.
 
 ```python
 import asyncio
@@ -270,30 +267,27 @@ compatibility wrapper preserves the documented `write()` /
 
 For TLS connections, `aiofastnet` has two SSL engines:
 
-- The direct OpenSSL engine is used when Python's `_ssl` module is dynamically
-  linked against discoverable `libssl` / `libcrypto` shared libraries. This is
-  the fastest path and enables OpenSSL-specific features such as KTLS.
-- The fallback SSL engine is used when those OpenSSL libraries are not
-  discoverable, for example with standalone Python builds. It uses the standard
-  `ssl` module and is fully functional, but the SSL hot path cannot be optimized
-  as aggressively.
+- **Direct OpenSSL engine**. Used when Python's `_ssl` module is dynamically
+  linked against OpenSSL's `libssl` / `libcrypto` shared libraries.
+  This is the case for pretty much any Python distribution: `actions/setup-python`,
+  `conda`, `pyenv`, system Python, etc.
+  Calls OpenSSL functions like `SSL_read`/`SSL_write` directly.
+  It is the fastest path and allows to use KTLS.
+- **Fallback SSL engine**. Used when Python's `_ssl` module is statically linked
+  against OpenSSL. This is the case for Python shipped with `uv`.
+  The standard `ssl` module is used instead of direct OpenSSL calls. It does not support KTLS and is slower than the direct engine,
+  but still significantly faster than asyncio's and uvloop's SSL transports.
 
-You can check what `aiofastnet` found with:
+You can check which engine `aiofastnet` uses with:
 
 ```console
 $ python -c "import aiofastnet; print(aiofastnet.OPENSSL_DYN_LIBS)"
 ```
 
 If this prints `None`, aiofastnet is using the fallback SSL engine. TCP and
-Unix-domain socket transports still use aiofastnet's native implementation.
-TLS still works, but SSL throughput may be lower than with a dynamically linked
-OpenSSL build.
+Unix-domain socket transports still use `aiofastnet`'s native implementation.
 
-If maximum TLS performance or KTLS support matters, use a Python distribution
-whose `_ssl` module is dynamically linked against shared OpenSSL libraries, such
-as the Python provided by `actions/setup-python`, many system Python builds,
-pyenv, or Conda. If you use uv only for environment and package management and
-want the direct engine, create the virtual environment from such an interpreter:
+If maximum TLS performance or KTLS support matters, **do not use Python shipped with `uv`**.
 
 ```console
 $ uv venv --no-managed-python --python python
@@ -308,8 +302,7 @@ aiofastnet implements its own SSL object, and
 When the fallback SSL engine is used, `get_extra_info("ssl_object")` returns the
 standard `ssl.SSLObject`.
 
-On the direct SSL object, compared with `ssl.SSLObject`, the following public
-methods are absent:
+For the direct SSL engine, the following public methods and attributes of `SSLObject` are absent:
 
 - `do_handshake()`
 - `read()`
@@ -318,9 +311,6 @@ methods are absent:
 - `pending()`
 - `selected_npn_protocol()`
 - `verify_client_post_handshake()`
-
-The following public attribute is also absent on the direct SSL object:
-
 - `session`
 
 ## Kernel TLS (KTLS) support on Linux
@@ -328,21 +318,20 @@ The following public attribute is also absent on the direct SSL object:
 On Linux, `aiofastnet` can use OpenSSL's KTLS support for TLS
 connections. KTLS is beneficial if any of the following is true:
 
-* Static files need to be sent over TLS connection and `sendfile()` can be used.
-In that case the kernel can read data directly instead of forcing the application to 
-copy file contents through userspace.
-* Some high-end NICs support hardware TLS offload. This leads to huge CPU savings.
+* Static files need to be sent over a TLS connection and `sendfile()` can be used.
+  In that case the kernel can read data directly instead of forcing the application to
+  copy file contents through userspace.
+* Some high-end NICs support hardware TLS offload, which leads to huge CPU savings.
 
-If you only sent regular data (not static files) and do not have high-end NIC with TLS offload, 
-enabling KTLS may actually cause a slight performance degradation. CPU cost-wise it doesn't matter where encryption/decryption
-happens in kernel or in userspace, but the kernel `tls` module has to do extra bookkeeping. 
-Also, aiofastnet can batch data and reduce amount of syscalls when KTLS is not used. 
+If you only send regular data (not static files) and do not have a high-end NIC with TLS offload,
+enabling KTLS may actually cause a slight performance degradation. In terms of CPU cost, it does not matter whether
+encryption/decryption happens in the kernel or in userspace, but the kernel `tls` module has to do extra bookkeeping.
+Also, aiofastnet can batch data and reduce the number of syscalls when KTLS is not used.
 
 KTLS requires support from all of these layers:
 
-- The `tls` kernel module loaded.
-- Python's `_ssl` module dynamically linked against shared OpenSSL libraries
-  that aiofastnet can discover. This is pretty much any python except for python shipped with `uv`.
+- The `tls` kernel module is loaded.
+- The direct SSL engine. KTLS does not work with `uv` Python.
 - OpenSSL built with KTLS support on a machine with suitable kernel headers.
 - An `ssl.SSLContext` with `ssl.OP_ENABLE_KTLS` enabled.
 - A TLS version and cipher suite supported by the kernel TLS implementation.
@@ -353,12 +342,11 @@ To load the kernel module:
 $ sudo modprobe tls
 ```
 
-To check if python is linked-dynamically against OpenSSL:
+To check if the direct SSL engine is used, `aiofastnet` should be able to find dynamic OpenSSL libraries:
 
 ```console
 $ python -c "import aiofastnet; print(aiofastnet.OPENSSL_DYN_LIBS)"
 ```
-If it prints None, then python is linked statically and KTLS can't be used.
 
 To enable KTLS on Python SSL contexts (available in Python 3.12+):
 
@@ -372,18 +360,10 @@ client_context = ssl.create_default_context()
 client_context.options |= ssl.OP_ENABLE_KTLS
 ```
 
-The OpenSSL library used by Python must itself have KTLS support and must be
-available to aiofastnet as dynamic `libssl` / `libcrypto` libraries. Python
-distributions often ship their own OpenSSL libraries, and those libraries may
+The OpenSSL library used by Python must itself have KTLS support. Sometimes Python
+distributions ship their own OpenSSL libraries, and those libraries may
 have been built on older systems where KTLS was not available. That can be true
-even when the host running your program has a newer kernel. Standalone Python
-builds that use aiofastnet's fallback SSL engine do not support KTLS.
-
-Check which OpenSSL Python is using:
-
-```console
-$ python -c "import ssl; print(ssl.OPENSSL_VERSION); print(ssl._ssl.__file__)"
-```
+even when the host running your program has a newer kernel.
 
 If your Python distribution bundles an older or non-KTLS OpenSSL, one practical
 option is to locate the bundled `libssl` and `libcrypto` files and replace them
@@ -391,10 +371,11 @@ with symbolic links to a newer system OpenSSL build that supports KTLS. This is
 often useful with Conda Python, which commonly ships its own OpenSSL libraries
 inside the environment.
 
-KTLS support by kernel version is outline [here.](https://delthas.fr/blog/2023/kernel-tls/)
+KTLS support by kernel version is outlined [here](https://delthas.fr/blog/2023/kernel-tls/).
 
-Check out [aiohttp_ktls_fileresponse.py](https://github.com/tarasko/aiofastnet/blob/master/examples/aiohttp_ktls_fileresponse.py) and [aiohttp_ws_speedup.py](https://github.com/tarasko/aiofastnet/blob/master/examples/aiohttp_ws_speedup.py)  
-examples showing how you can speed up aiohttp (or any other asyncio application).
+Check out [aiohttp_ktls_fileresponse.py](https://github.com/tarasko/aiofastnet/blob/master/examples/aiohttp_ktls_fileresponse.py)
+and [aiohttp_ws_speedup.py](https://github.com/tarasko/aiofastnet/blob/master/examples/aiohttp_ws_speedup.py) for examples showing
+how you can speed up aiohttp (or any other asyncio application).
 
 Some other useful links:
 * https://dev.to/ozkanpakdil/kernel-tls-nic-offload-and-socket-sharding-whats-new-and-who-uses-it-4e1f
@@ -485,7 +466,7 @@ one thread.
 
 7. Build coverage report:
 
-Building for coverage testing requires enabling line tracing in cython, which 
+Building for coverage testing requires enabling line tracing in cython, which
 significantly slows down extension modules. It is disabled by default. You
 would need to rebuild specifically with coverage support.
 
