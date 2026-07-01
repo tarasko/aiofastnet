@@ -16,7 +16,7 @@ from aiofastnet.transport import Protocol, SocketTransport, Transport
 from aiofastnet.ssl_transport import SSLTransport_Socket, SSLTransport_Transport
 from tests.utils import TestClient, TestServer, \
     make_test_ssl_contexts, AsyncClient, SomeException, _logger, \
-    start_tls, sendfile
+    start_tls, sendfile, ConnectionType
 
 
 @pytest.mark.parametrize("msg_size", [1, 2, 3, 4, 5, 6, 7, 8, 29, 64, 256 * 1024, 6 * 1024 * 1024])
@@ -940,9 +940,40 @@ async def test_ssl_timeout_validation(all_loops, ssl_conn_type, timeout_name, ti
     kwargs = {timeout_name: timeout_value}
     match = f"{timeout_name} should be a positive number"
 
-    with pytest.raises(ValueError, match=match):
-        async with TestServer(ct=ssl_conn_type, **kwargs) as server:
-            pass
+    if ssl_conn_type.use_start_tls:
+        waiter = asyncio.get_running_loop().create_future()
+
+        class ServerProtocol(asyncio.Protocol):
+            def connection_made(self, transport):
+                self.transport = transport
+                asyncio.get_running_loop().create_task(self._start_tls())
+
+            async def _start_tls(self):
+                try:
+                    await start_tls(
+                        asyncio.get_running_loop(),
+                        self.transport,
+                        self,
+                        ssl_conn_type.server_ssl_context,
+                        server_side=True,
+                        **kwargs,
+                    )
+                except Exception as exc:
+                    if not waiter.done():
+                        waiter.set_exception(exc)
+                    self.transport.close()
+                else:
+                    if not waiter.done():
+                        waiter.set_result(None)
+
+        async with TestServer(ServerProtocol, ct=ConnectionType("tcp")) as server:
+            async with TestClient(server, ct=ConnectionType("tcp")):
+                with pytest.raises(ValueError, match=match):
+                    await waiter
+    else:
+        with pytest.raises(ValueError, match=match):
+            async with TestServer(ct=ssl_conn_type, **kwargs):
+                pass
 
     async with TestServer(ct=ssl_conn_type) as server:
         with pytest.raises(ValueError, match=match):

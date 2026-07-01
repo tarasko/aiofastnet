@@ -292,6 +292,50 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         self._readn_waiter = None
 
 
+class ServerStartTLSProtocol(asyncio.Protocol):
+    def __init__(self, protocol_factory, ssl_context, ssl_handshake_timeout=None, ssl_shutdown_timeout=None):
+        self._protocol_factory = protocol_factory
+        self._ssl_context = ssl_context
+        self._ssl_handshake_timeout = ssl_handshake_timeout
+        self._ssl_shutdown_timeout = ssl_shutdown_timeout
+        self._protocol = None
+        self._transport = None
+        self._start_tls_task = None
+        self._connection_made = False
+
+    def connection_made(self, transport):
+        self._transport = transport
+        transport.pause_reading()
+        self._protocol = self._protocol_factory()
+        self._start_tls_task = asyncio.get_running_loop().create_task(self._start_tls())
+
+    async def _start_tls(self):
+        try:
+            self._transport = await start_tls(
+                asyncio.get_running_loop(),
+                self._transport,
+                self._protocol,
+                self._ssl_context,
+                server_side=True,
+                ssl_handshake_timeout=self._ssl_handshake_timeout,
+                ssl_shutdown_timeout=self._ssl_shutdown_timeout,
+            )
+        except Exception:
+            _logger.exception("ServerStartTLSProtocol: unable to start TLS")
+            if self._transport is not None:
+                self._transport.close()
+            return
+
+        self._connection_made = True
+        self._protocol.connection_made(self._transport)
+
+    def connection_lost(self, exc):
+        if self._start_tls_task is not None and not self._start_tls_task.done():
+            self._start_tls_task.cancel()
+        if self._connection_made:
+            self._protocol.connection_lost(exc)
+
+
 @dataclass(frozen=True)
 class EchoServerHandle:
     server: asyncio.Server
@@ -488,14 +532,32 @@ async def TestServer(protocol_factory=None,
             )
         else:
             path = None
+            if ct.use_start_tls:
+                def server_protocol_factory():
+                    return ServerStartTLSProtocol(
+                        protocol_factory,
+                        ct.server_ssl_context,
+                        ssl_handshake_timeout=ssl_handshake_timeout,
+                        ssl_shutdown_timeout=ssl_shutdown_timeout,
+                    )
+
+                server_ssl_context = None
+                server_ssl_handshake_timeout = None
+                server_ssl_shutdown_timeout = None
+            else:
+                server_protocol_factory = protocol_factory
+                server_ssl_context = ct.server_ssl_context
+                server_ssl_handshake_timeout = ssl_handshake_timeout
+                server_ssl_shutdown_timeout = ssl_shutdown_timeout
+
             server = await create_server(
                 loop,
-                protocol_factory,
+                server_protocol_factory,
                 host=host,
                 port=port,
-                ssl=ct.server_ssl_context,
-                ssl_handshake_timeout=ssl_handshake_timeout,
-                ssl_shutdown_timeout=ssl_shutdown_timeout,
+                ssl=server_ssl_context,
+                ssl_handshake_timeout=server_ssl_handshake_timeout,
+                ssl_shutdown_timeout=server_ssl_shutdown_timeout,
             )
         try:
             if ct.name == "unix":
@@ -553,7 +615,26 @@ async def TestClient(server_or_host, port=None,
                 lambda: protocol_factory(is_buffered),
                 path=path if path is not None else host,
             )
-        elif ct.use_start_tls or ct.client_ssl_context is None:
+        elif ct.use_start_tls:
+            client = protocol_factory(is_buffered)
+            transport, _ = await create_connection(
+                loop,
+                asyncio.Protocol,
+                host=host,
+                port=port,
+            )
+            transport = await start_tls(
+                loop,
+                transport,
+                client,
+                ct.client_ssl_context,
+                server_side=False,
+                server_hostname=server_hostname,
+                ssl_handshake_timeout=ssl_handshake_timeout,
+                ssl_shutdown_timeout=ssl_shutdown_timeout,
+            )
+            client.connection_made(transport)
+        elif ct.client_ssl_context is None:
             transport, client = await create_connection(
                 loop,
                 lambda: protocol_factory(is_buffered),
@@ -571,12 +652,6 @@ async def TestClient(server_or_host, port=None,
                 ssl_handshake_timeout=ssl_handshake_timeout,
                 ssl_shutdown_timeout=ssl_shutdown_timeout
             )
-        if ct.use_start_tls:
-            await client.start_tls(ct.client_ssl_context,
-                                   server_hostname=server_hostname,
-                                   ssl_handshake_timeout=ssl_handshake_timeout,
-                                   ssl_shutdown_timeout=ssl_shutdown_timeout
-                                   )
 
         yield client
     finally:
