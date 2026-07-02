@@ -54,7 +54,7 @@ follow_imports = "silent"
 strict = true
 
 [tool.ruff]
-line-length = 120
+line-length = 150
 target-version = "py39"
 
 [tool.coverage.run]
