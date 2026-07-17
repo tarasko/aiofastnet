@@ -22,8 +22,9 @@
   </a>
 </p>
 
-`aiofastnet` gives your asyncio networking application an instant performance boost,
-lower latency and higher throughput by just adding two lines:
+`aiofastnet` is a very efficient C/Cython drop-in re-implementation of asyncio's loop Transport/Protocol layer.
+You can use with your current loop (asyncio loops, uvloop, winloop, etc) to improve overall networking performance.
+There are multiple ways to enable `aiofastnet`, the simplest is to install it before calling `asyncio.run`
 
 ```python
 import aiofastnet
@@ -36,6 +37,29 @@ aiofastnet.install_policy()
 Are you using aiohttp, asyncpg, websockets, uvicorn, or any other library that
 relies on asyncio networking? They become faster if you enable aiofastnet.
 The difference is especially noticeable when SSL is used.
+
+## Benchmark
+
+The benchmark below compares echo round-trips over loopback for TCP and SSL.
+The exact gains depend on workload, message sizes, CPU, OpenSSL version, and how
+much of your total runtime is spent in transport/SSL plumbing.
+
+[![Benchmark](https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark.png)](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark.png)
+
+[![Speedup](https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark_speedup.png)](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_speedup.png)
+
+Source: [examples/benchmark.py](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark.py)
+
+In these benchmarks, `aiofastnet` is up to
+2.7x faster than standard `asyncio` and up to 1.6x faster than uvloop for TLS
+connections.
+
+`aiofastnet` is fully compatible with free-threaded Python builds and scales
+as expected when multiple event loops run in parallel across multiple threads.
+
+[![Threaded benchmark](https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark_threaded.png)](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_threaded.png)
+
+Source: [examples/benchmark_threaded.py](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_threaded.py)
 
 ## How is this possible?
 
@@ -69,29 +93,6 @@ and `uvloop`, but with much better optimization.
 
 As a cherry on top, `aiofastnet` supports [Kernel TLS](https://www.kernel.org/doc/html/latest/networking/tls.html)
 on Linux.
-
-## Benchmark
-
-The benchmark below compares echo round-trips over loopback for TCP and SSL.
-The exact gains depend on workload, message sizes, CPU, OpenSSL version, and how
-much of your total runtime is spent in transport/SSL plumbing.
-
-[![Benchmark](https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark.png)](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark.png)
-
-[![Speedup](https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark_speedup.png)](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_speedup.png)
-
-Source: [examples/benchmark.py](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark.py)
-
-In these benchmarks, `aiofastnet` is up to
-2.7x faster than standard `asyncio` and up to 1.6x faster than uvloop for TLS
-connections.
-
-`aiofastnet` is fully compatible with free-threaded Python builds and scales
-as expected when multiple event loops run in parallel across multiple threads.
-
-[![Threaded benchmark](https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark_threaded.png)](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_threaded.png)
-
-Source: [examples/benchmark_threaded.py](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_threaded.py)
 
 ## Why Use aiofastnet
 
