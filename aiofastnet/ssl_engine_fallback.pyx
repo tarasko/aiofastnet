@@ -117,6 +117,8 @@ cdef class SSLEngineFallback(SSLEngine):
 
             read_len = INT_MAX if buf_len > INT_MAX else <int>buf_len
             try:
+                # This reads no more than TLS record size(16 Kb) per call, even if bigger buffer is passed
+                # Limitation of the underlying SSL_read call.
                 data = self.ssl_object.read(read_len)
             except ssl.SSLError as exc:
                 ssl_error = self._translate_ssl_error(exc)
@@ -170,6 +172,8 @@ cdef class SSLEngineFallback(SSLEngine):
             SSLError ssl_error
 
         try:
+            # Contrary to ssl_object.read, ssl_object.write will write everything at once even if data is bigger than
+            # TLS record size (16 KB)
             last_bytes_written = self.ssl_object.write(data)
             bytes_written[0] += last_bytes_written
             if unlikely(self._is_debug):
