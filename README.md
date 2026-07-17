@@ -22,9 +22,10 @@
   </a>
 </p>
 
-`aiofastnet` is a very efficient C/Cython drop-in re-implementation of asyncio's loop Transport/Protocol layer.
-You can use with your current loop (asyncio loops, uvloop, winloop, etc) to improve overall networking performance.
-There are multiple ways to enable `aiofastnet`, the simplest is to install it before calling `asyncio.run`
+`aiofastnet` is a very efficient C/Cython drop-in reimplementation of asyncio's loop Transport/Protocol layer.
+You can use it with your current event loop (asyncio loops, uvloop, winloop, etc.) to improve overall networking performance.
+
+There are multiple ways to enable `aiofastnet`; the simplest is to install it before calling `asyncio.run()`.
 
 ```python
 import aiofastnet
