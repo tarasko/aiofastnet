@@ -11,8 +11,13 @@ from .utils cimport unlikely
 
 import logging
 
-cdef object _logger = logging.getLogger('aiofastnet.ssl')
-cdef object _zero = 0
+cdef:
+    _logger = logging.getLogger('aiofastnet.ssl')
+    _zero = 0
+    _ssl_want_read_exc = ssl.SSLWantReadError
+    _ssl_want_write_exc = ssl.SSLWantWriteError
+    _ssl_zero_return_exc = ssl.SSLZeroReturnError
+    _ssl_syscall_exc = ssl.SSLSyscallError
 
 
 cdef class SSLEngineFallback(SSLEngine):
@@ -49,15 +54,16 @@ cdef class SSLEngineFallback(SSLEngine):
         )
 
     cdef inline SSLError _translate_ssl_error(self, exc) except SSLError.PYTHON_EXC:
-        if isinstance(exc, ssl.SSLWantReadError):
+        if isinstance(exc, _ssl_want_read_exc):
             return SSLError.SSL_ERROR_WANT_READ
-        if isinstance(exc, ssl.SSLWantWriteError):
+        elif isinstance(exc, _ssl_want_write_exc):
             return SSLError.SSL_ERROR_WANT_WRITE
-        if isinstance(exc, ssl.SSLZeroReturnError):
+        elif isinstance(exc, _ssl_zero_return_exc):
             return SSLError.SSL_ERROR_ZERO_RETURN
-        if isinstance(exc, ssl.SSLSyscallError):
+        elif isinstance(exc, _ssl_syscall_exc):
             raise ConnectionResetError() from exc
-        raise exc
+        else:
+            raise exc
 
     cdef int ktls_send_enabled(self) noexcept:
         return 0
@@ -78,15 +84,14 @@ cdef class SSLEngineFallback(SSLEngine):
         try:
             self.ssl_object.do_handshake()
         except ssl.SSLError as exc:
-            self._drain_outgoing_bio_to_queue()
             ssl_error = self._translate_ssl_error(exc)
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.do_handshake(), %s", conn, ssl_error_name(ssl_error))
             if ssl_error in (SSLError.SSL_ERROR_WANT_READ, SSLError.SSL_ERROR_WANT_WRITE):
                 return ssl_error
             raise
-
-        self._drain_outgoing_bio_to_queue()
+        finally:
+            self._drain_outgoing_bio_to_queue()
 
         if unlikely(self._is_debug):
             _logger.debug("%r: SSLObject.do_handshake() complete", conn)
@@ -96,7 +101,6 @@ cdef class SSLEngineFallback(SSLEngine):
         try:
             self.ssl_object.unwrap()
         except ssl.SSLError as exc:
-            self._drain_outgoing_bio_to_queue()
             ssl_error = self._translate_ssl_error(exc)
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.unwrap(), %s", conn, ssl_error_name(ssl_error))
@@ -105,8 +109,8 @@ cdef class SSLEngineFallback(SSLEngine):
             if ssl_error == SSLError.SSL_ERROR_ZERO_RETURN:
                 return SSLError.SSL_ERROR_NONE
             raise
-
-        self._drain_outgoing_bio_to_queue()
+        finally:
+            self._drain_outgoing_bio_to_queue()
 
         if unlikely(self._is_debug):
             _logger.debug("%r: SSLObject.unwrap() complete", conn)
@@ -118,39 +122,40 @@ cdef class SSLEngineFallback(SSLEngine):
             SSLError ssl_error
 
         total_bytes_read[0] = 0
-        while buf_len != 0:
-            if <Py_ssize_t>self.ssl_object.pending() == 0 and <Py_ssize_t>self._incoming.pending == 0:
-                return SSLError.SSL_ERROR_WANT_READ
+        try:
+            while buf_len != 0:
+                if <Py_ssize_t>self.ssl_object.pending() == 0 and <Py_ssize_t>self._incoming.pending == 0:
+                    return SSLError.SSL_ERROR_WANT_READ
 
-            try:
-                # This reads no more than TLS record size(16 Kb) per call, even if bigger buffer is passed
-                # Limitation of the underlying SSL_read call.
-                # It is ok to pass 0 as the first argument, ssl_object.read ignores it when buffer is provided
-                # explicitly
-                bytes_read = self.ssl_object.read(_zero, PyMemoryView_FromMemory(buf, buf_len, PyBUF_WRITE))
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: SSLObject.read(0, buffer(sz=%d))=%d", conn, buf_len, bytes_read)
-            except ssl.SSLError as exc:
-                ssl_error = self._translate_ssl_error(exc)
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: SSLObject.read(0, buffer(sz=%d)), %s",
-                                  conn, buf_len, ssl_error_name(ssl_error))
-                if ssl_error in (
-                    SSLError.SSL_ERROR_WANT_READ,
-                    SSLError.SSL_ERROR_WANT_WRITE,
-                    SSLError.SSL_ERROR_ZERO_RETURN,
-                ):
-                    return ssl_error
-                raise
+                try:
+                    # This reads no more than TLS record size(16 Kb) per call, even if bigger buffer is passed
+                    # Limitation of the underlying SSL_read call.
+                    # It is ok to pass 0 as the first argument, ssl_object.read ignores it when buffer is provided
+                    # explicitly
+                    bytes_read = self.ssl_object.read(_zero, PyMemoryView_FromMemory(buf, buf_len, PyBUF_WRITE))
+                    if unlikely(self._is_debug):
+                        _logger.debug("%r: SSLObject.read(0, buffer(sz=%d))=%d", conn, buf_len, bytes_read)
+                except ssl.SSLError as exc:
+                    ssl_error = self._translate_ssl_error(exc)
+                    if unlikely(self._is_debug):
+                        _logger.debug("%r: SSLObject.read(0, buffer(sz=%d)), %s",
+                                      conn, buf_len, ssl_error_name(ssl_error))
+                    if ssl_error in (
+                        SSLError.SSL_ERROR_WANT_READ,
+                        SSLError.SSL_ERROR_WANT_WRITE,
+                        SSLError.SSL_ERROR_ZERO_RETURN,
+                    ):
+                        return ssl_error
+                    raise
 
+                if bytes_read == 0:
+                    return SSLError.SSL_ERROR_ZERO_RETURN
+
+                total_bytes_read[0] += bytes_read
+                buf += bytes_read
+                buf_len -= bytes_read
+        finally:
             self._drain_outgoing_bio_to_queue()
-
-            if bytes_read == 0:
-                return SSLError.SSL_ERROR_ZERO_RETURN
-
-            total_bytes_read[0] += bytes_read
-            buf += bytes_read
-            buf_len -= bytes_read
 
         return SSLError.SSL_ERROR_NONE
 
@@ -239,7 +244,7 @@ cdef class SSLEngineFallback(SSLEngine):
             pp[0] = NULL
             return 0
 
-        chunk = self._outgoing_chunks[0]
+        chunk = <bytes>self._outgoing_chunks[0]
         pp[0] = PyBytes_AS_STRING(chunk) + self._outgoing_offset
         return PyBytes_GET_SIZE(chunk) - self._outgoing_offset
 
