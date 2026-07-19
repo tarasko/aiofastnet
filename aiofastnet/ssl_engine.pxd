@@ -33,6 +33,7 @@ cdef class SSLEngine:
 
     cdef incoming_bio_get_write_buf(self, char **pp, Py_ssize_t *space)
     cdef incoming_bio_produce(self, Py_ssize_t nbytes)
+    cdef incoming_bio_write(self, data)
 
     cdef bint sendfile_available(self) noexcept
     cdef allow_renegotiation(self)

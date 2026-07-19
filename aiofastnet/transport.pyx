@@ -62,6 +62,9 @@ cdef class Protocol:
     cpdef buffer_updated(self, Py_ssize_t bytes_read):
         raise NotImplementedError()
 
+    cpdef data_received(self, data):
+        raise NotImplementedError()
+
 
 cpdef aiofn_is_buffered_protocol(protocol):
     try:
@@ -739,7 +742,10 @@ cdef class SocketTransport(Transport):
 
     cdef inline _call_protocol_data_received(self, data):
         try:
-            self._protocol.data_received(data)
+            if self._protocol_aiofn:
+                (<Protocol> self._protocol).data_received(data)
+            else:
+                self._protocol.data_received(data)
         except:
             aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.')
 

@@ -2,7 +2,6 @@ import ssl
 
 from cpython.memoryview cimport PyMemoryView_FromMemory
 from cpython.buffer cimport PyBUF_READ, PyBUF_WRITE
-from cpython.bytearray cimport PyByteArray_AS_STRING
 
 from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
 from .utils cimport unlikely
@@ -22,7 +21,6 @@ cdef:
 cdef class SSLEngineFallback(SSLEngine):
     cdef:
         object _incoming
-        bytearray _incoming_buf
 
         object _outgoing
         Py_ssize_t _write_max_size_hint
@@ -36,7 +34,6 @@ cdef class SSLEngineFallback(SSLEngine):
 
         self._incoming = ssl.MemoryBIO()
         self._outgoing = ssl.MemoryBIO()
-        self._incoming_buf = bytearray(read_buffer_size)
         self._write_max_size_hint = write_max_size_hint
 
         self.ssl_object = ssl_context.wrap_bio(
@@ -197,13 +194,13 @@ cdef class SSLEngineFallback(SSLEngine):
         raise NotImplementedError()
 
     cdef incoming_bio_get_write_buf(self, char **pp, Py_ssize_t *space):
-        pp[0] = PyByteArray_AS_STRING(self._incoming_buf)
-        space[0] = len(self._incoming_buf)
+        raise NotImplementedError("SSLEngineFallback receives incoming BIO data through incoming_bio_write()")
 
     cdef incoming_bio_produce(self, Py_ssize_t nbytes):
-        if nbytes == 0:
-            return
-        self._incoming.write(PyMemoryView_FromMemory(PyByteArray_AS_STRING(self._incoming_buf), nbytes, PyBUF_READ))
+        raise NotImplementedError("SSLEngineFallback receives incoming BIO data through incoming_bio_write()")
+
+    cdef incoming_bio_write(self, data):
+        self._incoming.write(data)
 
     cdef allow_renegotiation(self):
         pass

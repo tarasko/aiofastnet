@@ -20,6 +20,7 @@ cdef class Protocol:
     cdef get_buffer_c(self, Py_ssize_t hint, char** buf, Py_ssize_t* buf_len)
     cpdef get_buffer(self, Py_ssize_t hint)
     cpdef buffer_updated(self, Py_ssize_t bytes_read)
+    cpdef data_received(self, data)
 
     # Helper for more accurate write buffer size estimation
     cpdef Py_ssize_t get_local_write_buffer_size(self) except -1
