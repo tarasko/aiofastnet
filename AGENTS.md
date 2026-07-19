@@ -5,6 +5,8 @@ Read README.md for project description.
 # Code style
 
 * Max line width: 150
+* In Cython, do not give side-effect-only helpers fake return types such as `int except -1`.
+  Use a no-result helper signature instead, unless the returned value is meaningful to callers.
 
 # Troubleshooting
 

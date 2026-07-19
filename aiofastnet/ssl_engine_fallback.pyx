@@ -48,19 +48,6 @@ cdef class SSLEngineFallback(SSLEngine):
             server_hostname=server_hostname,
         )
 
-    cdef inline int _capture_outgoing_data(self) except -1:
-        cdef:
-            bytes chunk
-            Py_ssize_t chunk_size
-
-        while self._outgoing.pending:
-            chunk = self._outgoing.read()
-            chunk_size = PyBytes_GET_SIZE(chunk)
-            if chunk_size != 0:
-                self._outgoing_chunks.append(chunk)
-                self._outgoing_size += chunk_size
-        return 1
-
     cdef inline SSLError _translate_ssl_error(self, exc) except SSLError.PYTHON_EXC:
         if isinstance(exc, ssl.SSLWantReadError):
             return SSLError.SSL_ERROR_WANT_READ
@@ -91,7 +78,7 @@ cdef class SSLEngineFallback(SSLEngine):
         try:
             self.ssl_object.do_handshake()
         except ssl.SSLError as exc:
-            self._capture_outgoing_data()
+            self._drain_outgoing_bio_to_queue()
             ssl_error = self._translate_ssl_error(exc)
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.do_handshake(), %s", conn, ssl_error_name(ssl_error))
@@ -99,7 +86,7 @@ cdef class SSLEngineFallback(SSLEngine):
                 return ssl_error
             raise
 
-        self._capture_outgoing_data()
+        self._drain_outgoing_bio_to_queue()
 
         if unlikely(self._is_debug):
             _logger.debug("%r: SSLObject.do_handshake() complete", conn)
@@ -109,7 +96,7 @@ cdef class SSLEngineFallback(SSLEngine):
         try:
             self.ssl_object.unwrap()
         except ssl.SSLError as exc:
-            self._capture_outgoing_data()
+            self._drain_outgoing_bio_to_queue()
             ssl_error = self._translate_ssl_error(exc)
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.unwrap(), %s", conn, ssl_error_name(ssl_error))
@@ -119,7 +106,7 @@ cdef class SSLEngineFallback(SSLEngine):
                 return SSLError.SSL_ERROR_NONE
             raise
 
-        self._capture_outgoing_data()
+        self._drain_outgoing_bio_to_queue()
 
         if unlikely(self._is_debug):
             _logger.debug("%r: SSLObject.unwrap() complete", conn)
@@ -156,7 +143,7 @@ cdef class SSLEngineFallback(SSLEngine):
                     return ssl_error
                 raise
 
-            self._capture_outgoing_data()
+            self._drain_outgoing_bio_to_queue()
 
             if bytes_read == 0:
                 return SSLError.SSL_ERROR_ZERO_RETURN
@@ -196,12 +183,12 @@ cdef class SSLEngineFallback(SSLEngine):
             # Contrary to ssl_object.read, ssl_object.write writes everything at once even if data is bigger than
             # TLS record size (16 KB)
             last_bytes_written = self.ssl_object.write(data)
-            self._capture_outgoing_data()
+            self._drain_outgoing_bio_to_queue()
             bytes_written[0] += last_bytes_written
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.write(data_len=%d)=%d", conn, bytes_to_write, last_bytes_written)
         except ssl.SSLError as exc:
-            self._capture_outgoing_data()
+            self._drain_outgoing_bio_to_queue()
             ssl_error = self._translate_ssl_error(exc)
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.write(data_len=%d), %s", conn, data_len, ssl_error_name(ssl_error))
@@ -279,3 +266,15 @@ cdef class SSLEngineFallback(SSLEngine):
             nbytes -= remaining
             self._outgoing_chunks.popleft()
             self._outgoing_offset = 0
+
+    cdef inline _drain_outgoing_bio_to_queue(self):
+        cdef:
+            bytes chunk
+            Py_ssize_t chunk_size
+
+        if self._outgoing.pending:
+            chunk = self._outgoing.read()
+            chunk_size = PyBytes_GET_SIZE(chunk)
+            if chunk_size != 0:
+                self._outgoing_chunks.append(chunk)
+                self._outgoing_size += chunk_size
