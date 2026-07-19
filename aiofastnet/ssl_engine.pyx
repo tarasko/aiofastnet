@@ -53,6 +53,9 @@ cdef class SSLEngine:
     cdef incoming_bio_produce(self, Py_ssize_t nbytes):
         raise NotImplementedError()
 
+    cdef incoming_bio_write(self, data):
+        raise NotImplementedError()
+
     cdef bint sendfile_available(self) noexcept:
         return False
 
