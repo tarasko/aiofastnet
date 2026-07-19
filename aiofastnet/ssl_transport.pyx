@@ -1185,7 +1185,9 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             had_successful_writes = True
             self._ssl_engine.outgoing_bio_consume(bytes_sent)
             if bytes_sent == sz:
-                return True
+                if self._ssl_engine.outgoing_bio_pending() == 0:
+                    return True
+                continue
 
             ptr += bytes_sent
             sz -= bytes_sent
@@ -1596,20 +1598,20 @@ cdef class SSLTransport_Transport(SSLTransportBase):
             char* ptr
             long sz
 
-        sz = self._ssl_engine.outgoing_bio_get_data(&ptr)
-        if sz == 0:
-            return True
+        while True:
+            sz = self._ssl_engine.outgoing_bio_get_data(&ptr)
+            if sz == 0:
+                return True
 
-        if self._is_aiofn_transport:
-            (<Transport> self._transport).write_c(ptr, sz)
-        else:
-            self._transport.write(PyBytes_FromStringAndSize(ptr, sz))
+            if self._is_aiofn_transport:
+                (<Transport> self._transport).write_c(ptr, sz)
+            else:
+                self._transport.write(PyBytes_FromStringAndSize(ptr, sz))
 
-        self._ssl_engine.outgoing_bio_consume(sz)
-        if unlikely(self._is_debug):
-            _logger.debug("%r: flushed %d bytes from outgoing BIO", self, sz)
+            self._ssl_engine.outgoing_bio_consume(sz)
+            if unlikely(self._is_debug):
+                _logger.debug("%r: flushed %d bytes from outgoing BIO", self, sz)
 
-        return True
 
     cdef bint _should_retry_after_want_write(self) except -1:
         """
