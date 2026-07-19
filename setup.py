@@ -46,7 +46,7 @@ if os.name == 'nt' and with_debug:
     extra_link_args = ['/DEBUG']
 else:
     if sys.platform in ("linux", "darwin"):
-        extra_compile_args = ["-O3", "-fno-semantic-interposition", "-fvisibility=hidden"]
+        extra_compile_args = ["-O2"]
     else:
         extra_compile_args = None
     extra_link_args = None
