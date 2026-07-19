@@ -1,11 +1,9 @@
 import ssl
 
 from cpython.memoryview cimport PyMemoryView_FromMemory
-from cpython.buffer cimport PyBUF_READ
+from cpython.buffer cimport PyBUF_READ, PyBUF_WRITE
 from cpython.bytearray cimport PyByteArray_AS_STRING
-from cpython.bytes cimport PyBytes_AS_STRING, PyBytes_GET_SIZE, PyBytes_FromStringAndSize
-from libc.limits cimport INT_MAX
-from libc.string cimport memcpy
+from cpython.bytes cimport PyBytes_AS_STRING, PyBytes_GET_SIZE
 from libc.math cimport ceil
 
 from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
@@ -14,6 +12,7 @@ from .utils cimport unlikely
 import logging
 
 cdef object _logger = logging.getLogger('aiofastnet.ssl')
+cdef object _zero = 0
 
 
 cdef class SSLEngineFallback(SSLEngine):
@@ -103,27 +102,29 @@ cdef class SSLEngineFallback(SSLEngine):
             _logger.debug("%r: SSLObject.unwrap() complete", conn)
         return SSLError.SSL_ERROR_NONE
 
-    cdef SSLError read(self, conn, char *buf, Py_ssize_t buf_len, Py_ssize_t* bytes_read) except SSLError.PYTHON_EXC:
+    cdef SSLError read(self, conn, char *buf, Py_ssize_t buf_len, Py_ssize_t* total_bytes_read) except SSLError.PYTHON_EXC:
         cdef:
-            bytes data
-            Py_ssize_t data_len
-            int read_len
+            Py_ssize_t bytes_read = 0
             SSLError ssl_error
 
-        bytes_read[0] = 0
+        total_bytes_read[0] = 0
         while buf_len != 0:
             if <Py_ssize_t>self.ssl_object.pending() == 0 and <Py_ssize_t>self._incoming.pending == 0:
                 return SSLError.SSL_ERROR_WANT_READ
 
-            read_len = INT_MAX if buf_len > INT_MAX else <int>buf_len
             try:
                 # This reads no more than TLS record size(16 Kb) per call, even if bigger buffer is passed
                 # Limitation of the underlying SSL_read call.
-                data = self.ssl_object.read(read_len)
+                # It is ok to pass 0 as the first argument, ssl_object.read ignores it when buffer is provided
+                # explicitly
+                bytes_read = self.ssl_object.read(_zero, PyMemoryView_FromMemory(buf, buf_len, PyBUF_WRITE))
+                if unlikely(self._is_debug):
+                    _logger.debug("%r: SSLObject.read(_zero, buffer(sz=%d))=%d", conn, buf_len, bytes_read)
             except ssl.SSLError as exc:
                 ssl_error = self._translate_ssl_error(exc)
                 if unlikely(self._is_debug):
-                    _logger.debug("%r: SSLObject.read(buf_len=%d), %s", conn, read_len, ssl_error_name(ssl_error))
+                    _logger.debug("%r: SSLObject.read(_zero, buffer(sz=%d)), %s",
+                                  conn, buf_len, ssl_error_name(ssl_error))
                 if ssl_error in (
                     SSLError.SSL_ERROR_WANT_READ,
                     SSLError.SSL_ERROR_WANT_WRITE,
@@ -132,17 +133,12 @@ cdef class SSLEngineFallback(SSLEngine):
                     return ssl_error
                 raise
 
-            data_len = PyBytes_GET_SIZE(data)
-            if data_len == 0:
+            if bytes_read == 0:
                 return SSLError.SSL_ERROR_ZERO_RETURN
 
-            if unlikely(self._is_debug):
-                _logger.debug("%r: SSLObject.read(buf_len=%d)=%d", conn, read_len, data_len)
-
-            memcpy(buf, PyBytes_AS_STRING(data), data_len)
-            bytes_read[0] += data_len
-            buf += data_len
-            buf_len -= data_len
+            total_bytes_read[0] += bytes_read
+            buf += bytes_read
+            buf_len -= bytes_read
 
         return SSLError.SSL_ERROR_NONE
 
@@ -204,7 +200,7 @@ cdef class SSLEngineFallback(SSLEngine):
     cdef incoming_bio_produce(self, Py_ssize_t nbytes):
         if nbytes == 0:
             return
-        self._incoming.write(PyBytes_FromStringAndSize(PyByteArray_AS_STRING(self._incoming_buf), nbytes))
+        self._incoming.write(PyMemoryView_FromMemory(PyByteArray_AS_STRING(self._incoming_buf), nbytes, PyBUF_READ))
 
     cdef allow_renegotiation(self):
         pass

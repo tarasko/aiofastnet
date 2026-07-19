@@ -51,5 +51,5 @@ if hasattr(socket, 'AF_UNIX'):
     ))
 
 
-__version__ = "0.19.0"
+__version__ = "0.20.0"
 __author__ = "Taras Kozlov"
