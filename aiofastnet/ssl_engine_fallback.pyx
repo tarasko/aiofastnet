@@ -21,11 +21,10 @@ cdef:
 cdef class SSLEngineFallback(SSLEngine):
     cdef:
         object _incoming
-
         object _outgoing
         Py_ssize_t _write_max_size_hint
 
-        object ssl_object
+        object _ssl_object
 
     def __init__(self, ssl_context, bint server_side, str server_hostname,
                  Py_ssize_t read_buffer_size, Py_ssize_t write_max_size_hint,
@@ -36,7 +35,7 @@ cdef class SSLEngineFallback(SSLEngine):
         self._outgoing = ssl.MemoryBIO()
         self._write_max_size_hint = write_max_size_hint
 
-        self.ssl_object = ssl_context.wrap_bio(
+        self._ssl_object = ssl_context.wrap_bio(
             self._incoming,
             self._outgoing,
             server_side=server_side,
@@ -68,11 +67,11 @@ cdef class SSLEngineFallback(SSLEngine):
         return True
 
     cdef object get_ssl_object(self):
-        return self.ssl_object
+        return self._ssl_object
 
     cdef SSLError do_handshake(self, conn) except SSLError.PYTHON_EXC:
         try:
-            self.ssl_object.do_handshake()
+            self._ssl_object.do_handshake()
         except _ssl_error_exc as exc:
             ssl_error = self._translate_ssl_error(exc)
             if unlikely(self._is_debug):
@@ -87,7 +86,7 @@ cdef class SSLEngineFallback(SSLEngine):
 
     cdef SSLError shutdown(self, conn) except SSLError.PYTHON_EXC:
         try:
-            self.ssl_object.unwrap()
+            self._ssl_object.unwrap()
         except _ssl_error_exc as exc:
             ssl_error = self._translate_ssl_error(exc)
             if unlikely(self._is_debug):
@@ -109,15 +108,15 @@ cdef class SSLEngineFallback(SSLEngine):
 
         total_bytes_read[0] = 0
         while buf_len != 0:
-            if <Py_ssize_t>self.ssl_object.pending() == 0 and <Py_ssize_t>self._incoming.pending == 0:
+            if <Py_ssize_t>self._ssl_object.pending() == 0 and <Py_ssize_t>self._incoming.pending == 0:
                 return SSLError.SSL_ERROR_WANT_READ
 
             try:
                 # This reads no more than TLS record size(16 Kb) per call, even if bigger buffer is passed
                 # Limitation of the underlying SSL_read call.
-                # It is ok to pass 0 as the first argument, ssl_object.read ignores it when buffer is provided
+                # It is ok to pass 0 as the first argument, _ssl_object.read ignores it when buffer is provided
                 # explicitly
-                bytes_read = self.ssl_object.read(_zero, PyMemoryView_FromMemory(buf, buf_len, PyBUF_WRITE))
+                bytes_read = self._ssl_object.read(_zero, PyMemoryView_FromMemory(buf, buf_len, PyBUF_WRITE))
                 if unlikely(self._is_debug):
                     _logger.debug("%r: SSLObject.read(0, buffer(sz=%d))=%d", conn, buf_len, bytes_read)
             except _ssl_error_exc as exc:
@@ -168,9 +167,9 @@ cdef class SSLEngineFallback(SSLEngine):
             SSLError ssl_error
 
         try:
-            # Contrary to ssl_object.read, ssl_object.write writes everything at once even if data is bigger than
+            # Contrary to _ssl_object.read, _ssl_object.write writes everything at once even if data is bigger than
             # TLS record size (16 KB)
-            last_bytes_written = self.ssl_object.write(data)
+            last_bytes_written = self._ssl_object.write(data)
             bytes_written[0] += last_bytes_written
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.write(data_len=%d)=%d", conn, bytes_to_write, last_bytes_written)
@@ -192,12 +191,6 @@ cdef class SSLEngineFallback(SSLEngine):
     cdef SSLError sendfile(self, conn, int fd, Py_ssize_t offset, Py_ssize_t count, Py_ssize_t* bytes_written) except SSLError.PYTHON_EXC:
         bytes_written[0] = 0
         raise NotImplementedError()
-
-    cdef incoming_bio_get_write_buf(self, char **pp, Py_ssize_t *space):
-        raise NotImplementedError("SSLEngineFallback receives incoming BIO data through incoming_bio_write()")
-
-    cdef incoming_bio_produce(self, Py_ssize_t nbytes):
-        raise NotImplementedError("SSLEngineFallback receives incoming BIO data through incoming_bio_write()")
 
     cdef incoming_bio_write(self, data):
         self._incoming.write(data)
