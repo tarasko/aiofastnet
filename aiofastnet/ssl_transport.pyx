@@ -1368,17 +1368,15 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                 self._server = None
 
 
-cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
+cdef class SSLProtocol(Protocol):
     cdef:
         SSLTransport_Transport _ssl_transport
-        bint _is_buffered
 
-    def __init__(self, SSLTransport_Transport ssl_transport, bint is_buffered):
+    def __init__(self, SSLTransport_Transport ssl_transport):
         self._ssl_transport = ssl_transport
-        self._is_buffered = is_buffered
 
     cpdef is_buffered_protocol(self):
-        return self._is_buffered
+        return False
 
     cpdef connection_made(self, transport):
         cdef SSLTransport_Transport ssl_transport = self._ssl_transport
@@ -1387,21 +1385,11 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
         return ssl_transport.connection_made(transport)
 
     cpdef connection_lost(self, exc):
-        # Break cyclic dependency
         cdef SSLTransport_Transport ssl_transport = self._ssl_transport
         if ssl_transport is None:
             return
         self._ssl_transport = None
         return ssl_transport.connection_lost(exc)
-
-    cdef get_buffer_c(self, Py_ssize_t n, char** buf_ptr, Py_ssize_t* buf_len):
-        return self._ssl_transport.get_buffer_c(n, buf_ptr, buf_len)
-
-    cpdef get_buffer(self, Py_ssize_t n):
-        return self._ssl_transport.get_buffer(n)
-
-    cpdef buffer_updated(self, Py_ssize_t nbytes):
-        self._ssl_transport.buffer_updated(nbytes)
 
     cpdef data_received(self, data):
         self._ssl_transport.data_received(data)
@@ -1417,6 +1405,20 @@ cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
 
     cpdef Py_ssize_t get_local_write_buffer_size(self) except -1:
         return self._ssl_transport.get_local_write_buffer_size()
+
+
+cdef class SSLBufferedProtocol(SSLProtocol, asyncio.BufferedProtocol):
+    cpdef is_buffered_protocol(self):
+        return True
+
+    cdef get_buffer_c(self, Py_ssize_t n, char** buf_ptr, Py_ssize_t* buf_len):
+        return self._ssl_transport.get_buffer_c(n, buf_ptr, buf_len)
+
+    cpdef get_buffer(self, Py_ssize_t n):
+        return self._ssl_transport.get_buffer(n)
+
+    cpdef buffer_updated(self, Py_ssize_t nbytes):
+        self._ssl_transport.buffer_updated(nbytes)
 
 
 cdef class SSLTransport_Transport(SSLTransportBase):
@@ -1461,7 +1463,10 @@ cdef class SSLTransport_Transport(SSLTransportBase):
             self._app_state = AppProtocolState.STATE_CON_MADE
 
     cpdef get_tls_protocol(self):
-        return SSLProtocol(self, self._is_direct_engine)
+        if self._is_direct_engine:
+            return SSLBufferedProtocol(self)
+        else:
+            return SSLProtocol(self)
 
     cdef inline connection_made(self, transport):
         """Called when the low-level connection is made.
