@@ -64,7 +64,7 @@ async def test_ssl_sbio_enabled(selector_loop, ssl_sbio_conn_type):
 
 
 async def test_ssl_membio_enabled(selector_loop, ssl_conn_type):
-    expected = ssl_conn_type.name in ("ssl_mbio", "ssl_mbio_fall", "stls", "stls_fall")
+    expected = ssl_conn_type.name in ("ssl_mbio", "ssl_mbio_fall", "stls")
 
     async with TestServer(ct=ssl_conn_type) as server:
         async with TestClient(server, ct=ssl_conn_type) as client:
@@ -485,7 +485,7 @@ async def test_ssl_renegotiate_midstream(all_loops, ssl_conn_type):
     if ssl_conn_type.name == 'ktls':
         pytest.skip("kTLS doesn't support renegotiation")
 
-    if ssl_conn_type.name in ("ssl_mbio_fall", "stls_fall"):
+    if ssl_conn_type.name == "ssl_mbio_fall":
         pytest.skip("fallback SSL engine doesn't support renegotiation")
 
     if aiofastnet.OPENSSL_DYN_LIBS is None:

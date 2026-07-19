@@ -26,5 +26,4 @@ Defined in `tests/utils.py`; keep this list in sync with the fixtures.
 * `ssl_mbio_fall`: same shape as `ssl_mbio`, but forces `SSLEngineFallback`.
 * `ssl_sbio`: TLS over socket transport using socket BIO where available.
 * `stls`: server uses TLS from `create_server(ssl=...)`; client starts plain TCP and then calls `start_tls()`.
-* `stls_fall`: same shape as `stls`, but forces `SSLEngineFallback`.
 * `ktls`: Linux Kernel TLS path; requires supported Python/OpenSSL/kernel setup.

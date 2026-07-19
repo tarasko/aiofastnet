@@ -339,7 +339,7 @@ class ConnectionType:
                 return
             pytest.skip("sendfile is not supported in Windows")
 
-        if self.name in ("ssl_mbio", "ssl_mbio_fall", "ssl_sbio", "stls", "stls_fall"):
+        if self.name in ("ssl_mbio", "ssl_mbio_fall", "ssl_sbio", "stls"):
             pytest.skip("SSL_sendfile is not supported for non-kernel TLS")
 
         if self.name == "ktls" and sys.platform != "linux":
@@ -347,7 +347,7 @@ class ConnectionType:
 
     @property
     def use_start_tls(self):
-        return self.name in ("stls", "stls_fall")
+        return self.name == "stls"
 
 
 def _make_ktls_conn_type():
@@ -401,10 +401,9 @@ def sendfile_conn_type(request):
     "tcp",
     "unix",
     "ssl_mbio",
-    "ssl_mbio_fall",
+    "ssl_mbio_fall",    # Force usage of SSLFallbackEngine + SSLTransport_Transport
     "ssl_sbio",
-    "stls",     # Use SSLTransport_Transport by using start_tls
-    "stls_fall",     # Use SSLTransport_Transport with SSLEngineFallback
+    "stls",             # Use SSLTransport_Transport by using start_tls
     "ktls",
 ])
 def conn_type(request):
@@ -417,7 +416,6 @@ def conn_type(request):
     "ssl_mbio_fall",
     "ssl_sbio",
     "stls",
-    "stls_fall",
     "ktls",
 ])
 def benchmark_conn_type(request):
@@ -429,9 +427,9 @@ def _make_conn_type_from_param(request):
         return ConnectionType(name=request.param)
     elif request.param == "unix":
         return _make_unix_conn_type()
-    elif request.param in ("ssl_mbio", "ssl_mbio_fall", "stls", "stls_fall"):
+    elif request.param in ("ssl_mbio", "ssl_mbio_fall", "stls"):
         server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
-        if request.param in ("ssl_mbio_fall", "stls_fall"):
+        if request.param == "ssl_mbio_fall":
             server_context._aiofastnet_force_fallback_ssl = True
             client_context._aiofastnet_force_fallback_ssl = True
         return ConnectionType(request.param, server_context, client_context)
@@ -448,7 +446,6 @@ def _make_conn_type_from_param(request):
     "ssl_mbio_fall",
     "ssl_sbio",
     "stls",     # Use SSLTransport_Transport by using start_tls
-    "stls_fall",     # Use SSLTransport_Transport with SSLEngineFallback
     "ktls"
 ])
 def ssl_conn_type(request):
