@@ -8,7 +8,9 @@ aiofastnet Release History
 0.20.0
 ------------------
 
-* Performance improvements from @river-walras in SSL fallback engine
+* Performance improvements from @river-walras in SSL fallback engine.
+* Fix potential hangups in SSLEngineFallback for some specific ssl MemoryBIO sizes.
+* Simplify logic by always using SSLTransport_Transport when ssl fallback engine is used.
 
 0.19.0
 ------------------
