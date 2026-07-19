@@ -204,7 +204,7 @@ cdef class SSLEngineFallback(SSLEngine):
     cdef incoming_bio_produce(self, Py_ssize_t nbytes):
         if nbytes == 0:
             return
-        self._incoming.write(PyBytes_FromStringAndSize(PyByteArray_AS_STRING(self._incoming_buf), nbytes))
+        self._incoming.write(PyMemoryView_FromMemory(PyByteArray_AS_STRING(self._incoming_buf), nbytes, PyBUF_READ))
 
     cdef allow_renegotiation(self):
         pass
