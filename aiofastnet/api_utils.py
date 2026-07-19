@@ -13,7 +13,7 @@ from asyncio.trsock import TransportSocket
 from logging import getLogger
 from typing import Callable, Union, Optional, Tuple
 
-from . import constants
+from . import constants, openssl_compat
 from .constants import SSL_TIMEOUT_DEFAULTS, SSL_BIO_SIZE_DEFAULTS
 from .ssl_transport import SSLTransport_Socket, SSLTransport_Transport
 from .transport import SocketTransport, aiofn_is_buffered_protocol
@@ -55,6 +55,10 @@ def _validate_bio_size(name: str, value: Optional[int], ssl_or_sslcontext: Optio
         return SSL_BIO_SIZE_DEFAULTS[name]
 
     return value
+
+
+def _ssl_needs_fallback_engine(sslcontext: ssl.SSLContext) -> bool:
+    return openssl_compat.OPENSSL_DYN_LIBS is None or getattr(sslcontext, "_aiofastnet_force_fallback_ssl", False)
 
 
 async def _create_connection_transport(
@@ -122,19 +126,33 @@ async def _create_connection_transport(
         protocol = protocol_factory()
         waiter = loop.create_future()
         if ssl:
-            sslcontext = None if isinstance(ssl, bool) else ssl
-            transport = SSLTransport_Socket(
-                loop, protocol, sslcontext,
-                server_side,
-                ssl_handshake_timeout,
-                ssl_shutdown_timeout,
-                ssl_incoming_bio_size,
-                ssl_outgoing_bio_size,
-                sock,
-                waiter=waiter,
-                server_hostname=server_hostname,
-                server=server
-            )
+            sslcontext = openssl_compat.create_transport_context(server_side, server_hostname) if isinstance(ssl, bool) else ssl
+            if _ssl_needs_fallback_engine(sslcontext):
+                ssl_transport = SSLTransport_Transport(
+                    loop, protocol, sslcontext,
+                    server_side,
+                    ssl_handshake_timeout,
+                    ssl_shutdown_timeout,
+                    ssl_incoming_bio_size,
+                    ssl_outgoing_bio_size,
+                    waiter=waiter,
+                    server_hostname=server_hostname
+                )
+                transport = ssl_transport
+                SocketTransport(loop, sock, ssl_transport.get_tls_protocol(), server=server)
+            else:
+                transport = SSLTransport_Socket(
+                    loop, protocol, sslcontext,
+                    server_side,
+                    ssl_handshake_timeout,
+                    ssl_shutdown_timeout,
+                    ssl_incoming_bio_size,
+                    ssl_outgoing_bio_size,
+                    sock,
+                    waiter=waiter,
+                    server_hostname=server_hostname,
+                    server=server
+                )
         else:
             transport = SocketTransport(loop, sock, protocol,
                                         waiter=waiter, server=server)

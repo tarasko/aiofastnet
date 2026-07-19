@@ -40,6 +40,7 @@ cdef class SSLEngine:
 
     cdef outgoing_bio_reset(self)
     cdef Py_ssize_t outgoing_bio_pending(self) except -1
+    cdef object outgoing_bio_read(self)
     cdef Py_ssize_t outgoing_bio_get_data(self, char** pp) except -1
     cdef outgoing_bio_consume(self, Py_ssize_t nbytes)
 

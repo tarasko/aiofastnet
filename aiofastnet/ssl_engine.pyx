@@ -68,6 +68,9 @@ cdef class SSLEngine:
     cdef Py_ssize_t outgoing_bio_pending(self) except -1:
         raise NotImplementedError()
 
+    cdef object outgoing_bio_read(self):
+        raise NotImplementedError()
+
     cdef Py_ssize_t outgoing_bio_get_data(self, char** pp) except -1:
         raise NotImplementedError()
 

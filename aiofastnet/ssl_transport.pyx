@@ -1061,6 +1061,12 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                  waiter=None,
                  server_hostname=None,
                  server=None):
+        if not sslcontext or sslcontext is True:
+            sslcontext = create_transport_context(server_side, server_hostname)
+
+        if SSLEngineDirect is None or getattr(sslcontext, "_aiofastnet_force_fallback_ssl", False):
+            raise NotImplementedError("SSLTransport_Socket requires direct OpenSSL access")
+
         SSLTransportBase.__init__(self,
                                   loop, app_protocol, sslcontext,
                                   server_side,
@@ -1597,6 +1603,18 @@ cdef class SSLTransport_Transport(SSLTransportBase):
         cdef:
             char* ptr
             long sz
+
+        if isinstance(self._ssl_engine, SSLEngineFallback):
+            while self._ssl_engine.outgoing_bio_pending():
+                data = self._ssl_engine.outgoing_bio_read()
+                if self._is_aiofn_transport:
+                    (<Transport> self._transport).write(data)
+                else:
+                    self._transport.write(data)
+
+                if unlikely(self._is_debug):
+                    _logger.debug("%r: flushed %d bytes from outgoing BIO", self, len(data))
+            return True
 
         while True:
             sz = self._ssl_engine.outgoing_bio_get_data(&ptr)
