@@ -11,6 +11,7 @@ from contextlib import contextmanager
 import pytest
 
 import aiofastnet
+from aiofastnet import openssl_compat
 from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Protocol, SocketTransport, Transport
 from aiofastnet.ssl_transport import SSLTransport_Socket, SSLTransport_Transport
@@ -406,6 +407,9 @@ async def test_socket_transport_repr_does_not_call_protocol_buffer_size(selector
 
 
 async def test_ssl_socket_transport_repr_does_not_call_protocol_buffer_size(selector_loop):
+    if openssl_compat.OPENSSL_DYN_LIBS is None:
+        pytest.skip("SSLTransport_Socket works only with SSLEngineDirect")
+
     class BadBufferSizeProtocol(Protocol):
         def connection_made(self, transport):
             self.transport = transport
