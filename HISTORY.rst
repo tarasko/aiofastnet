@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.20.0
+------------------
+
+* Performance improvements from @river-walras in SSL fallback engine
+
 0.19.0
 ------------------
 
