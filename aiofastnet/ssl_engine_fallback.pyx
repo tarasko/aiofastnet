@@ -24,12 +24,12 @@ cdef class SSLEngineFallback(SSLEngine):
         object _outgoing_chunks
         Py_ssize_t _outgoing_offset
         Py_ssize_t _outgoing_size
-        Py_ssize_t _write_max_size
+        Py_ssize_t _write_max_size_hint
 
         object ssl_object
 
     def __init__(self, ssl_context, bint server_side, str server_hostname,
-                 Py_ssize_t read_buffer_size, Py_ssize_t write_max_size,
+                 Py_ssize_t read_buffer_size, Py_ssize_t write_max_size_hint,
                  sock=None):
         SSLEngine.__init__(self, ssl_context, server_side, server_hostname)
 
@@ -39,7 +39,7 @@ cdef class SSLEngineFallback(SSLEngine):
         self._outgoing_chunks = collections.deque()
         self._outgoing_offset = 0
         self._outgoing_size = 0
-        self._write_max_size = write_max_size
+        self._write_max_size_hint = write_max_size_hint
 
         self.ssl_object = ssl_context.wrap_bio(
             self._incoming,
@@ -172,7 +172,7 @@ cdef class SSLEngineFallback(SSLEngine):
         if unlikely(data_len == 0):
             return SSLError.SSL_ERROR_NONE
 
-        cdef Py_ssize_t available_for_writing = max(self._write_max_size - <Py_ssize_t>self._outgoing.pending, 0)
+        cdef Py_ssize_t available_for_writing = max(self._write_max_size_hint - self._outgoing_size, 0)
         if unlikely(available_for_writing == 0):
             return SSLError.SSL_ERROR_WANT_WRITE
 
