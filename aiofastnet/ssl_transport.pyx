@@ -1643,7 +1643,7 @@ cdef class SSLTransport_Transport(SSLTransportBase):
             return
 
         if self._is_aiofn_transport:
-            (<Transport>self._transport).write(data)
+            (<Transport>self._transport).write_nocheck(data)
         else:
             self._transport.write(data)
 
