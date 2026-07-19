@@ -18,6 +18,7 @@ cdef:
     _ssl_want_write_exc = ssl.SSLWantWriteError
     _ssl_zero_return_exc = ssl.SSLZeroReturnError
     _ssl_syscall_exc = ssl.SSLSyscallError
+    _ssl_error_exc = ssl.SSLError
 
 
 cdef class SSLEngineFallback(SSLEngine):
@@ -83,7 +84,7 @@ cdef class SSLEngineFallback(SSLEngine):
     cdef SSLError do_handshake(self, conn) except SSLError.PYTHON_EXC:
         try:
             self.ssl_object.do_handshake()
-        except ssl.SSLError as exc:
+        except _ssl_error_exc as exc:
             ssl_error = self._translate_ssl_error(exc)
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.do_handshake(), %s", conn, ssl_error_name(ssl_error))
@@ -100,7 +101,7 @@ cdef class SSLEngineFallback(SSLEngine):
     cdef SSLError shutdown(self, conn) except SSLError.PYTHON_EXC:
         try:
             self.ssl_object.unwrap()
-        except ssl.SSLError as exc:
+        except _ssl_error_exc as exc:
             ssl_error = self._translate_ssl_error(exc)
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.unwrap(), %s", conn, ssl_error_name(ssl_error))
@@ -135,7 +136,7 @@ cdef class SSLEngineFallback(SSLEngine):
                     bytes_read = self.ssl_object.read(_zero, PyMemoryView_FromMemory(buf, buf_len, PyBUF_WRITE))
                     if unlikely(self._is_debug):
                         _logger.debug("%r: SSLObject.read(0, buffer(sz=%d))=%d", conn, buf_len, bytes_read)
-                except ssl.SSLError as exc:
+                except _ssl_error_exc as exc:
                     ssl_error = self._translate_ssl_error(exc)
                     if unlikely(self._is_debug):
                         _logger.debug("%r: SSLObject.read(0, buffer(sz=%d)), %s",
@@ -168,11 +169,11 @@ cdef class SSLEngineFallback(SSLEngine):
         if unlikely(available_for_writing == 0):
             return SSLError.SSL_ERROR_WANT_WRITE
 
-        cdef Py_ssize_t max_tls_rec_payload_size = 16 * 1024
-
         # Always let to write the whole TLS record to prevent records of non-optimal size.
         # Round up to the nearest 16 kb boundary
-        available_for_writing = ((available_for_writing + max_tls_rec_payload_size - 1) // max_tls_rec_payload_size) * max_tls_rec_payload_size
+        # 16384 - max TLS record payload size.
+        # Introducing a constant here for 16384 make cython generate unnecessary checks
+        available_for_writing = ((available_for_writing + 16384 - 1) // 16384) * 16384
 
         # We need to limit writing size, because ssl.SSLObject.write just writes until all data is written,
         # and memory bio grows without limits
@@ -191,7 +192,7 @@ cdef class SSLEngineFallback(SSLEngine):
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.write(data_len=%d)=%d", conn, bytes_to_write, last_bytes_written)
             bytes_written[0] += last_bytes_written
-        except ssl.SSLError as exc:
+        except _ssl_error_exc as exc:
             ssl_error = self._translate_ssl_error(exc)
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.write(data_len=%d), %s", conn, data_len, ssl_error_name(ssl_error))
