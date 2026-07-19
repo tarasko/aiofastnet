@@ -1371,6 +1371,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
 cdef class SSLProtocol(Protocol, asyncio.BufferedProtocol):
     cdef:
         SSLTransport_Transport _ssl_transport
+        bint _is_buffered
 
     def __init__(self, SSLTransport_Transport ssl_transport, bint is_buffered):
         self._ssl_transport = ssl_transport
