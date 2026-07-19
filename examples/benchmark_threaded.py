@@ -111,21 +111,21 @@ def plot_results(
     logical_cpus: int,
     physical_cores: int,
 ) -> None:
-    fig, (single_ax, threaded_ax) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+    fig, (threaded_ax, single_ax) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     handles = []
     labels = []
 
     for index, (label, values) in enumerate(single_loop_results.items()):
         color = colors[index % len(colors)]
-        (line,) = single_ax.plot(pairs_list, values, marker="o", linewidth=2, color=color, label=label)
-        threaded_ax.plot(pairs_list, threaded_results[label], marker="o", linewidth=2, color=color, label=label)
+        (line,) = threaded_ax.plot(pairs_list, threaded_results[label], marker="o", linewidth=2, color=color, label=label)
+        single_ax.plot(pairs_list, values, marker="o", linewidth=2, color=color, label=label)
         handles.append(line)
         labels.append(label)
 
-    single_ax.set_title("Single event loop")
     threaded_ax.set_title("One event loop per thread")
-    threaded_ax.set_xlabel("Number of client/server pairs")
+    single_ax.set_title("Single event loop")
+    single_ax.set_xlabel("Number of client/server pairs")
 
     for ax in (single_ax, threaded_ax):
         ax.set_ylabel("Requests per second")
@@ -136,8 +136,7 @@ def plot_results(
         ax.grid(alpha=0.25)
 
     fig.suptitle(
-        f"Echo benchmark | Python {sys.version.split()[0]}\n"
-        f"duration={duration:.3f}s | msg_size={msg_size} | tls={use_tls}\n"
+        f"{'SSL' if use_tls else 'TCP'} Echo Benchmark | Python {sys.version.split()[0]} | msg_size={msg_size}\n"
         f"physical cores={physical_cores} | logical cores={logical_cpus}"
     )
     fig.legend(handles, labels, loc="lower center", ncol=min(len(labels), 4))
