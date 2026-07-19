@@ -129,11 +129,11 @@ cdef class SSLEngineFallback(SSLEngine):
                 # explicitly
                 bytes_read = self.ssl_object.read(_zero, PyMemoryView_FromMemory(buf, buf_len, PyBUF_WRITE))
                 if unlikely(self._is_debug):
-                    _logger.debug("%r: SSLObject.read(_zero, buffer(sz=%d))=%d", conn, buf_len, bytes_read)
+                    _logger.debug("%r: SSLObject.read(0, buffer(sz=%d))=%d", conn, buf_len, bytes_read)
             except ssl.SSLError as exc:
                 ssl_error = self._translate_ssl_error(exc)
                 if unlikely(self._is_debug):
-                    _logger.debug("%r: SSLObject.read(_zero, buffer(sz=%d)), %s",
+                    _logger.debug("%r: SSLObject.read(0, buffer(sz=%d)), %s",
                                   conn, buf_len, ssl_error_name(ssl_error))
                 if ssl_error in (
                     SSLError.SSL_ERROR_WANT_READ,
@@ -183,12 +183,10 @@ cdef class SSLEngineFallback(SSLEngine):
             # Contrary to ssl_object.read, ssl_object.write writes everything at once even if data is bigger than
             # TLS record size (16 KB)
             last_bytes_written = self.ssl_object.write(data)
-            self._drain_outgoing_bio_to_queue()
-            bytes_written[0] += last_bytes_written
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.write(data_len=%d)=%d", conn, bytes_to_write, last_bytes_written)
+            bytes_written[0] += last_bytes_written
         except ssl.SSLError as exc:
-            self._drain_outgoing_bio_to_queue()
             ssl_error = self._translate_ssl_error(exc)
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.write(data_len=%d), %s", conn, data_len, ssl_error_name(ssl_error))
@@ -197,6 +195,8 @@ cdef class SSLEngineFallback(SSLEngine):
                 return ssl_error
 
             raise
+        finally:
+            self._drain_outgoing_bio_to_queue()
 
         if last_bytes_written < data_len:
             return SSLError.SSL_ERROR_WANT_WRITE
@@ -222,13 +222,12 @@ cdef class SSLEngineFallback(SSLEngine):
     cdef int renegotiate(self) except -1:
         raise NotImplementedError("stdlib ssl.SSLObject does not expose renegotiation")
 
-    cdef int outgoing_bio_reset(self) except -1:
+    cdef outgoing_bio_reset(self):
         self._outgoing_chunks.clear()
         self._outgoing_offset = 0
         self._outgoing_size = 0
         while self._outgoing.pending:
             self._outgoing.read()
-        return 1
 
     cdef Py_ssize_t outgoing_bio_pending(self) except -1:
         return self._outgoing_size
