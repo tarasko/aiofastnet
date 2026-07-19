@@ -60,4 +60,4 @@ jobs:
       run: uv run python -c "import aiofastnet; print('aiofastnet.OPENSSL_DYN_LIBS:', aiofastnet.OPENSSL_DYN_LIBS)"
 
     - name: Run test_echo
-      run: uv run pytest -v tests/test_basics.py::test_echo
+      run: uv run pytest -v tests/test_smoke.py::test_echo

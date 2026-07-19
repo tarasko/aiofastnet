@@ -653,8 +653,9 @@ cdef class SSLEngineDirect(SSLEngine):
 
         return SSLError.SSL_ERROR_NONE
 
-    cdef int outgoing_bio_reset(self) except -1:
-        return BIO_reset(self.outgoing)
+    cdef outgoing_bio_reset(self):
+        if BIO_reset(self.outgoing) == -1:
+            raise RuntimeError("BIO_reset(outgoing) failed")
 
     cdef Py_ssize_t outgoing_bio_pending(self) except -1:
         return _bio_pending(self.outgoing)

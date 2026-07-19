@@ -11,6 +11,7 @@ from contextlib import contextmanager
 import pytest
 
 import aiofastnet
+from aiofastnet import openssl_compat
 from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Protocol, SocketTransport, Transport
 from aiofastnet.ssl_transport import SSLTransport_Socket, SSLTransport_Transport
@@ -63,7 +64,7 @@ async def test_ssl_sbio_enabled(selector_loop, ssl_sbio_conn_type):
 
 
 async def test_ssl_membio_enabled(selector_loop, ssl_conn_type):
-    expected = ssl_conn_type.name in ("ssl_mbio", "ssl_mbio_fall", "stls", "stls_fall")
+    expected = ssl_conn_type.name in ("ssl_mbio", "ssl_mbio_fall", "stls")
 
     async with TestServer(ct=ssl_conn_type) as server:
         async with TestClient(server, ct=ssl_conn_type) as client:
@@ -406,6 +407,9 @@ async def test_socket_transport_repr_does_not_call_protocol_buffer_size(selector
 
 
 async def test_ssl_socket_transport_repr_does_not_call_protocol_buffer_size(selector_loop):
+    if openssl_compat.OPENSSL_DYN_LIBS is None:
+        pytest.skip("SSLTransport_Socket works only with SSLEngineDirect")
+
     class BadBufferSizeProtocol(Protocol):
         def connection_made(self, transport):
             self.transport = transport
@@ -481,7 +485,7 @@ async def test_ssl_renegotiate_midstream(all_loops, ssl_conn_type):
     if ssl_conn_type.name == 'ktls':
         pytest.skip("kTLS doesn't support renegotiation")
 
-    if ssl_conn_type.name in ("ssl_mbio_fall", "stls_fall"):
+    if ssl_conn_type.name == "ssl_mbio_fall":
         pytest.skip("fallback SSL engine doesn't support renegotiation")
 
     if aiofastnet.OPENSSL_DYN_LIBS is None:

@@ -17,12 +17,13 @@ SSL_BIO_SIZE_DEFAULTS = {
     # Static size for the incoming SSL BIO
     # This is the size of the buffer that we pass to the recv syscall
     # The bigger it is the more we can read from kernel RCVBUF with a single syscall
-    # But it also increase the memory footprint per client
+    # But it also increases the memory footprint per client
     "ssl_incoming_bio_size": int(16 * (16 * 1024 + 64)),
 
     # Static size for the outgoing SSL BIO
-    # Indicates how much encrypted data is accumulated before we call syscall send
-    # Make sure we can fit 4 full TLS records (including TLS header)
+    # Indicates how much encrypted data is accumulated before we call `send` syscall
+    # Having extra 64 bytes prevents scenarios when we send almost complete TLS record.
+    # It is not great for the latency.
     "ssl_outgoing_bio_size": int(4 * (16 * 1024 + 64))
 }
 

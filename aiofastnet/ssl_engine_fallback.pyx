@@ -3,16 +3,20 @@ import ssl
 from cpython.memoryview cimport PyMemoryView_FromMemory
 from cpython.buffer cimport PyBUF_READ, PyBUF_WRITE
 from cpython.bytearray cimport PyByteArray_AS_STRING
-from cpython.bytes cimport PyBytes_AS_STRING, PyBytes_GET_SIZE
-from libc.math cimport ceil
 
 from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
 from .utils cimport unlikely
 
 import logging
 
-cdef object _logger = logging.getLogger('aiofastnet.ssl')
-cdef object _zero = 0
+cdef:
+    _logger = logging.getLogger('aiofastnet.ssl')
+    _zero = 0
+    _ssl_want_read_exc = ssl.SSLWantReadError
+    _ssl_want_write_exc = ssl.SSLWantWriteError
+    _ssl_zero_return_exc = ssl.SSLZeroReturnError
+    _ssl_syscall_exc = ssl.SSLSyscallError
+    _ssl_error_exc = ssl.SSLError
 
 
 cdef class SSLEngineFallback(SSLEngine):
@@ -21,21 +25,19 @@ cdef class SSLEngineFallback(SSLEngine):
         bytearray _incoming_buf
 
         object _outgoing
-        bytes _outgoing_data
-        Py_ssize_t _write_max_size
+        Py_ssize_t _write_max_size_hint
 
         object ssl_object
 
     def __init__(self, ssl_context, bint server_side, str server_hostname,
-                 Py_ssize_t read_buffer_size, Py_ssize_t write_max_size,
+                 Py_ssize_t read_buffer_size, Py_ssize_t write_max_size_hint,
                  sock=None):
         SSLEngine.__init__(self, ssl_context, server_side, server_hostname)
 
         self._incoming = ssl.MemoryBIO()
         self._outgoing = ssl.MemoryBIO()
         self._incoming_buf = bytearray(read_buffer_size)
-        self._outgoing_data = b""
-        self._write_max_size = write_max_size
+        self._write_max_size_hint = write_max_size_hint
 
         self.ssl_object = ssl_context.wrap_bio(
             self._incoming,
@@ -45,15 +47,16 @@ cdef class SSLEngineFallback(SSLEngine):
         )
 
     cdef inline SSLError _translate_ssl_error(self, exc) except SSLError.PYTHON_EXC:
-        if isinstance(exc, ssl.SSLWantReadError):
+        if isinstance(exc, _ssl_want_read_exc):
             return SSLError.SSL_ERROR_WANT_READ
-        if isinstance(exc, ssl.SSLWantWriteError):
+        elif isinstance(exc, _ssl_want_write_exc):
             return SSLError.SSL_ERROR_WANT_WRITE
-        if isinstance(exc, ssl.SSLZeroReturnError):
+        elif isinstance(exc, _ssl_zero_return_exc):
             return SSLError.SSL_ERROR_ZERO_RETURN
-        if isinstance(exc, ssl.SSLSyscallError):
+        elif isinstance(exc, _ssl_syscall_exc):
             raise ConnectionResetError() from exc
-        raise exc
+        else:
+            raise exc
 
     cdef int ktls_send_enabled(self) noexcept:
         return 0
@@ -73,7 +76,7 @@ cdef class SSLEngineFallback(SSLEngine):
     cdef SSLError do_handshake(self, conn) except SSLError.PYTHON_EXC:
         try:
             self.ssl_object.do_handshake()
-        except ssl.SSLError as exc:
+        except _ssl_error_exc as exc:
             ssl_error = self._translate_ssl_error(exc)
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.do_handshake(), %s", conn, ssl_error_name(ssl_error))
@@ -88,7 +91,7 @@ cdef class SSLEngineFallback(SSLEngine):
     cdef SSLError shutdown(self, conn) except SSLError.PYTHON_EXC:
         try:
             self.ssl_object.unwrap()
-        except ssl.SSLError as exc:
+        except _ssl_error_exc as exc:
             ssl_error = self._translate_ssl_error(exc)
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.unwrap(), %s", conn, ssl_error_name(ssl_error))
@@ -119,11 +122,11 @@ cdef class SSLEngineFallback(SSLEngine):
                 # explicitly
                 bytes_read = self.ssl_object.read(_zero, PyMemoryView_FromMemory(buf, buf_len, PyBUF_WRITE))
                 if unlikely(self._is_debug):
-                    _logger.debug("%r: SSLObject.read(_zero, buffer(sz=%d))=%d", conn, buf_len, bytes_read)
-            except ssl.SSLError as exc:
+                    _logger.debug("%r: SSLObject.read(0, buffer(sz=%d))=%d", conn, buf_len, bytes_read)
+            except _ssl_error_exc as exc:
                 ssl_error = self._translate_ssl_error(exc)
                 if unlikely(self._is_debug):
-                    _logger.debug("%r: SSLObject.read(_zero, buffer(sz=%d)), %s",
+                    _logger.debug("%r: SSLObject.read(0, buffer(sz=%d)), %s",
                                   conn, buf_len, ssl_error_name(ssl_error))
                 if ssl_error in (
                     SSLError.SSL_ERROR_WANT_READ,
@@ -147,15 +150,15 @@ cdef class SSLEngineFallback(SSLEngine):
         if unlikely(data_len == 0):
             return SSLError.SSL_ERROR_NONE
 
-        cdef Py_ssize_t available_for_writing = max(self._write_max_size - <Py_ssize_t>self._outgoing.pending, 0)
+        cdef Py_ssize_t available_for_writing = max(self._write_max_size_hint - <Py_ssize_t>self._outgoing.pending, 0)
         if unlikely(available_for_writing == 0):
             return SSLError.SSL_ERROR_WANT_WRITE
 
-        cdef Py_ssize_t max_tls_rec_size = 16 * 1024
-
         # Always let to write the whole TLS record to prevent records of non-optimal size.
         # Round up to the nearest 16 kb boundary
-        available_for_writing = <Py_ssize_t>(ceil((<double>available_for_writing)/max_tls_rec_size) * max_tls_rec_size)
+        # 16384 - max TLS record payload size.
+        # Introducing a constant here for 16384 make cython generate unnecessary checks
+        available_for_writing = ((available_for_writing + 16384 - 1) // 16384) * 16384
 
         # We need to limit writing size, because ssl.SSLObject.write just writes until all data is written,
         # and memory bio grows without limits
@@ -168,13 +171,13 @@ cdef class SSLEngineFallback(SSLEngine):
             SSLError ssl_error
 
         try:
-            # Contrary to ssl_object.read, ssl_object.write will write everything at once even if data is bigger than
+            # Contrary to ssl_object.read, ssl_object.write writes everything at once even if data is bigger than
             # TLS record size (16 KB)
             last_bytes_written = self.ssl_object.write(data)
             bytes_written[0] += last_bytes_written
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.write(data_len=%d)=%d", conn, bytes_to_write, last_bytes_written)
-        except ssl.SSLError as exc:
+        except _ssl_error_exc as exc:
             ssl_error = self._translate_ssl_error(exc)
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.write(data_len=%d), %s", conn, data_len, ssl_error_name(ssl_error))
@@ -208,30 +211,12 @@ cdef class SSLEngineFallback(SSLEngine):
     cdef int renegotiate(self) except -1:
         raise NotImplementedError("stdlib ssl.SSLObject does not expose renegotiation")
 
-    cdef int outgoing_bio_reset(self) except -1:
-        self._outgoing_data = b""
+    cdef outgoing_bio_reset(self):
         while self._outgoing.pending:
             self._outgoing.read()
-        return 1
 
     cdef Py_ssize_t outgoing_bio_pending(self) except -1:
-        return PyBytes_GET_SIZE(self._outgoing_data) + self._outgoing.pending
+        return self._outgoing.pending
 
-    cdef Py_ssize_t outgoing_bio_get_data(self, char** pp) except -1:
-        if self._outgoing.pending:
-            if PyBytes_GET_SIZE(self._outgoing_data) == 0:
-                self._outgoing_data = self._outgoing.read()
-            else:
-                self._outgoing_data += self._outgoing.read()
-
-        pp[0] = PyBytes_AS_STRING(self._outgoing_data)
-        return PyBytes_GET_SIZE(self._outgoing_data)
-
-    cdef outgoing_bio_consume(self, Py_ssize_t nbytes):
-        cdef Py_ssize_t pending = PyBytes_GET_SIZE(self._outgoing_data)
-        if nbytes > pending:
-            raise RuntimeError("outgoing BIO consume size exceeds pending data")
-        if nbytes == pending:
-            self._outgoing_data = b""
-        else:
-            self._outgoing_data = self._outgoing_data[nbytes:]
+    cdef bytes outgoing_bio_read(self):
+        return self._outgoing.read()

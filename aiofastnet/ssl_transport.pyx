@@ -1061,6 +1061,15 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                  waiter=None,
                  server_hostname=None,
                  server=None):
+        if not sslcontext or sslcontext is True:
+            sslcontext = create_transport_context(server_side, server_hostname)
+
+        assert SSLEngineDirect is not None, \
+            "SSLTransport_Socket can only be used with SSLEngineDirect"
+
+        assert not getattr(sslcontext, "_aiofastnet_force_fallback_ssl", False), \
+            "SSLTransport_Socket used with _aiofastnet_force_fallback_ssl enabled"
+
         SSLTransportBase.__init__(self,
                                   loop, app_protocol, sslcontext,
                                   server_side,
@@ -1412,6 +1421,7 @@ cdef class SSLTransport_Transport(SSLTransportBase):
     cdef:
         object _transport
         bint _is_aiofn_transport
+        bint _is_direct_engine
 
     def __init__(self,
                  loop, app_protocol, sslcontext,
@@ -1438,6 +1448,7 @@ cdef class SSLTransport_Transport(SSLTransportBase):
 
         self._transport = None
         self._is_aiofn_transport = False
+        self._is_direct_engine = SSLEngineDirect is not None and isinstance(self._ssl_engine, SSLEngineDirect)
 
         if call_connection_made:
             self._app_state = AppProtocolState.STATE_INIT
@@ -1588,28 +1599,47 @@ cdef class SSLTransport_Transport(SSLTransportBase):
 
     cdef bint _flush_outgoing_bio(self) except -1:
         """
-        Writes raw data to socket for outgoing BIO. 
+        Writes raw data to socket from outgoing BIO. 
         Returns True if write operations can continue.
         True is also returned if memory bio is not used, is such case _flush_outgoing_bio is no-op. 
         """
+        if self._is_direct_engine:
+            self._flush_outgoing_bio_direct()
+        else:
+            self._flush_outgoing_bio_fallback()
+        return True
+
+    cdef inline _flush_outgoing_bio_direct(self):
         cdef:
             char* ptr
             long sz
 
-        sz = self._ssl_engine.outgoing_bio_get_data(&ptr)
-        if sz == 0:
-            return True
+        while True:
+            sz = self._ssl_engine.outgoing_bio_get_data(&ptr)
+            if sz == 0:
+                return
+
+            if self._is_aiofn_transport:
+                (<Transport> self._transport).write_c(ptr, sz)
+            else:
+                self._transport.write(PyBytes_FromStringAndSize(ptr, sz))
+
+            self._ssl_engine.outgoing_bio_consume(sz)
+            if unlikely(self._is_debug):
+                _logger.debug("%r: flushed %d bytes from outgoing BIO", self, sz)
+
+    cdef inline _flush_outgoing_bio_fallback(self):
+        data = self._ssl_engine.outgoing_bio_read()
+        if not data:
+            return
 
         if self._is_aiofn_transport:
-            (<Transport> self._transport).write_c(ptr, sz)
+            (<Transport>self._transport).write_nocheck(data)
         else:
-            self._transport.write(PyBytes_FromStringAndSize(ptr, sz))
+            self._transport.write(data)
 
-        self._ssl_engine.outgoing_bio_consume(sz)
         if unlikely(self._is_debug):
-            _logger.debug("%r: flushed %d bytes from outgoing BIO", self, sz)
-
-        return True
+            _logger.debug("%r: flushed %d bytes from outgoing BIO", self, len(data))
 
     cdef bint _should_retry_after_want_write(self) except -1:
         """
