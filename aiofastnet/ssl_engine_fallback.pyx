@@ -174,9 +174,9 @@ cdef class SSLEngineFallback(SSLEngine):
             # Contrary to ssl_object.read, ssl_object.write writes everything at once even if data is bigger than
             # TLS record size (16 KB)
             last_bytes_written = self.ssl_object.write(data)
+            bytes_written[0] += last_bytes_written
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSLObject.write(data_len=%d)=%d", conn, bytes_to_write, last_bytes_written)
-            bytes_written[0] += last_bytes_written
         except _ssl_error_exc as exc:
             ssl_error = self._translate_ssl_error(exc)
             if unlikely(self._is_debug):
@@ -220,9 +220,3 @@ cdef class SSLEngineFallback(SSLEngine):
 
     cdef bytes outgoing_bio_read(self):
         return self._outgoing.read()
-
-    cdef Py_ssize_t outgoing_bio_get_data(self, char** pp) except -1:
-        raise NotImplementedError("stdlib ssl.MemoryBIO does not expose a stable outgoing data pointer")
-
-    cdef outgoing_bio_consume(self, Py_ssize_t nbytes):
-        raise NotImplementedError("stdlib ssl.MemoryBIO outgoing data is consumed by read()")

@@ -1064,8 +1064,11 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         if not sslcontext or sslcontext is True:
             sslcontext = create_transport_context(server_side, server_hostname)
 
-        if SSLEngineDirect is None or getattr(sslcontext, "_aiofastnet_force_fallback_ssl", False):
-            raise NotImplementedError("SSLTransport_Socket requires direct OpenSSL access")
+        assert SSLEngineDirect is not None, \
+            "SSLTransport_Socket can only be used with SSLEngineDirect"
+
+        assert not getattr(sslcontext, "_aiofastnet_force_fallback_ssl", False), \
+            "SSLTransport_Socket used with _aiofastnet_force_fallback_ssl enabled"
 
         SSLTransportBase.__init__(self,
                                   loop, app_protocol, sslcontext,
@@ -1191,9 +1194,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             had_successful_writes = True
             self._ssl_engine.outgoing_bio_consume(bytes_sent)
             if bytes_sent == sz:
-                if self._ssl_engine.outgoing_bio_pending() == 0:
-                    return True
-                continue
+                return True
 
             ptr += bytes_sent
             sz -= bytes_sent
