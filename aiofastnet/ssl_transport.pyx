@@ -1551,16 +1551,6 @@ cdef class SSLTransport_Transport(SSLTransportBase):
 
     cdef inline resume_writing(self):
         self._app_protocol.resume_writing()
-        try:
-            if self._state == SSLProtocolState.WRAPPED:
-                if self._write_backlog_size:
-                    self._flush_write_backlog()
-            elif self._state == SSLProtocolState.FLUSHING:
-                self._do_flush()
-            elif self._state == SSLProtocolState.SHUTDOWN:
-                self._do_shutdown()
-        except:
-            self._handle_error("Error occurred during write")
 
     cpdef get_extra_info(self, name, default=None):
         value = SSLTransportBase.get_extra_info(self, name)
