@@ -38,11 +38,16 @@ cdef class SSLEngine:
     cdef allow_renegotiation(self)
     cdef int renegotiate(self) except -1
 
-    cdef outgoing_bio_reset(self)
+    # Available both for SSLEngineDirect and SSLEngineFallback
     cdef Py_ssize_t outgoing_bio_pending(self) except -1
-    cdef object outgoing_bio_read(self)
+    cdef outgoing_bio_reset(self)
+
+    # SSLEngineDirect methods only
     cdef Py_ssize_t outgoing_bio_get_data(self, char** pp) except -1
     cdef outgoing_bio_consume(self, Py_ssize_t nbytes)
+
+    # SSLEngineFallback methods only
+    cdef bytes outgoing_bio_read(self)
 
 
 cdef ssl_error_name(int err)

@@ -218,10 +218,8 @@ cdef class SSLEngineFallback(SSLEngine):
     cdef Py_ssize_t outgoing_bio_pending(self) except -1:
         return self._outgoing.pending
 
-    cdef object outgoing_bio_read(self):
-        if self._outgoing.pending:
-            return self._outgoing.read()
-        return b""
+    cdef bytes outgoing_bio_read(self):
+        return self._outgoing.read()
 
     cdef Py_ssize_t outgoing_bio_get_data(self, char** pp) except -1:
         raise NotImplementedError("stdlib ssl.MemoryBIO does not expose a stable outgoing data pointer")
