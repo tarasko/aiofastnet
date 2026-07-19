@@ -1447,7 +1447,7 @@ cdef class SSLTransport_Transport(SSLTransportBase):
 
         self._transport = None
         self._is_aiofn_transport = False
-        self._is_direct_engine = isinstance(self._ssl_engine, SSLEngineDirect)
+        self._is_direct_engine = SSLEngineDirect is not None and isinstance(self._ssl_engine, SSLEngineDirect)
 
         if call_connection_made:
             self._app_state = AppProtocolState.STATE_INIT
