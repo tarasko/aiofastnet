@@ -335,9 +335,12 @@ cdef class SocketTransport(Transport):
 
     cpdef get_write_buffer_size(self):
         self._check_thread("get_write_buffer_size")
+        return self._get_write_buffer_size_nocheck()
+
+    cdef inline Py_ssize_t _get_write_buffer_size_nocheck(self) except -1:
         cdef Py_ssize_t total = self._write_backlog_size
 
-        if isinstance(self._protocol, Protocol):
+        if self._protocol_aiofn:
             total += (<Protocol>self._protocol).get_local_write_buffer_size()
 
         return total
@@ -644,9 +647,7 @@ cdef class SocketTransport(Transport):
             data_len -= bytes_sent
 
     cdef inline _adjust_write_backlog(self, Py_ssize_t bytes_sent):
-        cdef:
-            char* data_ptr
-            Py_ssize_t data_len
+        cdef Py_ssize_t data_len
 
         if bytes_sent > 0:
             self._write_backlog_size -= bytes_sent
@@ -660,6 +661,8 @@ cdef class SocketTransport(Transport):
                 if unlikely(self._is_debug):
                     _logger.debug("%r: wrote backlog item of %d bytes", self, data_len)
             else:
+                if isinstance(data, bytes):
+                    data = memoryview(data)
                 self._write_backlog[0] = data[bytes_sent:]
                 if unlikely(self._is_debug):
                     _logger.debug("%r: partially wrote backlog item of %d bytes", self, bytes_sent)
@@ -763,10 +766,10 @@ cdef class SocketTransport(Transport):
                 self._server = None
 
     cdef inline _maybe_pause_protocol(self):
-        self._write_watermarks.maybe_pause_protocol(self, self._protocol, self.get_write_buffer_size())
+        self._write_watermarks.maybe_pause_protocol(self, self._protocol, self._get_write_buffer_size_nocheck())
 
     cdef inline _maybe_resume_protocol(self):
-        self._write_watermarks.maybe_resume_protocol(self, self._protocol, self.get_write_buffer_size())
+        self._write_watermarks.maybe_resume_protocol(self, self._protocol, self._get_write_buffer_size_nocheck())
 
     cdef inline _ensure_writer(self):
         if unlikely(self._is_debug):

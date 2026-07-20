@@ -350,10 +350,7 @@ cdef class SSLTransportBase(Transport):
     # Underlying transport use this to take into account upstream write buffer
     # size when deciding to report pause_writing()/resume_writing()
     cpdef Py_ssize_t get_local_write_buffer_size(self) except -1:
-        cdef Py_ssize_t total = 0
-
-        for data in self._write_backlog:
-            total += len(data)
+        cdef Py_ssize_t total = self._write_backlog_size
 
         if self._app_protocol_aiofn and self._app_protocol is not None:
             total += (<Protocol> self._app_protocol).get_local_write_buffer_size()
