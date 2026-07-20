@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.21.0
+------------------
+
+* Various performance improvements in TCP and SSL transports
+
 0.20.0
 ------------------
 
