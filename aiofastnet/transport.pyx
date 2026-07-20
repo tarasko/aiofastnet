@@ -667,7 +667,7 @@ cdef class SocketTransport(Transport):
             if unlikely(self._is_debug):
                 _logger.debug("%r: shutdown(SHUT_WR) done", self)
 
-    cdef inline _write_one(self, object data, char* data_ptr, Py_ssize_t data_len):
+    cdef inline WriteRequest _write_one(self, object data, char* data_ptr, Py_ssize_t data_len):
         """
         Returns None if all data has been sent, or remaining data
         """
