@@ -601,13 +601,15 @@ cdef class SocketTransport(Transport):
                 if data is None:
                     return
 
+                sz = len(data)
+
                 # Not all was written; register write handler.
                 self._ensure_writer()
             else:
                 data = PyBytes_FromStringAndSize(ptr, sz)
 
             self._write_backlog.append(data)
-            self._write_backlog_size += len(data)
+            self._write_backlog_size += sz
             self._maybe_pause_protocol()
         except:
             self._handle_error('Fatal write error on socket transport')
