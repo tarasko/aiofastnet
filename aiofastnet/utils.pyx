@@ -144,7 +144,7 @@ cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz
     return PyBytes_FromStringAndSize(ptr, sz)
 
 
-cdef Py_ssize_t aiofn_recv(int sockfd, void* buf, Py_ssize_t len) except? -1:
+cdef Py_ssize_t aiofn_recv(int sockfd, void* buf, Py_ssize_t len) except -2:
     cdef:
         ssize_t bytes_read
         int last_error
@@ -156,17 +156,16 @@ cdef Py_ssize_t aiofn_recv(int sockfd, void* buf, Py_ssize_t len) except? -1:
 
         last_error = aiofn_get_last_error()
         if last_error in (AIOFN_EWOULDBLOCK, AIOFN_EAGAIN):
-            return bytes_read
+            return -1
 
         if not AIOFN_IS_WINDOWS and last_error == errno.EINTR:
             continue
 
         aiofn_set_exc_from_error(last_error)
+        return -2
 
-        return bytes_read
 
-
-cdef Py_ssize_t aiofn_send(int sockfd, void* buf, Py_ssize_t len) except? -1:
+cdef Py_ssize_t aiofn_send(int sockfd, void* buf, Py_ssize_t len) except -2:
     cdef:
         ssize_t bytes_sent
         int last_error
@@ -185,7 +184,7 @@ cdef Py_ssize_t aiofn_send(int sockfd, void* buf, Py_ssize_t len) except? -1:
                 continue
 
             aiofn_set_exc_from_error(last_error)
-            return bytes_sent
+            return -2
 
         if bytes_sent == 0:
             # This should never happen, but who knows?
@@ -193,7 +192,7 @@ cdef Py_ssize_t aiofn_send(int sockfd, void* buf, Py_ssize_t len) except? -1:
             raise RuntimeError(f"send syscall has sent 0 bytes and did not indicate any error, buf_len={len}")
 
 
-cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* iov, Py_ssize_t iovcnt) except? -1:
+cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* iov, Py_ssize_t iovcnt) except -2:
     cdef:
         Py_ssize_t bytes_sent
         int last_error
@@ -213,7 +212,7 @@ cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* iov, Py_ssize_t iovcnt) ex
                 continue
 
             aiofn_set_exc_from_error(last_error)
-            return bytes_sent
+            return -2
 
         if bytes_sent == 0:
             # This should never happen, but who knows?

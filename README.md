@@ -58,7 +58,9 @@ connections.
 `aiofastnet` is fully compatible with free-threaded Python builds and scales
 as expected when multiple event loops run in parallel across multiple threads.
 
-[![Threaded benchmark](https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark_threaded.png)](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_threaded.png)
+[![SSL Threaded Benchmark](https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark_threaded_tls.png)](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_threaded_tls.png)
+
+[![TCP Threaded Benchmark](https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark_threaded_tcp.png)](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_threaded_tcp.png)
 
 Source: [examples/benchmark_threaded.py](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_threaded.py)
 

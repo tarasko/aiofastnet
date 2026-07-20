@@ -42,6 +42,7 @@ class ServerProtocol(Protocol, asyncio.BufferedProtocol):
             else:
                 self._transport.write(data)
 
+    @cython.ccall
     def data_received(self, data):
         if self._aiofn_transport:
             cython.cast(Transport, self._transport).write_nocheck(data)
@@ -108,6 +109,7 @@ class ClientProtocol(Protocol, asyncio.BufferedProtocol):
         self._received_for_reply -= len(self._payload)
         self._write()
 
+    @cython.ccall
     def data_received(self, data):
         self._received_for_reply += len(data)
         if self._received_for_reply < len(self._payload):
