@@ -11,6 +11,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 import aiofastnet
+import rsloop
 from examples.utils import build_ssl_contexts, run_pair, set_socket_sndbuf
 
 try:
@@ -58,6 +59,7 @@ def _plot_results(
     aiofastnet_version: str,
     sndbuf_size: int,
     uvloop_version: str,
+    rsloop_version: str,
     save_plot: bool,
 ) -> None:
     transports = [transport for transport in ("ssl", "tcp") if transport in results]
@@ -71,7 +73,7 @@ def _plot_results(
     fig, axes = _plot_absolute_results(results, transports, msg_sizes, variants)
     fig.suptitle(
         f"Echo Round-Trip Benchmark | Python {python_version}\naiofastnet-{aiofastnet_version} | "
-        f"uvloop-{uvloop_version} | SO_SNDBUF={sndbuf_size}"
+        f"uvloop-{uvloop_version} | rsloop-{rsloop_version} | SO_SNDBUF={sndbuf_size}"
     )
     fig.tight_layout()
 
@@ -96,7 +98,7 @@ def _plot_results(
 
 
 def _collect_variants(results: dict[str, dict[int, dict[str, float]]]) -> list[str]:
-    preferred = ["asyncio", "asyncio+aiofastnet", "uvloop", "uvloop+aiofastnet"]
+    preferred = ["asyncio", "asyncio+aiofastnet", "uvloop", "uvloop+aiofastnet", "rsloop", "rsloop+aiofastnet"]
     seen = set()
     variants = []
 
@@ -162,7 +164,7 @@ def _plot_speedup_heatmap(
     heatmap_data = []
 
     for transport in transports:
-        for loop_kind in ("asyncio", "uvloop"):
+        for loop_kind in ("asyncio", "uvloop", "rsloop"):
             native_key = loop_kind
             aiofastnet_key = f"{loop_kind}+aiofastnet"
             row = []
@@ -230,6 +232,8 @@ def _variant_colors(variants: list[str]) -> list[str]:
         "asyncio+aiofastnet": "#72b7b2",
         "uvloop": "#f58518",
         "uvloop+aiofastnet": "#54a24b",
+        "rsloop": "#e45756",
+        "rsloop+aiofastnet": "#b279a2",
     }
     return [colors.get(variant, "#b279a2") for variant in variants]
 
@@ -257,7 +261,7 @@ def _annotate_bars(ax, bars, values: list[float]) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Echo round-trip benchmark over loopback.")
     parser.add_argument("--msg-sizes", default="256,8192,32768,100000", help="Comma-separated message sizes in bytes")
-    parser.add_argument("--loops", default="asyncio,uvloop", help="Comma-separated event loops (asyncio,uvloop)")
+    parser.add_argument("--loops", default="asyncio,uvloop", help="Comma-separated event loops (asyncio,uvloop,rsloop)")
     parser.add_argument(
         "--variant",
         default="native,aiofastnet",
@@ -290,7 +294,7 @@ def main():
     if any(msg_size <= 0 for msg_size in args.msg_sizes):
         parser.error("--msg-sizes must contain integers > 0")
 
-    SUPPORTED_LOOPS = ["asyncio", "uvloop"]
+    SUPPORTED_LOOPS = ["asyncio", "uvloop", "rsloop"]
     unknown_loops = [loop_name for loop_name in args.loops if loop_name not in SUPPORTED_LOOPS]
     if unknown_loops:
         parser.error(f"Unknown --loops values: {unknown_loops}. Valid: {SUPPORTED_LOOPS}")
@@ -301,6 +305,7 @@ def main():
     all_results: dict[str, dict[int, dict[str, float]]] = {}
     aiofastnet_version = getattr(aiofastnet, "__version__", "unknown")
     uvloop_version = getattr(uvloop, "__version__", "not installed")
+    rsloop_version = getattr(rsloop, "__version__", "unknown")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe_sock:
         effective_sndbuf = set_socket_sndbuf(probe_sock, args.sndbuf_size)
 
@@ -310,6 +315,7 @@ def main():
     print(f"python={sys.version.split()[0]}")
     print(f"aiofastnet={aiofastnet_version}")
     print(f"uvloop={uvloop_version}")
+    print(f"rsloop={rsloop_version}")
     print(f"SNDBUF={effective_sndbuf})")
 
     for transport_kind in args.transports:
@@ -318,7 +324,12 @@ def main():
             all_results[transport_kind][msg_size] = {}
             for loop_kind in args.loops:
                 for variant in args.variants:
-                    loop_factory = uvloop.Loop if loop_kind == "uvloop" else asyncio.SelectorEventLoop
+                    if loop_kind == "uvloop":
+                        loop_factory = uvloop.Loop
+                    elif loop_kind == "rsloop":
+                        loop_factory = rsloop.Loop
+                    else:
+                        loop_factory = asyncio.SelectorEventLoop
                     rps = asyncio.run(
                         run_benchmark(args, loop_kind, variant, transport_kind, msg_size),
                         loop_factory=loop_factory,
@@ -337,6 +348,7 @@ def main():
             aiofastnet_version,
             effective_sndbuf,
             uvloop_version,
+            rsloop_version,
             args.save_plot,
         )
 
