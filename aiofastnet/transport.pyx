@@ -817,7 +817,7 @@ cdef class SocketTransport(Transport):
                               self, req.offset, req.count)
 
             self._write_backlog.append(req)
-            self._write_backlog_size += req.count
+            self._write_backlog_size += <Py_ssize_t>req.count
             self._ensure_writer()
             self._maybe_pause_protocol()
 
