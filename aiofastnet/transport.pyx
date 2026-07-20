@@ -99,6 +99,35 @@ cdef SendFileRequest _make_send_file_request(file, offset, count):
     return req
 
 
+cdef class WriteRequest:
+    cdef:
+        object data
+        char* ptr
+        Py_ssize_t size
+
+
+cdef WriteRequest _make_write_request(object data):
+    cdef WriteRequest req = <WriteRequest>WriteRequest.__new__(WriteRequest)
+    req.data = aiofn_maybe_copy_buffer(data)
+    aiofn_unpack_simple_buffer(req.data, &req.ptr, &req.size, 0)
+    return req
+
+
+cdef WriteRequest _make_write_request_from_ptr(char* ptr, Py_ssize_t size):
+    cdef WriteRequest req = <WriteRequest>WriteRequest.__new__(WriteRequest)
+    req.data = PyBytes_FromStringAndSize(ptr, size)
+    req.ptr = PyBytes_AS_STRING(req.data)
+    req.size = size
+    return req
+
+
+cdef WriteRequest _make_write_request_tail(object data, char* ptr, Py_ssize_t size):
+    cdef WriteRequest req = <WriteRequest>WriteRequest.__new__(WriteRequest)
+    req.data = aiofn_maybe_copy_buffer_tail(data, ptr, size)
+    aiofn_unpack_simple_buffer(req.data, &req.ptr, &req.size, 0)
+    return req
+
+
 cdef class WriteWatermarks:
     def __init__(self, loop):
         self._loop = loop
@@ -466,23 +495,23 @@ cdef class SocketTransport(Transport):
 
         cdef:
             char* data_ptr
-            Py_ssize_t data_len, data_len_init = 0
-            Py_ssize_t bytes_sent
+            Py_ssize_t data_len
+            WriteRequest req
 
         try:
             if self._write_backlog_size == 0:
                 aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
-                data = self._write_one(data, data_ptr, data_len)
-                if data is None:
+                req = self._write_one(data, data_ptr, data_len)
+                if req is None:
                     return
 
                 # Not all was written; register write handler.
                 self._ensure_writer()
             else:
-                data = aiofn_maybe_copy_buffer(data)
+                req = _make_write_request(data)
 
-            self._write_backlog.append(data)
-            self._write_backlog_size += len(data)
+            self._write_backlog.append(req)
+            self._write_backlog_size += req.size
             self._maybe_pause_protocol()
         except:
             self._handle_error('Fatal write error on socket transport')
@@ -509,12 +538,19 @@ cdef class SocketTransport(Transport):
             Py_ssize_t bytes_sent = 0
             Py_ssize_t bytes_to_send = 0
             Py_ssize_t idx = 0
+            WriteRequest req
 
         for data in list_of_data:
             if isinstance(data, SendFileRequest):
                 break
 
-            aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
+            if isinstance(data, WriteRequest):
+                req = <WriteRequest>data
+                data_ptr = req.ptr
+                data_len = req.size
+            else:
+                aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
+
             if data_len == 0:
                 continue
             self._iovecs[idx].iov_base = data_ptr
@@ -543,6 +579,7 @@ cdef class SocketTransport(Transport):
         cdef:
             char* data_ptr
             Py_ssize_t data_len
+            WriteRequest req
 
         for data in list_of_data:
             aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
@@ -550,17 +587,16 @@ cdef class SocketTransport(Transport):
                 total_bytes_sent -= data_len
                 continue
             elif total_bytes_sent <= 0:
-                data = aiofn_maybe_copy_buffer(data)
-                self._write_backlog.append(data)
-                self._write_backlog_size += len(data)
+                req = _make_write_request(data)
+                self._write_backlog.append(req)
+                self._write_backlog_size += req.size
             else:
                 data_ptr += total_bytes_sent
                 data_len -= total_bytes_sent
                 total_bytes_sent = 0
-                data = aiofn_maybe_copy_buffer_tail(
-                    data, data_ptr, data_len)
-                self._write_backlog.append(data)
-                self._write_backlog_size += len(data)
+                req = _make_write_request_tail(data, data_ptr, data_len)
+                self._write_backlog.append(req)
+                self._write_backlog_size += req.size
 
         if self._write_backlog_size > 0:
             self._ensure_writer()
@@ -588,6 +624,8 @@ cdef class SocketTransport(Transport):
             self._handle_error('Fatal write error on socket transport')
 
     cdef write_c(self, char* ptr, Py_ssize_t sz):
+        cdef WriteRequest req
+
         if sz <= 0:
             return
 
@@ -599,19 +637,17 @@ cdef class SocketTransport(Transport):
 
         try:
             if self._write_backlog_size == 0:
-                data = self._write_one(None, ptr, sz)
-                if data is None:
+                req = self._write_one(None, ptr, sz)
+                if req is None:
                     return
-
-                sz = len(data)
 
                 # Not all was written; register write handler.
                 self._ensure_writer()
             else:
-                data = PyBytes_FromStringAndSize(ptr, sz)
+                req = _make_write_request_from_ptr(ptr, sz)
 
-            self._write_backlog.append(data)
-            self._write_backlog_size += sz
+            self._write_backlog.append(req)
+            self._write_backlog_size += req.size
             self._maybe_pause_protocol()
         except:
             self._handle_error('Fatal write error on socket transport')
@@ -645,29 +681,33 @@ cdef class SocketTransport(Transport):
                 return None
 
             if bytes_sent == -1:
-                return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
+                if data is None:
+                    return _make_write_request_from_ptr(data_ptr, data_len)
+                else:
+                    return _make_write_request_tail(data, data_ptr, data_len)
 
             data_ptr += bytes_sent
             data_len -= bytes_sent
 
     cdef inline _adjust_write_backlog(self, Py_ssize_t bytes_sent):
-        cdef Py_ssize_t data_len
+        cdef:
+            Py_ssize_t data_len
+            WriteRequest req
 
         if bytes_sent > 0:
             self._write_backlog_size -= bytes_sent
 
         while bytes_sent > 0:
-            data = self._write_backlog[0]
-            data_len = len(data)
+            req = <WriteRequest>self._write_backlog[0]
+            data_len = req.size
             if data_len <= bytes_sent:
                 bytes_sent -= data_len
                 self._write_backlog.popleft()
                 if unlikely(self._is_debug):
                     _logger.debug("%r: wrote backlog item of %d bytes", self, data_len)
             else:
-                if isinstance(data, bytes):
-                    data = memoryview(data)
-                self._write_backlog[0] = data[bytes_sent:]
+                req.ptr += bytes_sent
+                req.size -= bytes_sent
                 if unlikely(self._is_debug):
                     _logger.debug("%r: partially wrote backlog item of %d bytes", self, bytes_sent)
                 break
