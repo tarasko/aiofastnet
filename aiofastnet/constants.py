@@ -24,7 +24,7 @@ SSL_BIO_SIZE_DEFAULTS = {
     # Indicates how much encrypted data is accumulated before we call `send` syscall
     # Having extra 64 bytes prevents scenarios when we send almost complete TLS record.
     # It is not great for the latency.
-    "ssl_outgoing_bio_size": int(4 * (16 * 1024 + 64))
+    "ssl_outgoing_bio_size": int(16 * (16 * 1024 + 64))
 }
 
 DATA_RECEIVED_MAX_SIZE = 256 * 1024

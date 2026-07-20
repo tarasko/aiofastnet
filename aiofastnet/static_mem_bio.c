@@ -97,7 +97,6 @@ static_mem_bio_write(BIO *bio, const char *in, int inl) {
     static_mem_bio_state_t *st;
     size_t n;
     size_t space;
-    size_t avail;
 
     if (SMB_UNLIKELY(in == NULL || inl <= 0)) {
         return 0;
@@ -110,13 +109,6 @@ static_mem_bio_write(BIO *bio, const char *in, int inl) {
 
     BIO_clear_flags(bio, BIO_FLAGS_RWS | BIO_FLAGS_SHOULD_RETRY);
     space = static_mem_space(st);
-    if (space < (size_t)inl && st->rptr != st->begin) {
-        avail = static_mem_avail(st);
-        memmove(st->begin, st->rptr, avail);
-        st->rptr = st->begin;
-        st->wptr = st->begin + avail;
-        space = static_mem_space(st);
-    }
 
     if (SMB_UNLIKELY(space == 0)) {
         BIO_set_flags(bio, BIO_FLAGS_WRITE | BIO_FLAGS_SHOULD_RETRY);

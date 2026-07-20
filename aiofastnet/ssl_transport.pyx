@@ -1173,7 +1173,6 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             char* ptr
             long sz
             Py_ssize_t bytes_sent
-            bint had_successful_writes = False
 
         while True:
             sz = self._ssl_engine.outgoing_bio_get_data(&ptr)
@@ -1186,9 +1185,8 @@ cdef class SSLTransport_Socket(SSLTransportBase):
 
             if bytes_sent < 0:
                 self._ensure_writer()
-                return had_successful_writes
+                return False
 
-            had_successful_writes = True
             self._ssl_engine.outgoing_bio_consume(bytes_sent)
             if bytes_sent == sz:
                 return True
