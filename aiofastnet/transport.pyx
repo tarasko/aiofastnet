@@ -9,6 +9,7 @@ from typing import Optional
 from asyncio.trsock import TransportSocket
 from logging import getLogger
 
+import cython
 from cpython.ref cimport Py_XDECREF
 from cpython.memoryview cimport PyMemoryView_FromMemory
 from cpython.buffer cimport PyBUF_READ, PyBUF_WRITABLE
@@ -99,6 +100,7 @@ cdef SendFileRequest _make_send_file_request(file, offset, count):
     return req
 
 
+@cython.no_gc
 cdef class WriteRequest:
     cdef:
         object data
