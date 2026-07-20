@@ -9,6 +9,7 @@ aiofastnet Release History
 ------------------
 
 * Various performance improvements in TCP and SSL transports
+* Change default ssl_outgoing_bio_size from 64Kb to 256Kb. This improves walltime benchmark results for bigger messages
 
 0.20.0
 ------------------
