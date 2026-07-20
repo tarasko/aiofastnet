@@ -20,9 +20,11 @@ from . import constants
 from .utils cimport *
 
 
-cdef object _logger = getLogger('aiofastnet')
-cdef Py_ssize_t DATA_RECEIVED_MAX_SIZE = constants.DATA_RECEIVED_MAX_SIZE
-cdef size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
+cdef:
+    object _logger = getLogger('aiofastnet')
+    Py_ssize_t DATA_RECEIVED_MAX_SIZE = constants.DATA_RECEIVED_MAX_SIZE
+    size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
+    object _os_sendfile = os.sendfile
 
 
 cdef class Transport:
@@ -837,8 +839,8 @@ cdef class SocketTransport(Transport):
         """
         try:
             while req.count:
-                bytes_sent = os.sendfile(self._sock_fd_obj, req.file.fileno(),
-                                         req.offset, req.count)
+                bytes_sent = _os_sendfile(self._sock_fd_obj, req.file.fileno(),
+                                          req.offset, req.count)
                 if unlikely(self._is_debug):
                     _logger.debug("%r: os.sendfile(offset=%d,count=%d)=%d",
                                   self, req.offset, req.count, bytes_sent)
