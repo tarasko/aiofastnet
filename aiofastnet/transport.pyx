@@ -24,7 +24,7 @@ cdef:
     object _logger = getLogger('aiofastnet')
     Py_ssize_t DATA_RECEIVED_MAX_SIZE = constants.DATA_RECEIVED_MAX_SIZE
     size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
-    object _os_sendfile = os.sendfile
+    object _os_sendfile = getattr(os, "sendfile", None)
 
 
 cdef class Transport:
@@ -837,6 +837,9 @@ cdef class SocketTransport(Transport):
         * handling exceptions, including closing the transport when appropriate;
         * completing req.waiter when the request finishes or fails.
         """
+        if _os_sendfile is None:
+            raise NotImplementedError()
+
         try:
             while req.count:
                 bytes_sent = _os_sendfile(self._sock_fd_obj, req.file.fileno(),
@@ -851,8 +854,6 @@ cdef class SocketTransport(Transport):
                 req.count -= bytes_sent
 
             return True
-        except AttributeError:
-            raise NotImplementedError()
         except BlockingIOError:
             return False
         except ConnectionResetError:
