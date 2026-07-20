@@ -81,7 +81,7 @@ cpdef aiofn_is_buffered_protocol(protocol):
 
 cdef class SendFileRequest:
     cdef:
-        object file
+        object fileno
         object offset
         object count
         object waiter
@@ -89,7 +89,7 @@ cdef class SendFileRequest:
 
 cdef SendFileRequest _make_send_file_request(file, offset, count):
     cdef SendFileRequest req = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
-    req.file = file
+    req.fileno = file.fileno()
     req.offset = offset
     if count is None:
         req.count = max(0, os.fstat(file.fileno()).st_size - offset)
@@ -842,7 +842,7 @@ cdef class SocketTransport(Transport):
 
         try:
             while req.count:
-                bytes_sent = _os_sendfile(self._sock_fd_obj, req.file.fileno(),
+                bytes_sent = _os_sendfile(self._sock_fd_obj, req.fileno,
                                           req.offset, req.count)
                 if unlikely(self._is_debug):
                     _logger.debug("%r: os.sendfile(offset=%d,count=%d)=%d",
