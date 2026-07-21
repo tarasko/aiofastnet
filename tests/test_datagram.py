@@ -63,15 +63,11 @@ async def test_datagram_transport_is_not_eof_writable(all_loops, conn_type_udp):
                 client.transport.write_eof()
 
 
-async def test_datagram_received_exception_does_not_close_transport(
-        all_loops, conn_type_udp):
+async def test_datagram_received_exception_does_not_close_transport(all_loops, conn_type_udp):
     with exc_queue() as excq:
-        async with TestServer(
-                lambda: RaiseOnceDatagramProtocol(
-                    RuntimeError("datagram failed")),
-                ct=conn_type_udp) as server:
-            async with TestClient(
-                    server, ct=conn_type_udp) as client:
+        async with TestServer(lambda: RaiseOnceDatagramProtocol(RuntimeError("datagram failed")),
+                              ct=conn_type_udp) as server:
+            async with TestClient(server, ct=conn_type_udp) as client:
                 client.transport.sendto(b"first")
 
                 context = await wait_exception_context(excq)
@@ -84,15 +80,12 @@ async def test_datagram_received_exception_does_not_close_transport(
                 assert await client.readn(6) == b"second"
 
 
-async def test_error_received_exception_does_not_close_transport(
-        all_loops, conn_type_udp):
+async def test_error_received_exception_does_not_close_transport(all_loops, conn_type_udp):
     with exc_queue() as excq:
-        client_protocol = RaisingErrorDatagramProtocol(
-            RuntimeError("error handler failed"))
+        client_protocol = RaisingErrorDatagramProtocol(RuntimeError("error handler failed"))
         async with TestServer(ct=conn_type_udp) as server:
-            async with TestClient(
-                    server, ct=conn_type_udp,
-                    protocol_factory=lambda: client_protocol) as client:
+            async with TestClient(server, ct=conn_type_udp,
+                                  protocol_factory=lambda: client_protocol) as client:
                 client.transport.sendto(b"x" * (UDP_MAX_PAYLOAD_SIZE + 1))
 
                 context = await wait_exception_context(excq)
