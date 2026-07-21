@@ -975,24 +975,33 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
         self._header_size = 8
 
     def _read_ready(self):
-        try:
-            if self._connection_lost_scheduled:
-                return
+        if self._connection_lost_scheduled:
+            return
 
+        try:
             data, addr = self._sock.recvfrom(constants.DATA_RECEIVED_MAX_SIZE)
-            self._call_protocol_datagram_received(data, addr)
-        except:
+        except (BlockingIOError, InterruptedError):
+            return
+        except OSError as exc:
+            self._call_protocol_error_received(exc)
+            return
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException:
             self._handle_error('Fatal read error on datagram transport')
+            return
+
+        self._call_protocol_datagram_received(data, addr)
 
     def _write_ready(self):
         try:
             while self._write_backlog:
                 data, addr = self._write_backlog[0]
-                if self._sendto_one(data, addr):
-                    self._write_backlog.popleft()
-                    self._write_backlog_size -= len(data) + self._header_size
-                else:
+                if not self._sendto_one(data, addr):
                     break
+
+                self._write_backlog.popleft()
+                self._write_backlog_size -= len(data) + self._header_size
 
             self._maybe_resume_protocol()
             if not self._write_backlog:
@@ -1056,11 +1065,25 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
     cdef inline _call_protocol_datagram_received(self, data, addr):
         try:
             self._protocol.datagram_received(data, addr)
-        except:
-            aiofn_add_info_and_reraise('Fatal error: protocol.datagram_received() call failed.')
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as exc:
+            self._report_protocol_exception(
+                exc, 'Fatal error: protocol.datagram_received() call failed.')
 
     cdef inline _call_protocol_error_received(self, exc):
         try:
             self._protocol.error_received(exc)
-        except:
-            aiofn_add_info_and_reraise('Fatal error: protocol.error_received() call failed.')
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as exc:
+            self._report_protocol_exception(
+                exc, 'Fatal error: protocol.error_received() call failed.')
+
+    cdef inline _report_protocol_exception(self, exc, message):
+        self._loop.call_exception_handler({
+            'message': message,
+            'exception': exc,
+            'transport': self,
+            'protocol': self._protocol,
+        })
