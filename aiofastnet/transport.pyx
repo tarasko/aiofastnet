@@ -24,6 +24,7 @@ from .utils cimport *
 cdef:
     object _logger = getLogger('aiofastnet')
     Py_ssize_t DATA_RECEIVED_MAX_SIZE = constants.DATA_RECEIVED_MAX_SIZE
+    Py_ssize_t DATAGRAM_RECEIVED_MAX_SIZE = constants.DATAGRAM_RECEIVED_MAX_SIZE
     size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
     object _os_sendfile = getattr(os, "sendfile", None)
 
@@ -975,13 +976,39 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
         self._header_size = 8
 
     def _read_ready(self):
+        cdef:
+            PyObject* buffer
+            char* buf_ptr
+            char raw_addr[256]
+            unsigned int raw_addr_len = sizeof(raw_addr)
+            Py_ssize_t bytes_read
+            object data
+
         if self._connection_lost_scheduled:
             return
 
-        try:
-            data, addr = self._sock.recvfrom(constants.DATA_RECEIVED_MAX_SIZE)
-        except (BlockingIOError, InterruptedError):
+        if unlikely(self._read_paused):
             return
+
+        try:
+            buffer = aiofn_allocate_bytes(DATAGRAM_RECEIVED_MAX_SIZE, &buf_ptr)
+
+            try:
+                bytes_read = aiofn_recvfrom(self._sock_fd, buf_ptr, DATAGRAM_RECEIVED_MAX_SIZE,
+                                            <void*>raw_addr, &raw_addr_len)
+                data = aiofn_finalize_bytes(buffer, max(bytes_read, 0))
+                buffer = NULL
+            except:
+                Py_XDECREF(buffer)
+                raise
+
+            if unlikely(self._is_debug):
+                _logger.debug("%r: aiofn_recvfrom(...,len=%d)=%d", self, DATAGRAM_RECEIVED_MAX_SIZE, bytes_read)
+
+            if bytes_read == -1:
+                return
+
+            addr = aiofn_sockaddr_to_pyaddr(<void*>raw_addr, raw_addr_len)
         except OSError as exc:
             self._call_protocol_error_received(exc)
             return
@@ -1050,11 +1077,26 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
         raise NotImplementedError()
 
     cdef inline bint _sendto_one(self, data, addr) except -1:
+        cdef:
+            char* buf_ptr
+            Py_ssize_t buf_len
+            Py_ssize_t bytes_sent
+            char raw_addr[256]
+            unsigned int raw_addr_len = 0
+            void* raw_addr_ptr = NULL
+
         try:
-            if self._extra['peername']:
-                self._sock.send(data)
-            else:
-                self._sock.sendto(data, addr)
+            aiofn_unpack_simple_buffer(data, &buf_ptr, &buf_len, 0)
+            if not self._extra['peername']:
+                if not aiofn_pyaddr_to_sockaddr(addr, raw_addr, &raw_addr_len):
+                    self._sock.sendto(data, addr)
+                    return True
+                raw_addr_ptr = raw_addr
+
+            bytes_sent = aiofn_sendto(self._sock_fd, buf_ptr, buf_len, raw_addr_ptr, raw_addr_len)
+            if bytes_sent == -1:
+                return False
+
             return True
         except (BlockingIOError, InterruptedError):
             return False
