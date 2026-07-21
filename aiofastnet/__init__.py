@@ -9,6 +9,7 @@ from .api_streams import (
 
 from .api_create_server import create_server
 from .api_create_connection import create_connection
+from .api_create_datagram_endpoint import create_datagram_endpoint
 from .api_create_unix_connection import create_unix_connection
 from .api_create_unix_server import create_unix_server
 from .api_start_tls import start_tls
@@ -27,6 +28,7 @@ __all__ = [
     'start_server',
     'create_server',
     'create_connection',
+    'create_datagram_endpoint',
     'create_unix_connection',
     'create_unix_server',
     'start_tls',

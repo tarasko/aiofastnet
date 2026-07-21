@@ -833,7 +833,7 @@ cdef class SocketTransport(SocketTransportBase):
                 all_sent = self._try_write_list_of_data(self._write_backlog, &bytes_sent)
                 self._adjust_write_backlog(bytes_sent)
 
-    cpdef _write_ready(self):
+    def _write_ready(self):
         assert self._write_backlog, 'Data should not be empty'
         if self._connection_lost_scheduled:
             return
@@ -966,64 +966,47 @@ cdef class SocketTransport(SocketTransportBase):
 cdef class SelectorDatagramTransport(SocketTransportBase):
     cdef:
         object _address
-
-    _header_size = 8
-    max_size = DATA_RECEIVED_MAX_SIZE
+        Py_ssize_t _header_size
 
     def __init__(self, loop, sock, protocol, address=None,
                  waiter=None, extra=None):
         SocketTransportBase.__init__(self, loop, sock, protocol, waiter, extra)
         self._address = address
+        self._header_size = 8
 
     def _read_ready(self):
-        if self._connection_lost_scheduled:
-            return
         try:
-            data, addr = self._sock.recvfrom(self.max_size)
-        except (BlockingIOError, InterruptedError):
-            pass
-        except OSError as exc:
-            self._protocol.error_received(exc)
-        except (SystemExit, KeyboardInterrupt):
-            raise
-        except BaseException as exc:
-            self._fatal_error(exc, 'Fatal read error on datagram transport')
-        else:
-            self._protocol.datagram_received(data, addr)
+            if self._connection_lost_scheduled:
+                return
 
-    cpdef _write_ready(self):
-        while self._write_backlog:
-            data, addr = self._write_backlog.popleft()
-            self._write_backlog_size -= len(data) + self._header_size
-            try:
-                if self._extra['peername']:
-                    self._sock.send(data)
+            data, addr = self._sock.recvfrom(constants.DATA_RECEIVED_MAX_SIZE)
+            self._call_protocol_datagram_received(data, addr)
+        except:
+            self._handle_error('Fatal read error on datagram transport')
+
+    def _write_ready(self):
+        try:
+            while self._write_backlog:
+                data, addr = self._write_backlog[0]
+                if self._sendto_one(data, addr):
+                    self._write_backlog.popleft()
+                    self._write_backlog_size -= len(data) + self._header_size
                 else:
-                    self._sock.sendto(data, addr)
-            except (BlockingIOError, InterruptedError):
-                self._write_backlog.appendleft((data, addr))
-                self._write_backlog_size += len(data) + self._header_size
-                break
-            except OSError as exc:
-                self._protocol.error_received(exc)
-                return
-            except (SystemExit, KeyboardInterrupt):
-                raise
-            except BaseException as exc:
-                self._fatal_error(exc, 'Fatal write error on datagram transport')
-                return
+                    break
 
-        self._maybe_resume_protocol()
-        if not self._write_backlog:
+            self._maybe_resume_protocol()
+            if not self._write_backlog:
+                self._drop_writer()
+                if self._closing:
+                    self._connection_lost_scheduled = True
+                    self._call_connection_lost(None)
+        except:
             self._drop_writer()
-            if self._closing:
-                self._connection_lost_scheduled = True
-                self._call_connection_lost(None)
+            self._handle_error('Fatal write error on datagram transport')
 
     cpdef sendto(self, data, addr=None):
-        if not isinstance(data, (bytes, bytearray, memoryview)):
-            raise TypeError(f'data argument must be a bytes-like object, '
-                            f'not {type(data).__name__!r}')
+        self._check_thread("sendto")
+        aiofn_validate_buffer(data)
 
         if self._address:
             if addr not in (None, self._address):
@@ -1037,26 +1020,47 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
             self._closed_write_count += 1
             return
 
-        if not self._write_backlog:
-            # Attempt to send it right away first.
-            try:
-                if self._extra['peername']:
-                    self._sock.send(data)
-                else:
-                    self._sock.sendto(data, addr)
-                return
-            except (BlockingIOError, InterruptedError):
-                self._ensure_writer()
-            except OSError as exc:
-                self._protocol.error_received(exc)
-                return
-            except (SystemExit, KeyboardInterrupt):
-                raise
-            except BaseException as exc:
-                self._fatal_error(exc, 'Fatal write error on datagram transport')
+        try:
+            if not self._write_backlog and self._sendto_one(data, addr):
                 return
 
-        # Ensure that what we buffer is immutable.
-        self._write_backlog.append((bytes(data), addr))
-        self._write_backlog_size += len(data) + self._header_size
-        self._maybe_pause_protocol()
+            if not self._write_backlog:
+                self._ensure_writer()
+
+            # Ensure that what we buffer is immutable.
+            self._write_backlog.append((bytes(data), addr))
+            self._write_backlog_size += len(data) + self._header_size
+            self._maybe_pause_protocol()
+        except:
+            self._handle_error('Fatal write error on datagram transport')
+
+    cpdef can_write_eof(self):
+        return False
+
+    cpdef write_eof(self):
+        raise NotImplementedError()
+
+    cdef inline bint _sendto_one(self, data, addr) except -1:
+        try:
+            if self._extra['peername']:
+                self._sock.send(data)
+            else:
+                self._sock.sendto(data, addr)
+            return True
+        except (BlockingIOError, InterruptedError):
+            return False
+        except OSError as exc:
+            self._call_protocol_error_received(exc)
+            return True
+
+    cdef inline _call_protocol_datagram_received(self, data, addr):
+        try:
+            self._protocol.datagram_received(data, addr)
+        except:
+            aiofn_add_info_and_reraise('Fatal error: protocol.datagram_received() call failed.')
+
+    cdef inline _call_protocol_error_received(self, exc):
+        try:
+            self._protocol.error_received(exc)
+        except:
+            aiofn_add_info_and_reraise('Fatal error: protocol.error_received() call failed.')
