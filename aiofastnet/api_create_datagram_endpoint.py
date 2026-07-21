@@ -10,12 +10,36 @@ import stat
 
 from .api_utils import _logger, _set_reuseport, _ensure_resolved
 from .transport import SelectorDatagramTransport
+from .wrapped_transport import _should_fallback_to_asyncio, \
+    _WrappedDatagramProtocol, _get_original_loop_method
 
 
 async def create_datagram_endpoint(
     loop, protocol_factory, local_addr=None, remote_addr=None, *, family=0, proto=0, flags=0, reuse_port=None, allow_broadcast=None, sock=None
 ):
     """Create datagram connection."""
+    if _should_fallback_to_asyncio(loop):
+        def wrapped_protocol_factory():
+            return _WrappedDatagramProtocol(protocol_factory())
+
+        create_datagram_endpoint = _get_original_loop_method(
+            loop, "create_datagram_endpoint")
+        transport, protocol = await create_datagram_endpoint(
+            wrapped_protocol_factory,
+            local_addr,
+            remote_addr,
+            family=family,
+            proto=proto,
+            flags=flags,
+            reuse_port=reuse_port,
+            allow_broadcast=allow_broadcast,
+            sock=sock,
+        )
+        wrapped_transport = protocol._wrapped_transport
+        user_protocol = protocol._protocol
+        protocol._wrapped_transport = None
+        return wrapped_transport, user_protocol
+
     if sock is not None:
         if sock.type == socket.SOCK_STREAM:
             raise ValueError(f"A datagram socket was expected, got {sock!r}")

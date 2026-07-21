@@ -32,6 +32,9 @@ Read README.md for project description.
 * Keep tests focused on the behavior under test. Add local protocols, manual
   `create_*` calls, and `try/finally` cleanup only when the shared helpers would
   hide or prevent the behavior being asserted.
+* Do not add synthetic monkeypatch tests for platform fallback branches when CI
+  already runs the native platform/loop combination. For local comparison
+  against stdlib implementations, use `NO_AIOFN=1`.
 
 # Troubleshooting
 

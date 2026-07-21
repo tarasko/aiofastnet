@@ -81,6 +81,10 @@ class _WrappedTransport(Transport):
                for data in list_of_data if data]
         self._transport.writelines(lst)
 
+    def sendto(self, data, addr=None):
+        return self._transport.sendto(
+            aiofn_validate_and_maybe_copy_buffer(data), addr)
+
     def write_eof(self):
         return self._transport.write_eof()
 
@@ -134,3 +138,11 @@ class _WrappedBufferedProtocol(_WrappedProtocolBase, asyncio.BufferedProtocol):
 
     def buffer_updated(self, nbytes):
         return self._protocol.buffer_updated(nbytes)
+
+
+class _WrappedDatagramProtocol(_WrappedProtocolBase, asyncio.DatagramProtocol):
+    def datagram_received(self, data, addr):
+        return self._protocol.datagram_received(data, addr)
+
+    def error_received(self, exc):
+        return self._protocol.error_received(exc)

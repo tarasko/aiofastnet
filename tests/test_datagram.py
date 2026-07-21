@@ -1,7 +1,6 @@
 import asyncio
 
 import pytest
-
 from tests.utils import (
     AsyncClient,
     TestClient,
