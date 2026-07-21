@@ -36,6 +36,21 @@ Read README.md for project description.
   already runs the native platform/loop combination. For local comparison
   against stdlib implementations, use `NO_AIOFN=1`.
 
+# Examples and benchmarks
+
+* Keep benchmark/example protocols minimal. Before adding a new protocol/helper
+  class, first check whether the existing protocol can be extended with the
+  small callback or branch needed for the new transport.
+* Prefer reusing the existing benchmark contract (`write_first_data`, `closed`,
+  `requests`, etc.) over duplicating lifecycle, warmup, timing, and cleanup
+  logic.
+* For transport variants in examples, keep endpoint creation differences in the
+  helper layer when possible. Do not duplicate protocol classes just because
+  asyncio uses different stream/datagram protocol callback names.
+* When adding a feature to an example or benchmark, inspect nearby example code
+  and recent test helper patterns first, then make the smallest change that
+  follows those patterns.
+
 # Troubleshooting
 
 * When investigating hangs, flaky async behavior, SSL issues, or failing tests,
