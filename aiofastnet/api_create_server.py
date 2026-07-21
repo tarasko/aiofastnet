@@ -13,7 +13,7 @@ import asyncio
 import sys
 
 from .api_utils import _is_asyncio_loop, _check_ssl_socket, _logger, _HAS_IPv6, _ensure_resolved, \
-    _validate_ssl_timeout, _validate_bio_size, Server
+    _validate_ssl_timeout, _validate_bio_size, Server, _set_reuseport
 from .ssl_transport import SSLTransport_Transport
 from .transport import (aiofn_is_buffered_protocol)
 from .wrapped_transport import (
@@ -230,17 +230,6 @@ async def _create_server_fallback(loop,
 
         create_server = _get_original_loop_method(loop, "create_server")
         return await create_server(wrapped_protocol_factory, **kwargs)
-
-
-def _set_reuseport(sock):
-    if not hasattr(socket, 'SO_REUSEPORT'):
-        raise ValueError('reuse_port not supported by socket module')
-    else:
-        try:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        except OSError:
-            raise ValueError('reuse_port not supported by socket module, '
-                             'SO_REUSEPORT defined but not implemented.')
 
 
 async def _create_server_getaddrinfo(loop, host, port, family, flags):

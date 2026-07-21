@@ -516,3 +516,14 @@ def _start_serving(loop, protocol_factory, sock,
 def _stop_serving(loop, sock):
     loop.remove_reader(sock.fileno())
     sock.close()
+
+
+def _set_reuseport(sock):
+    if not hasattr(socket, 'SO_REUSEPORT'):
+        raise ValueError('reuse_port not supported by socket module')
+    else:
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except OSError:
+            raise ValueError('reuse_port not supported by socket module, '
+                             'SO_REUSEPORT defined but not implemented.')
