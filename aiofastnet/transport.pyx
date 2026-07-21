@@ -1024,7 +1024,7 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
         try:
             while self._write_backlog:
                 data, addr = self._write_backlog[0]
-                if not self._sendto_one(data, addr):
+                if not self._sendto_impl(data, addr):
                     break
 
                 self._write_backlog.popleft()
@@ -1057,7 +1057,7 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
             return
 
         try:
-            if not self._write_backlog and self._sendto_one(data, addr):
+            if not self._write_backlog and self._sendto_impl(data, addr):
                 return
 
             if not self._write_backlog:
@@ -1076,7 +1076,7 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
     cpdef write_eof(self):
         raise NotImplementedError()
 
-    cdef inline bint _sendto_one(self, data, addr) except -1:
+    cdef inline bint _sendto_impl(self, data, addr) except -1:
         cdef:
             char* buf_ptr
             Py_ssize_t buf_len
