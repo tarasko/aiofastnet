@@ -76,6 +76,7 @@ Source: [examples/benchmark_threaded.py](https://github.com/tarasko/aiofastnet/b
 - [`loop.start_server()`](https://docs.python.org/3/library/asyncio-stream.html#asyncio.start_server)
 - [`loop.create_unix_server()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_unix_server)
 - [`loop.start_unix_server()`](https://docs.python.org/3/library/asyncio-stream.html#asyncio.start_unix_server)
+- [`loop.create_datagram_endpoint()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_datagram_endpoint)
 - [`loop.start_tls()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.start_tls)
 - [`loop.sendfile()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sendfile)
 

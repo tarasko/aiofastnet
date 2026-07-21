@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.22.0
+------------------
+
+* Added create_datagram_endpoint
+
 0.21.0
 ------------------
 
