@@ -148,6 +148,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         self._write_resumed_fut = None
         self._new_data_ev = asyncio.Event()
         self._is_eof_received = False
+        self.errors = []
 
     @property
     def is_writing_paused(self):
@@ -200,6 +201,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
 
     def error_received(self, exc):
         _logger.debug("AsyncClient.error_received, exc=%s", exc)
+        self.errors.append(exc)
 
     def pause_writing(self):
         _logger.debug("AsyncClient.pause_writing")
@@ -423,6 +425,11 @@ def ktls_conn_type():
 @pytest.fixture
 def ssl_sbio_conn_type():
     return _make_ssl_sbio_conn_type()
+
+
+@pytest.fixture
+def conn_type_udp():
+    return _make_udp_conn_type()
 
 
 @pytest.fixture(params=["tcp", "ktls"])
