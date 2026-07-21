@@ -5,6 +5,14 @@ Read README.md for project description.
 # Code style
 
 * Max line width: 150
+* Keep `api_<api_name>.py` files structurally close to the corresponding
+  `asyncio` implementation so upstream changes remain easy to merge.
+  Move genuinely common code to `api_utils.py` when useful, but keep changes
+  limited to what is necessary: no added typing, no broad refactoring, and no
+  function renaming. Minor local renames are fine when they adapt copied code to
+  aiofastnet conventions, such as `logger` -> `_logger` or `self` -> `loop`.
+  Fallback code for unsupported event loop implementations, such as proactor
+  loops, is acceptable.
 * In Cython, do not give side-effect-only helpers fake return types such as `int except -1`.
   Use a no-result helper signature instead, unless the returned value is meaningful to callers.
 
