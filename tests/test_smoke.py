@@ -17,15 +17,18 @@ from aiofastnet.transport import Protocol, SocketTransport, Transport
 from aiofastnet.ssl_transport import SSLTransport_Socket, SSLTransport_Transport
 from tests.utils import TestClient, TestServer, \
     make_test_ssl_contexts, AsyncClient, SomeException, _logger, \
-    start_tls, sendfile
+    start_tls, sendfile, UDP_MAX_PAYLOAD_SIZE
 
 
 @pytest.mark.parametrize("msg_size", [1, 2, 3, 4, 5, 6, 7, 8, 29, 64, 256 * 1024, 6 * 1024 * 1024])
-async def test_echo(all_loops, msg_size, conn_type, buffered_protocol):
+async def test_echo(all_loops, msg_size, conn_type_plus_udp, buffered_protocol):
+    if conn_type_plus_udp.name == "udp" and msg_size > UDP_MAX_PAYLOAD_SIZE:
+        pytest.skip("UDP datagram payload exceeds the portable IPv4 limit")
+
     payload = b"x" * msg_size
 
-    async with TestServer(ct=conn_type, is_buffered=buffered_protocol) as server:
-        async with TestClient(server, ct=conn_type, is_buffered=buffered_protocol) as client:
+    async with TestServer(ct=conn_type_plus_udp, is_buffered=buffered_protocol) as server:
+        async with TestClient(server, ct=conn_type_plus_udp, is_buffered=buffered_protocol) as client:
             client.write(payload)
             echoed = await client.readn(msg_size)
             assert echoed == payload
@@ -149,7 +152,7 @@ async def test_write_huge_abort(all_loops, conn_type):
 
     payload = b"p" * (20*1024*1024)
 
-    class FaulyServerProtocol(asyncio.Protocol):
+    class FaultyServerProtocol(asyncio.Protocol):
         def connection_made(self, transport):
             self.is_eof_received = False
             self.transport = transport
@@ -159,10 +162,10 @@ async def test_write_huge_abort(all_loops, conn_type):
 
         def eof_received(self):
             self.is_eof_received = True
-            _logger.debug("FaulyServerProtocol.eof_received() called")
+            _logger.debug("FaultyServerProtocol.eof_received() called")
 
         def connection_lost(self, exc):
-            _logger.debug("FaulyServerProtocol.connection_lost(%s) called", str(exc))
+            _logger.debug("FaultyServerProtocol.connection_lost(%s) called", str(exc))
 
     # Normally we would expect client to not have eof_received event if peer disconnect with abort.
     # This is definitely true only for TLS where eof_received mean graceful close_notify
@@ -171,7 +174,7 @@ async def test_write_huge_abort(all_loops, conn_type):
     # becomes flaky. If write_ready happens first, then send fails and we call connection_lost
     # immediately. If read_ready happens first, then we call eof_received.
 
-    async with TestServer(FaulyServerProtocol, ct=conn_type) as server:
+    async with TestServer(FaultyServerProtocol, ct=conn_type) as server:
         async with TestClient(server, ct=conn_type) as client:
             client.transport.write(payload)
             with pytest.raises(ConnectionResetError):
@@ -311,8 +314,8 @@ async def test_pause_reading_from_read_callback(all_loops, conn_type, buffered_p
     payload = b"x" * (3 * 256 * 1024)
 
     class PauseFromReadCallbackClient(AsyncClient):
-        def __init__(self, is_buffered):
-            super().__init__(is_buffered)
+        def __init__(self):
+            super().__init__()
             self.first_read = asyncio.get_running_loop().create_future()
             self.read_callback_count = 0
 

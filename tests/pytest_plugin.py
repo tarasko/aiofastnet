@@ -1,4 +1,5 @@
 from tests.utils import (
+    conn_type_plus_udp,
     conn_type,
     ktls_conn_type,
     ssl_conn_type,
@@ -9,6 +10,7 @@ from tests.utils import (
 )
 
 __all__ = [
+    "conn_type_plus_udp",
     "conn_type",
     "ktls_conn_type",
     "ssl_conn_type",

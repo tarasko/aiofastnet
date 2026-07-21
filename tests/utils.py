@@ -19,6 +19,8 @@ import aiofastnet
 _logger = getLogger("tests.utils")
 # This is useful to verify tests against stdlib implementations
 NO_AIOFN = os.environ.get('NO_AIOFN')
+# IPv4 UDP payload limit: 65535 total packet bytes - 20 byte IPv4 header - 8 byte UDP header.
+UDP_MAX_PAYLOAD_SIZE = 65507
 
 
 class SomeException(Exception):
@@ -73,6 +75,13 @@ async def create_unix_server(loop, *args, **kwargs):
         return await aiofastnet.create_unix_server(loop, *args, **kwargs)
 
 
+async def create_datagram_endpoint(loop, *args, **kwargs):
+    if NO_AIOFN:
+        return await loop.create_datagram_endpoint(*args, **kwargs)
+    else:
+        return await aiofastnet.create_datagram_endpoint(loop, *args, **kwargs)
+
+
 class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
     def __init__(self, clients: set, client_waiters: List[Any], is_buffered: bool):
         self.transport = None
@@ -111,6 +120,10 @@ class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
         _logger.debug("EchoServer.data_received: %d", len(data))
         self.transport.write(data)
 
+    def datagram_received(self, data, addr):
+        _logger.debug("EchoServer.datagram_received: %d", len(data))
+        self.transport.sendto(data, addr)
+
     def pause_writing(self):
         _logger.debug("EchoServer.pause_writing")
 
@@ -122,10 +135,11 @@ class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
 
 
 class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
-    def __init__(self, is_buffered: bool):
+    def __init__(self):
         self.transport = None
         self._ssl_layer = 0
-        self._is_buffered = is_buffered
+        self.is_buffered = False
+        self.is_datagram = False
         self._closed = asyncio.get_running_loop().create_future()
         self._read_buffer = bytearray(b"X") * (256*1024)
         self._data = bytearray()
@@ -144,7 +158,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         return self._is_eof_received
 
     def is_buffered_protocol(self):
-        return self._is_buffered
+        return self.is_buffered
 
     def connection_made(self, transport):
         _logger.debug("AsyncClient.connection_made")
@@ -157,7 +171,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
 
     def data_received(self, data):
         if isinstance(self.transport, aiofastnet.Transport):
-            assert not self._is_buffered
+            assert not self.is_buffered
         self._data.extend(data)
         _logger.debug("AsyncClient.data_received: received=%d, total=%d", len(data), len(self._data))
         self._wakeup_waiters()
@@ -169,12 +183,23 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
 
     def buffer_updated(self, bytes_read):
         if isinstance(self.transport, aiofastnet.Transport):
-            assert self._is_buffered
+            assert self.is_buffered
         self._data += self._read_buffer[:bytes_read]
         _logger.debug("AsyncClient.buffer_updated: received=%d, total=%d", bytes_read, len(self._data))
         self._wakeup_waiters()
         self._new_data_ev.set()
         self._new_data_ev.clear()
+
+    def datagram_received(self, data, addr):
+        self._data.extend(data)
+        _logger.debug("AsyncClient.datagram_received: received=%d, total=%d",
+                      len(data), len(self._data))
+        self._wakeup_waiters()
+        self._new_data_ev.set()
+        self._new_data_ev.clear()
+
+    def error_received(self, exc):
+        _logger.debug("AsyncClient.error_received, exc=%s", exc)
 
     def pause_writing(self):
         _logger.debug("AsyncClient.pause_writing")
@@ -207,7 +232,10 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
 
     def write(self, data: bytes):
         _logger.debug("AsyncClient.write(len=%d)", len(data))
-        self.transport.write(data)
+        if self.is_datagram:
+            self.transport.sendto(data)
+        else:
+            self.transport.write(data)
 
     def write_in_lines(self, data: bytes, num_lines: int):
         parts = []
@@ -382,6 +410,11 @@ def _make_unix_conn_type():
 
     return ConnectionType("unix", None, None)
 
+
+def _make_udp_conn_type():
+    return ConnectionType("udp", None, None)
+
+
 @pytest.fixture
 def ktls_conn_type():
     return _make_ktls_conn_type()
@@ -412,6 +445,20 @@ def conn_type(request):
 
 @pytest.fixture(params=[
     "tcp",
+    "unix",
+    "udp",
+    "ssl_mbio",
+    "ssl_mbio_fall",    # Force usage of SSLFallbackEngine + SSLTransport_Transport
+    "ssl_sbio",
+    "stls",             # Use SSLTransport_Transport by using start_tls
+    "ktls",
+])
+def conn_type_plus_udp(request):
+    return _make_conn_type_from_param(request)
+
+
+@pytest.fixture(params=[
+    "tcp",
     "ssl_mbio",
     "ssl_mbio_fall",
     "ssl_sbio",
@@ -425,6 +472,8 @@ def benchmark_conn_type(request):
 def _make_conn_type_from_param(request):
     if request.param == "tcp":
         return ConnectionType(name=request.param)
+    elif request.param == "udp":
+        return _make_udp_conn_type()
     elif request.param == "unix":
         return _make_unix_conn_type()
     elif request.param in ("ssl_mbio", "ssl_mbio_fall", "stls"):
@@ -472,7 +521,15 @@ async def TestServer(protocol_factory=None,
             return EchoServerProtocol(clients, client_waiters, is_buffered)
 
     with ExitStack() as stack:
-        if ct.name == "unix":
+        if ct.name == "udp":
+            path = None
+            transport, protocol = await create_datagram_endpoint(
+                loop,
+                protocol_factory,
+                local_addr=(host, port),
+            )
+            server = transport
+        elif ct.name == "unix":
             tmpdir = stack.enter_context(tempfile.TemporaryDirectory())
             path = os.path.join(tmpdir, "aiofastnet.sock")
             server = await create_unix_server(
@@ -497,6 +554,8 @@ async def TestServer(protocol_factory=None,
         try:
             if ct.name == "unix":
                 resolved_port = None
+            elif ct.name == "udp":
+                resolved_port = server.get_extra_info("sockname")[1]
             else:
                 resolved_port = server.sockets[0].getsockname()[1]
             yield EchoServerHandle(
@@ -519,7 +578,9 @@ async def TestServer(protocol_factory=None,
                 if not w.done():
                     w.set_exception(RuntimeError("server finished"))
             client_waiters.clear()
-            await server.wait_closed()
+            wait_closed = getattr(server, "wait_closed", None)
+            if wait_closed is not None:
+                await wait_closed()
 
 
 @asynccontextmanager
@@ -543,24 +604,36 @@ async def TestClient(server_or_host, port=None,
     loop = asyncio.get_running_loop()
     transport = None
     client = None
+    def client_protocol_factory():
+        protocol = protocol_factory()
+        protocol.is_buffered = is_buffered
+        protocol.is_datagram = ct.name == "udp"
+        return protocol
+
     try:
         if ct.name == "unix":
             transport, client = await create_unix_connection(
                 loop,
-                lambda: protocol_factory(is_buffered),
+                client_protocol_factory,
                 path=path if path is not None else host,
+            )
+        elif ct.name == "udp":
+            transport, client = await create_datagram_endpoint(
+                loop,
+                client_protocol_factory,
+                remote_addr=(host, port),
             )
         elif ct.use_start_tls or ct.client_ssl_context is None:
             transport, client = await create_connection(
                 loop,
-                lambda: protocol_factory(is_buffered),
+                client_protocol_factory,
                 host=host,
                 port=port,
             )
         else:
             transport, client = await create_connection(
                 loop,
-                lambda: protocol_factory(is_buffered),
+                client_protocol_factory,
                 host=host,
                 port=port,
                 ssl=ct.client_ssl_context,
