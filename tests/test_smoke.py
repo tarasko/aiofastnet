@@ -22,8 +22,11 @@ from tests.utils import TestClient, TestServer, \
 
 @pytest.mark.parametrize("msg_size", [1, 2, 3, 4, 5, 6, 7, 8, 29, 64, 256 * 1024, 6 * 1024 * 1024])
 async def test_echo(all_loops, msg_size, conn_type_plus_udp, buffered_protocol):
-    if conn_type_plus_udp.name == "udp" and msg_size > UDP_MAX_PAYLOAD_SIZE:
-        pytest.skip("UDP datagram payload exceeds the portable IPv4 limit")
+    if conn_type_plus_udp.name == "udp":
+        if msg_size > UDP_MAX_PAYLOAD_SIZE:
+            pytest.skip("UDP datagram payload exceeds the portable IPv4 limit")
+        if buffered_protocol:
+            pytest.skip("UDP datagram protocol is always simple")
 
     payload = b"x" * msg_size
 
