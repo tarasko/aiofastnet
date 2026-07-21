@@ -13,6 +13,9 @@ Read README.md for project description.
   aiofastnet conventions, such as `logger` -> `_logger` or `self` -> `loop`.
   Fallback code for unsupported event loop implementations, such as proactor
   loops, is acceptable.
+* In tests and test helpers, do not pass optional API parameters just to be
+  explicit. Only specify them when the test depends on that behavior; otherwise
+  redundant arguments can falsely imply hidden requirements.
 * In Cython, do not give side-effect-only helpers fake return types such as `int except -1`.
   Use a no-result helper signature instead, unless the returned value is meaningful to callers.
 
