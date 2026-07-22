@@ -1097,16 +1097,24 @@ cdef class SSLTransport_Socket(SSLTransportBase):
 
         aiofn_set_nodelay(sock)
 
+        # We want a strong exception guarantee for constructor
+        # If there is an exception at any stage, SSLTransport_Socket should NOT own socket.
+        # That's why we set it to None, immediately after exception
+        # Caller is responsible for closing and cleaning up socket in case of exception.
+
         self._sock_fd_obj = sock.fileno()
         self._sock_fd = self._sock_fd_obj
         self._sock = sock
+        cdef bint reader_added = False
         try:
             self._loop.add_reader(self._sock_fd_obj, self._read_ready)
+            reader_added = True
             self._start_handshake()
             _ssl_socket_post_handshake_test_hook()
         except:
             self._sock = None
-            self._loop.remove_reader(self._sock_fd_obj)
+            if reader_added:
+                self._loop.remove_reader(self._sock_fd_obj)
             self._drop_writer()
             if self._handshake_timeout_handle is not None:
                 self._handshake_timeout_handle.cancel()
