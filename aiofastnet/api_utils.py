@@ -342,6 +342,12 @@ class Server(asyncio.AbstractServer):
                 asyncio.create_task(self._accept_connection2(conn))
 
     async def _accept_connection2(self, sock):
+        # By the time _accept_connection2 is called, server can be already closed
+        # In such case we just close socket and return
+        if self._sockets is None:
+            sock.close()
+            return
+
         try:
             transport, _ = await _create_connection_transport(
                 self._loop,
@@ -357,7 +363,6 @@ class Server(asyncio.AbstractServer):
                 server=self,
                 wait_connected=False,
             )
-            self._attach(transport)
         except (SystemExit, KeyboardInterrupt):
             raise
         except BaseException as exc:
@@ -368,6 +373,16 @@ class Server(asyncio.AbstractServer):
                     "exception": exc,
                 }
                 self._loop.call_exception_handler(context)
+
+            return
+
+        # After await _create_connection_transport the server can be already closed
+        # Abort transport and return then.
+        if self._sockets is None:
+            transport.abort()
+            return
+
+        self._attach(transport)
 
     def get_loop(self):
         return self._loop
