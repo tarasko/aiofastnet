@@ -968,12 +968,14 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
     cdef:
         object _address
         Py_ssize_t _header_size
+        bint _has_connection
 
     def __init__(self, loop, sock, protocol, address=None,
                  waiter=None, extra=None):
         SocketTransportBase.__init__(self, loop, sock, protocol, waiter, extra)
         self._address = address
         self._header_size = 8
+        self._has_connection = self._extra['peername'] is not None
 
     def _read_ready(self):
         cdef:
@@ -1087,13 +1089,17 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
 
         try:
             aiofn_unpack_simple_buffer(data, &buf_ptr, &buf_len, 0)
-            if not self._extra['peername']:
+            if not self._has_connection:
                 if not aiofn_pyaddr_to_sockaddr(addr, raw_addr, &raw_addr_len):
-                    self._sock.sendto(data, addr)
+                    bytes_sent = self._sock.sendto(data, addr)
+                    if unlikely(self._is_debug):
+                        _logger.debug("%r: socket.sendto(...,len=%d)=%d", self, buf_len, bytes_sent)
                     return True
                 raw_addr_ptr = raw_addr
 
             bytes_sent = aiofn_sendto(self._sock_fd, buf_ptr, buf_len, raw_addr_ptr, raw_addr_len)
+            if unlikely(self._is_debug):
+                _logger.debug("%r: aiofn_sendto(...,len=%d)=%d", self, buf_len, bytes_sent)
             if bytes_sent == -1:
                 return False
 
