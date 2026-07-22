@@ -64,6 +64,7 @@ plugins = ["Cython.Coverage"]
 core = "ctrace"
 omit = [
     "aiofastnet/api_create_connection.py",
+    "aiofastnet/api_create_datagram_endpoint.py",
     "aiofastnet/api_create_unix_connection.py",
     "aiofastnet/api_create_server.py",
     "aiofastnet/api_create_unix_server.py",
