@@ -911,6 +911,14 @@ cdef class SSLTransportBase(Transport):
             except Exception as exc:
                 self._fatal_error_no_close(exc, "user connection_made raised an exception")
 
+    cdef inline _call_protocol_connection_lost(self, app_protocol, exc):
+        try:
+            return app_protocol.connection_lost(exc)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:
+            self._fatal_error_no_close(exc, "user connection_lost raised an exception")
+
     cdef inline _call_protocol_get_buffer(self, char** buf_ptr, Py_ssize_t* buf_len):
         try:
             if self._app_protocol_aiofn:
@@ -1513,7 +1521,8 @@ cdef class SSLTransport_Transport(SSLTransportBase):
             if self._app_state == AppProtocolState.STATE_CON_MADE or \
                     self._app_state == AppProtocolState.STATE_EOF:
                 self._app_state = AppProtocolState.STATE_CON_LOST
-                self._loop.call_soon(self._app_protocol.connection_lost, exc)
+                self._loop.call_soon(self._call_protocol_connection_lost,
+                                     self._app_protocol, exc)
         self._set_state(SSLProtocolState.UNWRAPPED)
 
         # Decrease ref counters to user instances to avoid cyclic references
