@@ -72,8 +72,7 @@ async def _create_connection_transport(
         ssl_shutdown_timeout: Optional[float]=None,
         ssl_incoming_bio_size: Optional[int]=None,
         ssl_outgoing_bio_size: Optional[int]=None,
-        server=None,
-        wait_connected: bool=True
+        server=None
 ) -> Tuple[asyncio.Transport, asyncio.BaseProtocol]:
     sock.setblocking(False)
 
@@ -83,7 +82,7 @@ async def _create_connection_transport(
     if _should_fallback_to_asyncio(loop):
         if ssl:
             protocol = protocol_factory()
-            waiter = loop.create_future() if wait_connected else None
+            waiter = loop.create_future() if server is None else None
             sslcontext = None if isinstance(ssl, bool) else ssl
 
             ssl_transport = SSLTransport_Transport(
@@ -122,11 +121,11 @@ async def _create_connection_transport(
             transport = wrapped_protocol._wrapped_transport
             protocol = wrapped_protocol._protocol
             wrapped_protocol._wrapped_transport = None
-            if not wait_connected:
+            if server is not None:
                 transport = loop_transport
     else:
         protocol = protocol_factory()
-        waiter = loop.create_future() if wait_connected else None
+        waiter = loop.create_future() if server is None else None
         if ssl:
             sslcontext = openssl_compat.create_transport_context(server_side, server_hostname) if isinstance(ssl, bool) else ssl
             if _ssl_needs_fallback_engine(sslcontext):
@@ -361,7 +360,6 @@ class Server(asyncio.AbstractServer):
                 ssl_incoming_bio_size=self._ssl_incoming_bio_size,
                 ssl_outgoing_bio_size=self._ssl_outgoing_bio_size,
                 server=self,
-                wait_connected=False,
             )
         except (SystemExit, KeyboardInterrupt):
             raise
