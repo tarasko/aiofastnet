@@ -797,9 +797,9 @@ async def test_contextvar(all_loops, conn_type, buffered_protocol):
             assert var_values[0] == ('connection_made', 'begin')
 
 
-async def test_transport_base(all_loops, conn_type):
-    async with TestServer(ct=conn_type) as server:
-        async with TestClient(server, ct=conn_type) as client:
+async def test_transport_base(all_loops, conn_type_plus_udp):
+    async with TestServer(ct=conn_type_plus_udp) as server:
+        async with TestClient(server, ct=conn_type_plus_udp) as client:
             assert isinstance(client.transport, Transport)
             client.close()
             await client.wait_closed()
@@ -909,15 +909,18 @@ async def test_start_tls(all_loops):
             assert client.is_eof_received
 
 
-async def test_peername(all_loops, conn_type):
-    async with TestServer(ct=conn_type) as server:
-        async with TestClient(server, ct=conn_type) as client:
+async def test_peername(all_loops, conn_type_plus_udp):
+    async with TestServer(ct=conn_type_plus_udp) as server:
+        async with TestClient(server, ct=conn_type_plus_udp) as client:
             server_client = await server.get_any_server_client()
             client_peername = client.transport.get_extra_info('peername')
             client_sockname = client.transport.get_extra_info('sockname')
             server_peername = server_client.transport.get_extra_info('peername')
             server_sockname = server_client.transport.get_extra_info('sockname')
             assert client_peername == server_sockname
+            if conn_type_plus_udp.name == "udp":
+                assert server_peername is None
+                return
             assert server_peername == client_sockname
 
 
