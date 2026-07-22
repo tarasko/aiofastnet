@@ -1,4 +1,5 @@
 import asyncio
+import socket
 
 import pytest
 from tests.utils import (
@@ -21,6 +22,38 @@ async def test_datagram_rejects_different_address(all_loops, conn_type_udp):
                     b"hello",
                     ("127.0.0.1", server_addr[1] + 1),
                 )
+
+
+async def test_datagram_write_ready_after_eagain(selector_loop, conn_type_udp):
+    try:
+        sock, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    except (AttributeError, OSError, ValueError):
+        pytest.skip("Unix datagram socket pairs are not supported")
+
+    try:
+        sock.setblocking(False)
+        peer.setblocking(False)
+
+        filler = b"x" * (16 * 1024)
+        async with TestClient(ct=conn_type_udp, sock=sock) as client:
+            for _ in range(1024):
+                client.write(filler)
+                if client.transport.get_write_buffer_size():
+                    break
+            else:
+                pytest.skip("Unix datagram socket did not produce EAGAIN")
+
+            marker = b"queued after EAGAIN"
+            client.write(marker)
+
+            while True:
+                if await asyncio.wait_for(asyncio.get_running_loop().sock_recv(peer, 2048), timeout=1.0) == marker:
+                    break
+
+            assert client.transport.get_write_buffer_size() == 0
+    finally:
+        sock.close()
+        peer.close()
 
 
 async def test_datagram_received_exception_does_not_close_transport(selector_loop, conn_type_udp):

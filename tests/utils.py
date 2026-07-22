@@ -591,14 +591,18 @@ async def TestServer(protocol_factory=None,
 
 
 @asynccontextmanager
-async def TestClient(server_or_host, port=None,
+async def TestClient(server_or_host=None, port=None,
                      ct: ConnectionType=ConnectionType("tcp"),
                      server_hostname=None,
                      is_buffered=False,
                      protocol_factory=AsyncClient,
                      ssl_handshake_timeout=None,
-                     ssl_shutdown_timeout=None):
-    if isinstance(server_or_host, EchoServerHandle):
+                     ssl_shutdown_timeout=None,
+                     sock=None):
+    if sock is not None:
+        host = None
+        path = None
+    elif isinstance(server_or_host, EchoServerHandle):
         host = server_or_host.host
         port = server_or_host.port
         path = server_or_host.path
@@ -625,11 +629,18 @@ async def TestClient(server_or_host, port=None,
                 path=path if path is not None else host,
             )
         elif ct.name == "udp":
-            transport, client = await create_datagram_endpoint(
-                loop,
-                client_protocol_factory,
-                remote_addr=(host, port),
-            )
+            if sock is not None:
+                transport, client = await create_datagram_endpoint(
+                    loop,
+                    client_protocol_factory,
+                    sock=sock,
+                )
+            else:
+                transport, client = await create_datagram_endpoint(
+                    loop,
+                    client_protocol_factory,
+                    remote_addr=(host, port),
+                )
         elif ct.use_start_tls or ct.client_ssl_context is None:
             transport, client = await create_connection(
                 loop,
