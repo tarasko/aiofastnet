@@ -1372,21 +1372,22 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         return self._sock is None
 
     cdef inline _call_connection_lost(self, exc):
-        if self._app_protocol_connected and self._app_state in (AppProtocolState.STATE_CON_MADE, AppProtocolState.STATE_EOF):
-            self._app_state = AppProtocolState.STATE_CON_LOST
-            self._call_protocol_connection_lost(self._app_protocol, exc)
-
-        if self._sock is not None:
-            self._sock.close()
-            if unlikely(self._is_debug):
-                _logger.debug("%r: _sock.close() called", self)
-        self._sock = None
-        self._app_protocol = None
-        self._loop = None
-        server = self._server
-        if server is not None:
-            server._detach(self)
-            self._server = None
+        try:
+            if self._app_protocol_connected and self._app_state in (AppProtocolState.STATE_CON_MADE, AppProtocolState.STATE_EOF):
+                self._app_state = AppProtocolState.STATE_CON_LOST
+                self._call_protocol_connection_lost(self._app_protocol, exc)
+        finally:
+            if self._sock is not None:
+                self._sock.close()
+                if unlikely(self._is_debug):
+                    _logger.debug("%r: _sock.close() called", self)
+            self._sock = None
+            self._app_protocol = None
+            self._loop = None
+            server = self._server
+            if server is not None:
+                server._detach(self)
+                self._server = None
 
 
 cdef class SSLProtocol(Protocol):
