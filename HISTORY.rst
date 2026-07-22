@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.22.0
+------------------
+
+* Harden logic against exceptions in SSLTransport constructor
+
 0.21.0
 ------------------
 

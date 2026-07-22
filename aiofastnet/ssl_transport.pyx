@@ -50,7 +50,7 @@ cdef size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONN
 cdef Py_ssize_t DATA_RECEIVED_MAX_SIZE = constants.DATA_RECEIVED_MAX_SIZE
 
 
-def _ssl_socket_post_handshake_test_hook():
+def _ssl_socket_post_handshake_test_hook(transport):
     pass
 
 
@@ -1110,7 +1110,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             self._loop.add_reader(self._sock_fd_obj, self._read_ready)
             reader_added = True
             self._start_handshake()
-            _ssl_socket_post_handshake_test_hook()
+            _ssl_socket_post_handshake_test_hook(self)
         except:
             self._sock = None
             if reader_added:
