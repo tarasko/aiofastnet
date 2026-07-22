@@ -1047,27 +1047,26 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
         aiofn_validate_buffer(data)
 
         if self._address:
-            if addr not in (None, self._address):
+            if addr is not None and addr != self._address:
                 raise ValueError(
                     f'Invalid address: must be None or {self._address}')
             addr = self._address
 
-        if self._connection_lost_scheduled and self._address:
+        if unlikely(self._connection_lost_scheduled and self._address):
             if self._closed_write_count >= LOG_THRESHOLD_FOR_CONNLOST_WRITES:
                 _logger.warning('socket.send() raised exception.')
             self._closed_write_count += 1
             return
 
         try:
-            if not self._write_backlog and self._sendto_impl(data, addr):
-                return
-
             if not self._write_backlog:
-                self._ensure_writer()
+                if self._sendto_impl(data, addr):
+                    return
 
             # Ensure that what we buffer is immutable.
-            self._write_backlog.append((bytes(data), addr))
+            self._write_backlog.append((aiofn_maybe_copy_buffer(data), addr))
             self._write_backlog_size += len(data) + self._header_size
+            self._ensure_writer()
             self._maybe_pause_protocol()
         except:
             self._handle_error('Fatal write error on datagram transport')
