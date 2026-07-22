@@ -82,7 +82,7 @@ async def _create_connection_transport(
     if _should_fallback_to_asyncio(loop):
         if ssl:
             protocol = protocol_factory()
-            waiter = loop.create_future()
+            waiter = loop.create_future() if server is None else None
             sslcontext = None if isinstance(ssl, bool) else ssl
 
             ssl_transport = SSLTransport_Transport(
@@ -99,8 +99,8 @@ async def _create_connection_transport(
             ssl_protocol_factory = ssl_transport.get_tls_protocol
 
             create_connection = _get_original_loop_method(loop, "create_connection")
-            loop_transport, ssl_protocol = await create_connection(
-                ssl_protocol_factory, None, None, sock=sock)
+            await create_connection(ssl_protocol_factory, None, None, sock=sock)
+
             transport = ssl_transport
         else:
             def wrapped_protocol_factory():
@@ -113,22 +113,23 @@ async def _create_connection_transport(
             create_connection = _get_original_loop_method(loop, "create_connection")
             loop_transport, wrapped_protocol = await create_connection(
                 wrapped_protocol_factory, None, None, sock=sock)
+
             transport = wrapped_protocol._wrapped_transport
             protocol = wrapped_protocol._protocol
             wrapped_protocol._wrapped_transport = None
 
-        # Ugly but I don't know how else to attach conventional transport
-        # to my Server object
-        if server is not None:
-            loop_transport._server = server
-            server._attach(loop_transport)
+            if server is not None:
+                # asyncio Transport needs _server in order to detach itself on disconnect
+                loop_transport._server = server
+                # and the Server must attach it, not WrappedTransport
+                transport = loop_transport
     else:
         protocol = protocol_factory()
-        waiter = loop.create_future()
+        waiter = loop.create_future() if server is None else None
         if ssl:
             sslcontext = openssl_compat.create_transport_context(server_side, server_hostname) if isinstance(ssl, bool) else ssl
             if _ssl_needs_fallback_engine(sslcontext):
-                ssl_transport = SSLTransport_Transport(
+                transport = SSLTransport_Transport(
                     loop, protocol, sslcontext,
                     server_side,
                     ssl_handshake_timeout,
@@ -136,10 +137,10 @@ async def _create_connection_transport(
                     ssl_incoming_bio_size,
                     ssl_outgoing_bio_size,
                     waiter=waiter,
-                    server_hostname=server_hostname
+                    server_hostname=server_hostname,
+                    server=server
                 )
-                transport = ssl_transport
-                SocketTransport(loop, sock, ssl_transport.get_tls_protocol(), server=server)
+                SocketTransport(loop, sock, transport.get_tls_protocol())
             else:
                 transport = SSLTransport_Socket(
                     loop, protocol, sslcontext,
@@ -296,14 +297,90 @@ class Server(asyncio.AbstractServer):
         self._serving = True
         for sock in self._sockets:
             sock.listen(self._backlog)
-            _start_serving(
+            self._start_serving_one_listener(sock)
+
+    def _start_serving_one_listener(self, listening_sock):
+        self._loop.add_reader(listening_sock.fileno(), self._accept_connection, listening_sock)
+
+    def _accept_connection(self, listening_sock):
+        # This method is only called once for each event loop tick where the
+        # listening socket has triggered an EVENT_READ. There may be multiple
+        # connections waiting for an .accept() so it is called in a loop.
+        # See https://bugs.python.org/issue27906 for more details.
+        for _ in range(self._backlog + 1):
+            try:
+                conn, addr = listening_sock.accept()
+                if self._loop.get_debug():
+                    _logger.debug("%r got a new connection from %r: %r", self, addr, conn)
+                conn.setblocking(False)
+            except ConnectionAbortedError:
+                # Discard connections that were aborted before accept().
+                continue
+            except (BlockingIOError, InterruptedError):
+                # Early exit because of a signal or
+                # the socket accept buffer is empty.
+                return
+            except OSError as exc:
+                # There's nowhere to send the error, so just log it.
+                if exc.errno in (errno.EMFILE, errno.ENFILE, errno.ENOBUFS, errno.ENOMEM):
+                    # Some platforms (e.g. Linux keep reporting the FD as
+                    # ready, so we remove the read handler temporarily.
+                    # We'll try again in a while.
+                    self._loop.call_exception_handler(
+                        {
+                            "message": "socket.accept() out of system resource",
+                            "exception": exc,
+                            "socket": TransportSocket(listening_sock),
+                        }
+                    )
+                    listening_sock.remove_reader(listening_sock.fileno())
+                    self._loop.call_later(constants.ACCEPT_RETRY_DELAY, self._start_serving_one_listener, listening_sock)
+                else:
+                    raise  # The event loop will catch, log and ignore it.
+            else:
+                asyncio.create_task(self._accept_connection2(conn))
+
+    async def _accept_connection2(self, sock):
+        # By the time _accept_connection2 is called, server can be already closed
+        # In such case we just close socket and return
+        if self._sockets is None:
+            sock.close()
+            return
+
+        try:
+            transport, _ = await _create_connection_transport(
                 self._loop,
-                self._protocol_factory, sock, self._ssl_context,
-                self, self._backlog,
-                self._ssl_handshake_timeout,
-                self._ssl_shutdown_timeout,
-                self._ssl_incoming_bio_size,
-                self._ssl_outgoing_bio_size)
+                sock,
+                self._protocol_factory,
+                self._ssl_context,
+                server_hostname=None,
+                server_side=True,
+                ssl_handshake_timeout=self._ssl_handshake_timeout,
+                ssl_shutdown_timeout=self._ssl_shutdown_timeout,
+                ssl_incoming_bio_size=self._ssl_incoming_bio_size,
+                ssl_outgoing_bio_size=self._ssl_outgoing_bio_size,
+                server=self,
+            )
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except BaseException as exc:
+            sock.close()
+            if self._loop.get_debug():
+                context = {
+                    "message": "Error on transport creation for incoming connection",
+                    "exception": exc,
+                }
+                self._loop.call_exception_handler(context)
+
+            return
+
+        # After await _create_connection_transport the server can be already closed
+        # Abort transport and return then.
+        if self._sockets is None:
+            transport.abort()
+            return
+
+        self._attach(transport)
 
     def get_loop(self):
         return self._loop
@@ -324,7 +401,8 @@ class Server(asyncio.AbstractServer):
         self._sockets = None
 
         for sock in sockets:
-            _stop_serving(self._loop, sock)
+            self._loop.remove_reader(sock.fileno())
+            sock.close()
 
         self._serving = False
 
@@ -397,121 +475,7 @@ class Server(asyncio.AbstractServer):
         waiter = self._loop.create_future()
         self._waiters.append(waiter)
         await waiter
-
-
-def _accept_connection(
-        loop, protocol_factory, sock,
-        sslcontext, server,
-        backlog,
-        ssl_handshake_timeout,
-        ssl_shutdown_timeout,
-        ssl_incoming_bio_size,
-        ssl_outgoing_bio_size
-):
-    # This method is only called once for each event loop tick where the
-    # listening socket has triggered an EVENT_READ. There may be multiple
-    # connections waiting for an .accept() so it is called in a loop.
-    # See https://bugs.python.org/issue27906 for more details.
-    for _ in range(backlog + 1):
-        try:
-            conn, addr = sock.accept()
-            if loop.get_debug():
-                _logger.debug("%r got a new connection from %r: %r",
-                              server, addr, conn)
-            conn.setblocking(False)
-        except ConnectionAbortedError:
-            # Discard connections that were aborted before accept().
-            continue
-        except (BlockingIOError, InterruptedError):
-            # Early exit because of a signal or
-            # the socket accept buffer is empty.
-            return
-        except OSError as exc:
-            # There's nowhere to send the error, so just log it.
-            if exc.errno in (errno.EMFILE, errno.ENFILE,
-                             errno.ENOBUFS, errno.ENOMEM):
-                # Some platforms (e.g. Linux keep reporting the FD as
-                # ready, so we remove the read handler temporarily.
-                # We'll try again in a while.
-                loop.call_exception_handler({
-                    'message': 'socket.accept() out of system resource',
-                    'exception': exc,
-                    'socket': TransportSocket(sock),
-                })
-                loop.remove_reader(sock.fileno())
-                loop.call_later(constants.ACCEPT_RETRY_DELAY,
-                                _start_serving,
-                                loop, protocol_factory, sock, sslcontext, server,
-                                backlog,
-                                ssl_handshake_timeout,
-                                ssl_shutdown_timeout,
-                                ssl_incoming_bio_size,
-                                ssl_outgoing_bio_size
-                                )
-            else:
-                raise  # The event loop will catch, log and ignore it.
-        else:
-            accept = _accept_connection2(
-                loop, protocol_factory, conn, sslcontext, server,
-                ssl_handshake_timeout, ssl_shutdown_timeout,
-                ssl_incoming_bio_size, ssl_outgoing_bio_size
-            )
-            asyncio.create_task(accept)
-
-
-async def _accept_connection2(
-        loop,
-        protocol_factory,
-        sock,
-        sslcontext, server,
-        ssl_handshake_timeout,
-        ssl_shutdown_timeout,
-        ssl_incoming_bio_size,
-        ssl_outgoing_bio_size
-):
-    protocol = None
-    transport = None
-    try:
-        transport, protocol = await _create_connection_transport(
-            loop, sock, protocol_factory, sslcontext,
-            server_hostname=None, server_side=True,
-            ssl_handshake_timeout=ssl_handshake_timeout,
-            ssl_shutdown_timeout=ssl_shutdown_timeout,
-            ssl_incoming_bio_size=ssl_incoming_bio_size,
-            ssl_outgoing_bio_size=ssl_outgoing_bio_size,
-            server=server
-        )
-    except (SystemExit, KeyboardInterrupt):
-        raise
-    except BaseException as exc:
-        if transport is None:
-            sock.close()
-        if loop.get_debug():
-            context = {
-                'message':
-                    'Error on transport creation for incoming connection',
-                'exception': exc,
-            }
-            if protocol is not None:
-                context['protocol'] = protocol
-            if transport is not None:
-                context['transport'] = transport
-            loop.call_exception_handler(context)
-
-
-def _start_serving(loop, protocol_factory, sock,
-                   sslcontext, server, backlog,
-                   ssl_handshake_timeout,
-                   ssl_shutdown_timeout,
-                   ssl_incoming_bio_size,
-                   ssl_outgoing_bio_size,
-                   ):
-    loop.add_reader(sock.fileno(), _accept_connection, loop,
-                    protocol_factory, sock, sslcontext, server, backlog,
-                    ssl_handshake_timeout, ssl_shutdown_timeout,
-                    ssl_incoming_bio_size, ssl_outgoing_bio_size
-                    )
-
+        
 
 def _stop_serving(loop, sock):
     loop.remove_reader(sock.fileno())
