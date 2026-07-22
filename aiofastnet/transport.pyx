@@ -1059,7 +1059,7 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
             return
 
         try:
-            if not self._write_backlog:
+            if self._write_backlog_size == 0:
                 if self._sendto_impl(data, addr):
                     return
 
