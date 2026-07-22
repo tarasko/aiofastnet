@@ -114,14 +114,14 @@ async def _create_connection_transport(
             loop_transport, wrapped_protocol = await create_connection(
                 wrapped_protocol_factory, None, None, sock=sock)
 
-            # asyncio Transport needs _server in order to detach itself on disconnect
-            if server is not None:
-                loop_transport._server = server
-
             transport = wrapped_protocol._wrapped_transport
             protocol = wrapped_protocol._protocol
             wrapped_protocol._wrapped_transport = None
+
             if server is not None:
+                # asyncio Transport needs _server in order to detach itself on disconnect
+                loop_transport._server = server
+                # and the Server must attach it, not WrappedTransport
                 transport = loop_transport
     else:
         protocol = protocol_factory()
