@@ -19,6 +19,11 @@ except ImportError:
     uvloop = None
 
 
+UDP_MAX_PAYLOAD_SIZE = 65507
+SUPPORTED_TRANSPORTS = ["tcp", "ssl", "udp"]
+SUPPORTED_LOOPS = ["asyncio", "uvloop"]
+
+
 async def run_benchmark(args, loop_kind: str, variant: str, transport_kind: str, msg_size: int):
     if args.asyncio_debug:
         asyncio.get_running_loop().set_debug(True)
@@ -44,6 +49,7 @@ async def run_benchmark(args, loop_kind: str, variant: str, transport_kind: str,
         client_ssl_ctx,
         None,
         args.sndbuf_size,
+        transport_kind,
     )
     rps = requests/args.duration
     print(f"{transport_kind}-{loop_kind}-{variant}-{msg_size}: {rps:.2f}")
@@ -60,7 +66,8 @@ def _plot_results(
     uvloop_version: str,
     save_plot: bool,
 ) -> None:
-    transports = [transport for transport in ("ssl", "tcp") if transport in results]
+    transports = list(filter((lambda t: t in results), SUPPORTED_TRANSPORTS))
+
     if not transports:
         return
 
@@ -263,7 +270,7 @@ def main():
         default="native,aiofastnet",
         help="Comma-separated backend variants, any of (native,aiofastnet_fb,aiofastnet)",
     )
-    parser.add_argument("--transport", default="ssl,tcp", help="Comma-separated transport types (tcp,ssl)")
+    parser.add_argument("--transport", default="ssl,tcp", help="Comma-separated transport types (tcp,ssl,udp)")
     parser.add_argument("--duration", type=float, default=5.0, help="Benchmark duration in seconds" )
     parser.add_argument(
         "--sndbuf-size",
@@ -290,10 +297,13 @@ def main():
     if any(msg_size <= 0 for msg_size in args.msg_sizes):
         parser.error("--msg-sizes must contain integers > 0")
 
-    SUPPORTED_LOOPS = ["asyncio", "uvloop"]
     unknown_loops = [loop_name for loop_name in args.loops if loop_name not in SUPPORTED_LOOPS]
     if unknown_loops:
         parser.error(f"Unknown --loops values: {unknown_loops}. Valid: {SUPPORTED_LOOPS}")
+
+    unknown_transports = [transport for transport in args.transports if transport not in SUPPORTED_TRANSPORTS]
+    if unknown_transports:
+        parser.error(f"Unknown --transport values: {unknown_transports}. Valid: {SUPPORTED_TRANSPORTS}")
 
     if any(loop_name == "uvloop" for loop_name in args.loops) and uvloop is None:
         parser.error("uvloop variant requested but uvloop is not installed")
@@ -316,6 +326,9 @@ def main():
         all_results[transport_kind] = {}
         for msg_size in args.msg_sizes:
             all_results[transport_kind][msg_size] = {}
+            if transport_kind == "udp" and msg_size > UDP_MAX_PAYLOAD_SIZE:
+                print(f"udp-{msg_size}: skipped, exceeds UDP payload limit {UDP_MAX_PAYLOAD_SIZE}")
+                continue
             for loop_kind in args.loops:
                 for variant in args.variants:
                     loop_factory = uvloop.Loop if loop_kind == "uvloop" else asyncio.SelectorEventLoop

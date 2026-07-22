@@ -49,6 +49,9 @@ class ServerProtocol(Protocol, asyncio.BufferedProtocol):
         else:
             self._transport.write(data)
 
+    def datagram_received(self, data, addr):
+        self._transport.sendto(data, addr)
+
 
 @cython.cclass
 class ClientProtocol(Protocol, asyncio.BufferedProtocol):
@@ -56,6 +59,7 @@ class ClientProtocol(Protocol, asyncio.BufferedProtocol):
     _duration: cython.float
     _loop: object
     _is_buffered: cython.bint
+    _is_datagram: cython.bint
 
     _transport: object
     _read_buf: bytearray
@@ -69,11 +73,13 @@ class ClientProtocol(Protocol, asyncio.BufferedProtocol):
 
     def __init__(self, payload: bytes, duration: cython.float,
                  is_buffered: cython.bint = True,
-                 warmup_rounds: cython.int = 10):
+                 warmup_rounds: cython.int = 10,
+                 is_datagram: cython.bint = False):
         self._payload = payload
         self._duration = duration
         self._loop = asyncio.get_running_loop()
         self._is_buffered = is_buffered
+        self._is_datagram = is_datagram
 
         self._transport = None
         self._read_buf = bytearray(262144)
@@ -118,6 +124,13 @@ class ClientProtocol(Protocol, asyncio.BufferedProtocol):
         self._received_for_reply -= len(self._payload)
         self._write()
 
+    def datagram_received(self, data, addr):
+        self._write()
+
+    def error_received(self, exc):
+        if not self.closed.done():
+            self.closed.set_exception(exc)
+
     def connection_lost(self, exc):
         if not self.closed.done():
             if exc is None:
@@ -139,7 +152,9 @@ class ClientProtocol(Protocol, asyncio.BufferedProtocol):
                 self.requests = 0
                 self._deadline = self._loop.time() + self._duration
 
-        if isinstance(self._transport, Transport):
+        if self._is_datagram:
+            self._transport.sendto(self._payload)
+        elif isinstance(self._transport, Transport):
             cython.cast(Transport, self._transport).write_nocheck(self._payload)
         else:
             self._transport.write(self._payload)

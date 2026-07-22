@@ -23,6 +23,7 @@ from .transport import (
 )
 
 _ProtocolT = TypeVar("_ProtocolT", bound=asyncio.BaseProtocol)
+_DatagramProtocolT = TypeVar("_DatagramProtocolT", bound=asyncio.DatagramProtocol)
 _Address = Tuple[Union[str, bytes], int]
 _Host = Optional[Union[str, bytes, Sequence[Union[str, bytes]]]]
 
@@ -59,6 +60,20 @@ async def create_connection(
     interleave: Optional[int] = ...,
     all_errors: bool = ...,
 ) -> Tuple[asyncio.Transport, _ProtocolT]: ...
+
+async def create_datagram_endpoint(
+    loop: asyncio.AbstractEventLoop,
+    protocol_factory: Callable[[], _DatagramProtocolT],
+    local_addr: Optional[_Address] = ...,
+    remote_addr: Optional[_Address] = ...,
+    *,
+    family: int = ...,
+    proto: int = ...,
+    flags: int = ...,
+    reuse_port: Optional[bool] = ...,
+    allow_broadcast: Optional[bool] = ...,
+    sock: Optional[socket.socket] = ...,
+) -> Tuple[asyncio.DatagramTransport, _DatagramProtocolT]: ...
 
 async def create_unix_connection(
     loop: asyncio.AbstractEventLoop,

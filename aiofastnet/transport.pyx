@@ -24,6 +24,7 @@ from .utils cimport *
 cdef:
     object _logger = getLogger('aiofastnet')
     Py_ssize_t DATA_RECEIVED_MAX_SIZE = constants.DATA_RECEIVED_MAX_SIZE
+    Py_ssize_t DATAGRAM_RECEIVED_MAX_SIZE = constants.DATAGRAM_RECEIVED_MAX_SIZE
     size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
     object _os_sendfile = getattr(os, "sendfile", None)
 
@@ -35,10 +36,16 @@ cdef class Transport:
     def writelines(self, list_of_data):
         raise NotImplementedError()
 
+    def sendto(self, data, addr=None):
+        raise NotImplementedError()
+
     cpdef write_nocheck(self, data):
         raise NotImplementedError()
 
     cpdef writelines_nocheck(self, list_of_data):
+        raise NotImplementedError()
+
+    cpdef sendto_nocheck(self, data, addr):
         raise NotImplementedError()
 
     cdef write_c(self, char* ptr, Py_ssize_t sz):
@@ -191,7 +198,7 @@ cdef class WriteWatermarks:
         self._low_water = low
 
 
-cdef class SocketTransport(Transport):
+cdef class SocketTransportBase(Transport):
     cdef:
         object __weakref__
         unsigned long _thread_id
@@ -220,8 +227,6 @@ cdef class SocketTransport(Transport):
 
         bint _eof
         bint _is_debug
-
-        aiofn_iovec _iovecs[256]
 
     def __init__(self, loop, sock, protocol, waiter=None, extra=None, server=None):
         self._thread_id = PyThread_get_thread_ident()
@@ -259,8 +264,6 @@ cdef class SocketTransport(Transport):
         self._eof = False
         self._is_debug = loop.get_debug()
 
-        aiofn_set_nodelay(self._sock)
-
         self._loop.call_soon(self._protocol.connection_made, self)
         # only start reading when connection_made() has been called
         self._loop.call_soon(self._loop.add_reader,
@@ -270,7 +273,7 @@ cdef class SocketTransport(Transport):
             self._loop.call_soon(aiofn_set_result_unless_cancelled, waiter, None)
 
     def __repr__(self):
-        info = [f'fd={self._sock_fd_obj}', 'SocketTransport']
+        info = [f'fd={self._sock_fd_obj}', self.__class__.__name__]
         if self._sock is None:
             info.append('closed')
         elif self._closing:
@@ -280,7 +283,7 @@ cdef class SocketTransport(Transport):
 
     def __del__(self):
         if self._sock is not None:
-            warnings.warn(f"unclosed SocketTransport for {self._sock}", ResourceWarning, source=self)
+            warnings.warn(f"unclosed {self.__class__.__name__} for {self._sock}", ResourceWarning, source=self)
             self._sock.close()
             if self._server is not None:
                 self._server._detach(self)
@@ -289,7 +292,7 @@ cdef class SocketTransport(Transport):
         cdef unsigned long curr_thread_id = PyThread_get_thread_ident()
         if self._thread_id != curr_thread_id:
             raise RuntimeError(
-                f"SocketTransport.{meth} called from a wrong thread: "
+                f"{self.__class__.__name__}.{meth} called from a wrong thread: "
                 f"transport thread id={self._thread_id}, "
                 f"curr thread_id={curr_thread_id}"
             )
@@ -374,6 +377,99 @@ cdef class SocketTransport(Transport):
             total += (<Protocol>self._protocol).get_local_write_buffer_size()
 
         return total
+
+    cpdef _call_connection_lost(self, exc):
+        try:
+            if self._protocol_connected:
+                self._protocol.connection_lost(exc)
+        finally:
+            self._sock.close()
+            self._sock = None
+            self._protocol = None
+            server = self._server
+            if server is not None:
+                server._detach(self)
+                self._server = None
+
+    cdef inline _maybe_pause_protocol(self):
+        self._write_watermarks.maybe_pause_protocol(self, self._protocol, self._get_write_buffer_size_nocheck())
+
+    cdef inline _maybe_resume_protocol(self):
+        self._write_watermarks.maybe_resume_protocol(self, self._protocol, self._get_write_buffer_size_nocheck())
+
+    cdef inline _ensure_writer(self):
+        if unlikely(self._is_debug):
+            _logger.debug("%r: _ensure_writer called", self)
+
+        if self._connection_lost_scheduled or self._write_ready_registered:
+            return
+        self._write_ready_registered = True
+        self._loop.add_writer(self._sock_fd_obj, self._write_ready)
+
+    cdef inline _drop_writer(self):
+        if unlikely(self._is_debug):
+            _logger.debug("%r: _drop_writer called", self)
+
+        if not self._write_ready_registered:
+            return
+        self._write_ready_registered = False
+        self._loop.remove_writer(self._sock_fd_obj)
+
+    cdef inline _fatal_error(self, exc, message='Fatal error on transport'):
+        # Should be called from exception handler only.
+        if isinstance(exc, OSError):
+            if self._loop.get_debug():
+                _logger.debug("%r: %s", self, message, exc_info=True)
+        else:
+            self._loop.call_exception_handler({
+                'message': message,
+                'exception': exc,
+                'transport': self,
+                'protocol': self._protocol,
+            })
+        self._force_close(exc)
+
+    cdef inline _handle_error(self, message):
+        _, exc, _ = sys.exc_info()
+
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+
+        message = getattr(exc, constants.EXC_INFO_ATTR, message)
+        self._fatal_error(exc, message)
+
+    # May be used by create_connection/create_server
+    # Keep cpdef
+    cpdef _force_close(self, exc):
+        if self._connection_lost_scheduled:
+            return
+        if self._write_backlog:
+            self._clear_write_backlog(exc)
+            self._drop_writer()
+        if not self._closing:
+            self._closing = True
+            self._loop.remove_reader(self._sock_fd_obj)
+        self._connection_lost_scheduled = True
+        self._loop.call_soon(self._call_connection_lost, exc)
+
+    cdef inline _clear_write_backlog(self, exc):
+        cdef SendFileRequest req
+        for data in self._write_backlog:
+            if isinstance(data, SendFileRequest):
+                req = <SendFileRequest>data
+                if req.waiter is not None and not req.waiter.done():
+                    req.waiter.set_exception(exc)
+        self._write_backlog.clear()
+        self._write_backlog_size = 0
+
+
+cdef class SocketTransport(SocketTransportBase):
+    cdef:
+        aiofn_iovec _iovecs[256]
+
+    def __init__(self, loop, sock, protocol, waiter=None, extra=None, server=None):
+        aiofn_set_nodelay(sock)
+        SocketTransportBase.__init__(self, loop, sock, protocol, waiter, extra, server)
 
     def _read_ready(self):
         try:
@@ -738,7 +834,7 @@ cdef class SocketTransport(Transport):
                 all_sent = self._try_write_list_of_data(self._write_backlog, &bytes_sent)
                 self._adjust_write_backlog(bytes_sent)
 
-    cpdef _write_ready(self):
+    def _write_ready(self):
         assert self._write_backlog, 'Data should not be empty'
         if self._connection_lost_scheduled:
             return
@@ -794,43 +890,6 @@ cdef class SocketTransport(Transport):
                 self._protocol.data_received(data)
         except:
             aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.')
-
-    cpdef _call_connection_lost(self, exc):
-        try:
-            if self._protocol_connected:
-                self._protocol.connection_lost(exc)
-        finally:
-            self._sock.close()
-            self._sock = None
-            self._protocol = None
-            server = self._server
-            if server is not None:
-                server._detach(self)
-                self._server = None
-
-    cdef inline _maybe_pause_protocol(self):
-        self._write_watermarks.maybe_pause_protocol(self, self._protocol, self._get_write_buffer_size_nocheck())
-
-    cdef inline _maybe_resume_protocol(self):
-        self._write_watermarks.maybe_resume_protocol(self, self._protocol, self._get_write_buffer_size_nocheck())
-
-    cdef inline _ensure_writer(self):
-        if unlikely(self._is_debug):
-            _logger.debug("%r: _ensure_writer called", self)
-
-        if self._connection_lost_scheduled or self._write_ready_registered:
-            return
-        self._write_ready_registered = True
-        self._loop.add_writer(self._sock_fd_obj, self._write_ready)
-
-    cdef inline _drop_writer(self):
-        if unlikely(self._is_debug):
-            _logger.debug("%r: _drop_writer called", self)
-
-        if not self._write_ready_registered:
-            return
-        self._write_ready_registered = False
-        self._loop.remove_writer(self._sock_fd_obj)
 
     def sendfile(self, file, offset, count) -> Optional[asyncio.Future[None]]:
         self._check_thread("sendfile")
@@ -904,49 +963,176 @@ cdef class SocketTransport(Transport):
             else:
                 raise
 
-    cdef inline _fatal_error(self, exc, message='Fatal error on transport'):
-        # Should be called from exception handler only.
-        if isinstance(exc, OSError):
-            if self._loop.get_debug():
-                _logger.debug("%r: %s", self, message, exc_info=True)
-        else:
-            self._loop.call_exception_handler({
-                'message': message,
-                'exception': exc,
-                'transport': self,
-                'protocol': self._protocol,
-            })
-        self._force_close(exc)
 
-    cdef inline _handle_error(self, message):
-        _, exc, _ = sys.exc_info()
+cdef class SelectorDatagramTransport(SocketTransportBase):
+    cdef:
+        object _address
+        Py_ssize_t _header_size
+        bint _has_connection
 
-        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-            raise
+    def __init__(self, loop, sock, protocol, address=None,
+                 waiter=None, extra=None):
+        SocketTransportBase.__init__(self, loop, sock, protocol, waiter, extra)
+        self._address = address or None
+        self._header_size = 8
+        self._has_connection = self._extra['peername'] is not None
 
-        message = getattr(exc, constants.EXC_INFO_ATTR, message)
-        self._fatal_error(exc, message)
+    def _read_ready(self):
+        cdef:
+            PyObject* buffer
+            char* buf_ptr
+            char raw_addr[256]
+            unsigned int raw_addr_len = sizeof(raw_addr)
+            Py_ssize_t bytes_read
+            object data
 
-    # May be used by create_connection/create_server
-    # Keep cpdef
-    cpdef _force_close(self, exc):
         if self._connection_lost_scheduled:
             return
-        if self._write_backlog:
-            self._clear_write_backlog(exc)
-            self._drop_writer()
-        if not self._closing:
-            self._closing = True
-            self._loop.remove_reader(self._sock_fd_obj)
-        self._connection_lost_scheduled = True
-        self._loop.call_soon(self._call_connection_lost, exc)
 
-    cdef inline _clear_write_backlog(self, exc):
-        cdef SendFileRequest req
-        for data in self._write_backlog:
-            if isinstance(data, SendFileRequest):
-                req = <SendFileRequest>data
-                if req.waiter is not None and not req.waiter.done():
-                    req.waiter.set_exception(exc)
-        self._write_backlog.clear()
-        self._write_backlog_size = 0
+        if unlikely(self._read_paused):
+            return
+
+        try:
+            buffer = aiofn_allocate_bytes(DATAGRAM_RECEIVED_MAX_SIZE, &buf_ptr)
+
+            try:
+                bytes_read = aiofn_recvfrom(self._sock_fd, buf_ptr, DATAGRAM_RECEIVED_MAX_SIZE,
+                                            <void*>raw_addr, &raw_addr_len)
+                data = aiofn_finalize_bytes(buffer, max(bytes_read, 0))
+                buffer = NULL
+            except:
+                Py_XDECREF(buffer)
+                raise
+
+            if unlikely(self._is_debug):
+                _logger.debug("%r: aiofn_recvfrom(...,len=%d)=%d", self, DATAGRAM_RECEIVED_MAX_SIZE, bytes_read)
+
+            if bytes_read == -1:
+                return
+
+            addr = aiofn_sockaddr_to_pyaddr(<void*>raw_addr, raw_addr_len)
+        except OSError as exc:
+            self._call_protocol_error_received(exc)
+            return
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException:
+            self._handle_error('Fatal read error on datagram transport')
+            return
+
+        self._call_protocol_datagram_received(data, addr)
+
+    def _write_ready(self):
+        try:
+            while self._write_backlog:
+                data, addr = self._write_backlog[0]
+                if not self._sendto_impl(data, addr):
+                    break
+
+                self._write_backlog.popleft()
+                self._write_backlog_size -= len(data) + self._header_size
+
+            self._maybe_resume_protocol()
+            if not self._write_backlog:
+                self._drop_writer()
+                if self._closing:
+                    self._connection_lost_scheduled = True
+                    self._call_connection_lost(None)
+        except:
+            self._drop_writer()
+            self._handle_error('Fatal write error on datagram transport')
+
+    def sendto(self, data, addr=None):
+        self._check_thread("sendto")
+        aiofn_validate_buffer(data)
+        self.sendto_nocheck(data, addr)
+
+    cpdef sendto_nocheck(self, data, addr):
+        if self._address is not None:
+            if addr is not None and addr != self._address:
+                raise ValueError(
+                    f'Invalid address: must be None or {self._address}')
+            addr = self._address
+
+        if unlikely(self._connection_lost_scheduled and self._address):
+            if self._closed_write_count >= LOG_THRESHOLD_FOR_CONNLOST_WRITES:
+                _logger.warning('socket.send() raised exception.')
+            self._closed_write_count += 1
+            return
+
+        try:
+            if self._write_backlog_size == 0:
+                if self._sendto_impl(data, addr):
+                    return
+
+            # Ensure that what we buffer is immutable.
+            self._write_backlog.append((aiofn_maybe_copy_buffer(data), addr))
+            self._write_backlog_size += len(data) + self._header_size
+            self._ensure_writer()
+            self._maybe_pause_protocol()
+        except:
+            self._handle_error('Fatal write error on datagram transport')
+
+    cpdef can_write_eof(self):
+        return False
+
+    cpdef write_eof(self):
+        raise NotImplementedError()
+
+    cdef inline bint _sendto_impl(self, data, addr) except -1:
+        cdef:
+            char* buf_ptr
+            Py_ssize_t buf_len
+            Py_ssize_t bytes_sent
+            char raw_addr[256]
+            unsigned int raw_addr_len = 0
+            void* raw_addr_ptr = NULL
+
+        try:
+            aiofn_unpack_simple_buffer(data, &buf_ptr, &buf_len, 0)
+            if not self._has_connection:
+                if not aiofn_pyaddr_to_sockaddr(addr, raw_addr, &raw_addr_len):
+                    bytes_sent = self._sock.sendto(data, addr)
+                    if unlikely(self._is_debug):
+                        _logger.debug("%r: socket.sendto(...,len=%d)=%d", self, buf_len, bytes_sent)
+                    return True
+                raw_addr_ptr = raw_addr
+
+            bytes_sent = aiofn_sendto(self._sock_fd, buf_ptr, buf_len, raw_addr_ptr, raw_addr_len)
+            if unlikely(self._is_debug):
+                _logger.debug("%r: aiofn_sendto(...,len=%d)=%d", self, buf_len, bytes_sent)
+            if bytes_sent == -1:
+                return False
+
+            return True
+        except (BlockingIOError, InterruptedError):
+            return False
+        except OSError as exc:
+            self._call_protocol_error_received(exc)
+            return True
+
+    cdef inline _call_protocol_datagram_received(self, data, addr):
+        try:
+            self._protocol.datagram_received(data, addr)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as exc:
+            self._report_protocol_exception(
+                exc, 'Fatal error: protocol.datagram_received() call failed.')
+
+    cdef inline _call_protocol_error_received(self, exc):
+        try:
+            self._protocol.error_received(exc)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as exc:
+            self._report_protocol_exception(
+                exc, 'Fatal error: protocol.error_received() call failed.')
+
+    cdef inline _report_protocol_exception(self, exc, message):
+        self._loop.call_exception_handler({
+            'message': message,
+            'exception': exc,
+            'transport': self,
+            'protocol': self._protocol,
+        })

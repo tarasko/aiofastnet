@@ -9,6 +9,7 @@ aiofastnet Release History
 ------------------
 
 * Harden logic against exceptions in SSLTransport constructor
+* Added create_datagram_endpoint
 
 0.21.0
 ------------------

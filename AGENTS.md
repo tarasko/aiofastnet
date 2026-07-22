@@ -5,8 +5,55 @@ Read README.md for project description.
 # Code style
 
 * Max line width: 150
+* The oldest supported Python version is 3.9. Keep implementation and tests
+  compatible with Python 3.9 unless newer-version behavior is explicitly
+  guarded or skipped; for example, do not use APIs introduced in Python 3.10+
+  or 3.11+ such as `asyncio.timeout`.
+* Use Ruff for lint/style checks; the configured line length is in
+  `pyproject.toml`. Do not use plain `flake8` for line-length validation unless
+  it is explicitly configured with the same 150-column limit.
+* Keep `api_<api_name>.py` files structurally close to the corresponding
+  `asyncio` implementation so upstream changes remain easy to merge.
+  Move genuinely common code to `api_utils.py` when useful, but keep changes
+  limited to what is necessary: no added typing, no broad refactoring, and no
+  function renaming. Minor local renames are fine when they adapt copied code to
+  aiofastnet conventions, such as `logger` -> `_logger` or `self` -> `loop`.
+  Fallback code for unsupported event loop implementations, such as proactor
+  loops, is acceptable.
 * In Cython, do not give side-effect-only helpers fake return types such as `int except -1`.
   Use a no-result helper signature instead, unless the returned value is meaningful to callers.
+
+# Test style
+
+* In tests and test helpers, do not pass optional API parameters just to be
+  explicit. Only specify them when the test depends on that behavior; otherwise
+  redundant arguments can falsely imply hidden requirements.
+* Before adding new test scaffolding, inspect nearby tests and `tests/utils.py`
+  for existing helpers. Prefer shared helpers such as `TestServer`,
+  `TestClient`, `AsyncClient`, `EchoServerProtocol`, connection-type fixtures,
+  and `exc_queue` over local protocol classes, manual endpoint setup, explicit
+  transport closing, or custom exception-handler plumbing.
+* Keep tests focused on the behavior under test. Add local protocols, manual
+  `create_*` calls, and `try/finally` cleanup only when the shared helpers would
+  hide or prevent the behavior being asserted.
+* Do not add synthetic monkeypatch tests for platform fallback branches when CI
+  already runs the native platform/loop combination. For local comparison
+  against stdlib implementations, use `NO_AIOFN=1`.
+
+# Examples and benchmarks
+
+* Keep benchmark/example protocols minimal. Before adding a new protocol/helper
+  class, first check whether the existing protocol can be extended with the
+  small callback or branch needed for the new transport.
+* Prefer reusing the existing benchmark contract (`write_first_data`, `closed`,
+  `requests`, etc.) over duplicating lifecycle, warmup, timing, and cleanup
+  logic.
+* For transport variants in examples, keep endpoint creation differences in the
+  helper layer when possible. Do not duplicate protocol classes just because
+  asyncio uses different stream/datagram protocol callback names.
+* When adding a feature to an example or benchmark, inspect nearby example code
+  and recent test helper patterns first, then make the smallest change that
+  follows those patterns.
 
 # Troubleshooting
 
@@ -22,6 +69,7 @@ Defined in `tests/utils.py`; keep this list in sync with the fixtures.
 
 * `tcp`: plain TCP transport.
 * `unix`: Unix-domain socket transport; skipped on Windows.
+* `udp`: UDP datagram transport.
 * `ssl_mbio`: TLS over socket transport using memory BIO.
 * `ssl_mbio_fall`: same shape as `ssl_mbio`, but forces `SSLEngineFallback`.
 * `ssl_sbio`: TLS over socket transport using socket BIO where available.

@@ -1,0 +1,163 @@
+# Portions of this file are derived from CPython's asyncio sources
+# (notably asyncio.base_events and asyncio.selector_events).
+# Copyright (c) Python Software Foundation.
+# Licensed under the Python Software Foundation License Version 2.
+# See LICENSES/PSF-2.0.txt and THIRD_PARTY_NOTICES for details.
+
+import os
+import socket
+import stat
+
+from .api_utils import _logger, _set_reuseport, _ensure_resolved
+from .transport import SelectorDatagramTransport
+from .wrapped_transport import _should_fallback_to_asyncio, \
+    _WrappedDatagramProtocol, _get_original_loop_method
+
+
+async def create_datagram_endpoint(
+    loop, protocol_factory, local_addr=None, remote_addr=None, *, family=0, proto=0, flags=0, reuse_port=None, allow_broadcast=None, sock=None
+):
+    """Create datagram connection."""
+    if _should_fallback_to_asyncio(loop):
+        def wrapped_protocol_factory():
+            return _WrappedDatagramProtocol(protocol_factory())
+
+        create_datagram_endpoint = _get_original_loop_method(
+            loop, "create_datagram_endpoint")
+        transport, protocol = await create_datagram_endpoint(
+            wrapped_protocol_factory,
+            local_addr,
+            remote_addr,
+            family=family,
+            proto=proto,
+            flags=flags,
+            reuse_port=reuse_port,
+            allow_broadcast=allow_broadcast,
+            sock=sock,
+        )
+        wrapped_transport = protocol._wrapped_transport
+        user_protocol = protocol._protocol
+        protocol._wrapped_transport = None
+        return wrapped_transport, user_protocol
+
+    if sock is not None:
+        if sock.type == socket.SOCK_STREAM:
+            raise ValueError(f"A datagram socket was expected, got {sock!r}")
+        if local_addr or remote_addr or family or proto or flags or reuse_port or allow_broadcast:
+            # show the problematic kwargs in exception msg
+            opts = dict(
+                local_addr=local_addr,
+                remote_addr=remote_addr,
+                family=family,
+                proto=proto,
+                flags=flags,
+                reuse_port=reuse_port,
+                allow_broadcast=allow_broadcast,
+            )
+            problems = ", ".join(f"{k}={v}" for k, v in opts.items() if v)
+            raise ValueError(f"socket modifier keyword arguments can not be used when sock is specified. ({problems})")
+        sock.setblocking(False)
+        r_addr = None
+    else:
+        if not (local_addr or remote_addr):
+            if family == 0:
+                raise ValueError("unexpected address family")
+            addr_pairs_info = (((family, proto), (None, None)),)
+        elif hasattr(socket, "AF_UNIX") and family == socket.AF_UNIX:
+            for addr in (local_addr, remote_addr):
+                if addr is not None and not isinstance(addr, str):
+                    raise TypeError("string is expected")
+
+            if local_addr and local_addr[0] not in (0, "\x00"):
+                try:
+                    if stat.S_ISSOCK(os.stat(local_addr).st_mode):
+                        os.remove(local_addr)
+                except FileNotFoundError:
+                    pass
+                except OSError as err:
+                    # Directory may have permissions only to create socket.
+                    _logger.error("Unable to check or remove stale UNIX socket %r: %r", local_addr, err)
+
+            addr_pairs_info = (((family, proto), (local_addr, remote_addr)),)
+        else:
+            # join address by (family, protocol)
+            addr_infos = {}  # Using order preserving dict
+            for idx, addr in ((0, local_addr), (1, remote_addr)):
+                if addr is not None:
+                    if not (isinstance(addr, tuple) and len(addr) == 2):
+                        raise TypeError("2-tuple is expected")
+
+                    infos = await _ensure_resolved(addr, family=family, type=socket.SOCK_DGRAM, proto=proto, flags=flags, loop=loop)
+                    if not infos:
+                        raise OSError("getaddrinfo() returned empty list")
+
+                    for fam, _, pro, _, address in infos:
+                        key = (fam, pro)
+                        if key not in addr_infos:
+                            addr_infos[key] = [None, None]
+                        addr_infos[key][idx] = address
+
+            # each addr has to have info for each (family, proto) pair
+            addr_pairs_info = [
+                (key, addr_pair)
+                for key, addr_pair in addr_infos.items()
+                if not ((local_addr and addr_pair[0] is None) or (remote_addr and addr_pair[1] is None))
+            ]
+
+            if not addr_pairs_info:
+                raise ValueError("can not get address information")
+
+        exceptions = []
+
+        for (family, proto), (local_address, remote_address) in addr_pairs_info:
+            sock = None
+            r_addr = None
+            try:
+                sock = socket.socket(family=family, type=socket.SOCK_DGRAM, proto=proto)
+                if reuse_port:
+                    _set_reuseport(sock)
+                if allow_broadcast:
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                sock.setblocking(False)
+
+                if local_addr:
+                    sock.bind(local_address)
+                if remote_addr:
+                    if not allow_broadcast:
+                        await loop.sock_connect(sock, remote_address)
+                    r_addr = remote_address
+            except OSError as exc:
+                if sock is not None:
+                    sock.close()
+                exceptions.append(exc)
+            except:
+                if sock is not None:
+                    sock.close()
+                raise
+            else:
+                break
+        else:
+            raise exceptions[0]
+
+    protocol = protocol_factory()
+    waiter = loop.create_future()
+    transport = _make_datagram_transport(loop, sock, protocol, r_addr, waiter)
+    if loop.get_debug():
+        if local_addr:
+            _logger.info("Datagram endpoint local_addr=%r remote_addr=%r created: (%r, %r)", local_addr, remote_addr, transport, protocol)
+        else:
+            _logger.debug("Datagram endpoint remote_addr=%r created: (%r, %r)", remote_addr, transport, protocol)
+
+    try:
+        await waiter
+    except:
+        transport.close()
+        raise
+
+    return transport, protocol
+
+
+def _make_datagram_transport(loop, sock, protocol,
+                             address=None, waiter=None, extra=None):
+    return SelectorDatagramTransport(loop, sock, protocol,
+                                     address, waiter, extra)

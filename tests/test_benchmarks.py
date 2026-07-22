@@ -176,7 +176,7 @@ def test_benchmark_write(benchmark, benchmark_conn_type, buffered_protocol,
     payload_size, rounds = msg_size
     payload = b"x" * payload_size
 
-    def client_factory(is_buffered: bool):
+    def client_factory():
         return ClientProtocol(payload, rounds)
 
     benchmark(run_in_loop, client_factory, payload_size, benchmark_conn_type,
@@ -189,7 +189,7 @@ def test_benchmark_writelines(benchmark, benchmark_conn_type, msg_size,
     payload_size, rounds = msg_size
     payload = [b"x" * int(payload_size/256)] * 256
 
-    def client_factory(is_buffered: bool):
+    def client_factory():
         return ClientProtocol(payload, rounds)
 
     benchmark(run_in_loop, client_factory, payload_size, benchmark_conn_type,
@@ -204,7 +204,7 @@ def test_benchmark_sendfile(benchmark, sendfile_conn_type, msg_size, asyncio_deb
         file.write(b"x" * payload_size)
         file.flush()
 
-        def client_factory(is_buffered: bool):
+        def client_factory():
             return SendfileClientProtocol(file, payload_size, rounds)
 
         benchmark(run_in_loop, client_factory, payload_size, sendfile_conn_type, True, asyncio_debug)
