@@ -973,7 +973,7 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
     def __init__(self, loop, sock, protocol, address=None,
                  waiter=None, extra=None):
         SocketTransportBase.__init__(self, loop, sock, protocol, waiter, extra)
-        self._address = address
+        self._address = address or None
         self._header_size = 8
         self._has_connection = self._extra['peername'] is not None
 
@@ -1046,7 +1046,7 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
         self._check_thread("sendto")
         aiofn_validate_buffer(data)
 
-        if self._address:
+        if self._address is not None:
             if addr is not None and addr != self._address:
                 raise ValueError(
                     f'Invalid address: must be None or {self._address}')
