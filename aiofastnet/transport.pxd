@@ -8,7 +8,7 @@ cdef class Transport:
 
     # aiofastnet extension,
     # skip checks for thread-safety and data types
-    cpdef sendto(self, data, addr=*)
+    cpdef sendto_nocheck(self, data, addr)
     cpdef write_nocheck(self, data)
     cpdef writelines_nocheck(self, list_of_data)
     cdef write_c(self, char* ptr, Py_ssize_t sz)

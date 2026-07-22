@@ -36,13 +36,16 @@ cdef class Transport:
     def writelines(self, list_of_data):
         raise NotImplementedError()
 
-    cpdef sendto(self, data, addr=None):
+    def sendto(self, data, addr=None):
         raise NotImplementedError()
 
     cpdef write_nocheck(self, data):
         raise NotImplementedError()
 
     cpdef writelines_nocheck(self, list_of_data):
+        raise NotImplementedError()
+
+    cpdef sendto_nocheck(self, data, addr):
         raise NotImplementedError()
 
     cdef write_c(self, char* ptr, Py_ssize_t sz):
@@ -1039,10 +1042,12 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
             self._drop_writer()
             self._handle_error('Fatal write error on datagram transport')
 
-    cpdef sendto(self, data, addr=None):
+    def sendto(self, data, addr=None):
         self._check_thread("sendto")
         aiofn_validate_buffer(data)
+        self.sendto_nocheck(data, addr)
 
+    cpdef sendto_nocheck(self, data, addr):
         if self._address is not None:
             if addr is not None and addr != self._address:
                 raise ValueError(
