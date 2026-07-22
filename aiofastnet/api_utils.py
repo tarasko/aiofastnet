@@ -72,7 +72,8 @@ async def _create_connection_transport(
         ssl_shutdown_timeout: Optional[float]=None,
         ssl_incoming_bio_size: Optional[int]=None,
         ssl_outgoing_bio_size: Optional[int]=None,
-        server=None
+        server=None,
+        wait_connected: bool=True
 ) -> Tuple[asyncio.Transport, asyncio.BaseProtocol]:
     sock.setblocking(False)
 
@@ -82,7 +83,7 @@ async def _create_connection_transport(
     if _should_fallback_to_asyncio(loop):
         if ssl:
             protocol = protocol_factory()
-            waiter = loop.create_future()
+            waiter = loop.create_future() if wait_connected else None
             sslcontext = None if isinstance(ssl, bool) else ssl
 
             ssl_transport = SSLTransport_Transport(
@@ -99,8 +100,8 @@ async def _create_connection_transport(
             ssl_protocol_factory = ssl_transport.get_tls_protocol
 
             create_connection = _get_original_loop_method(loop, "create_connection")
-            loop_transport, ssl_protocol = await create_connection(
-                ssl_protocol_factory, None, None, sock=sock)
+            await create_connection(ssl_protocol_factory, None, None, sock=sock)
+
             transport = ssl_transport
         else:
             def wrapped_protocol_factory():
@@ -113,22 +114,23 @@ async def _create_connection_transport(
             create_connection = _get_original_loop_method(loop, "create_connection")
             loop_transport, wrapped_protocol = await create_connection(
                 wrapped_protocol_factory, None, None, sock=sock)
+
+            # asyncio Transport needs _server in order to detach itself on disconnect
+            if server is not None:
+                loop_transport._server = server
+
             transport = wrapped_protocol._wrapped_transport
             protocol = wrapped_protocol._protocol
             wrapped_protocol._wrapped_transport = None
-
-        # Ugly but I don't know how else to attach conventional transport
-        # to my Server object
-        if server is not None:
-            loop_transport._server = server
-            server._attach(loop_transport)
+            if not wait_connected:
+                transport = loop_transport
     else:
         protocol = protocol_factory()
-        waiter = loop.create_future()
+        waiter = loop.create_future() if wait_connected else None
         if ssl:
             sslcontext = openssl_compat.create_transport_context(server_side, server_hostname) if isinstance(ssl, bool) else ssl
             if _ssl_needs_fallback_engine(sslcontext):
-                ssl_transport = SSLTransport_Transport(
+                transport = SSLTransport_Transport(
                     loop, protocol, sslcontext,
                     server_side,
                     ssl_handshake_timeout,
@@ -136,12 +138,10 @@ async def _create_connection_transport(
                     ssl_incoming_bio_size,
                     ssl_outgoing_bio_size,
                     waiter=waiter,
-                    server_hostname=server_hostname
+                    server_hostname=server_hostname,
+                    server=server
                 )
-                transport = ssl_transport
-                socket_transport = SocketTransport(loop, sock, ssl_transport.get_tls_protocol(), server=server)
-                if server is not None:
-                    server._attach(socket_transport)
+                SocketTransport(loop, sock, transport.get_tls_protocol())
             else:
                 transport = SSLTransport_Socket(
                     loop, protocol, sslcontext,
@@ -155,13 +155,9 @@ async def _create_connection_transport(
                     server_hostname=server_hostname,
                     server=server
                 )
-                if server is not None:
-                    server._attach(transport)
         else:
             transport = SocketTransport(loop, sock, protocol,
                                         waiter=waiter, server=server)
-            if server is not None:
-                server._attach(transport)
 
     if waiter is not None:
         try:
@@ -347,7 +343,7 @@ class Server(asyncio.AbstractServer):
 
     async def _accept_connection2(self, sock):
         try:
-            await _create_connection_transport(
+            transport, _ = await _create_connection_transport(
                 self._loop,
                 sock,
                 self._protocol_factory,
@@ -359,7 +355,9 @@ class Server(asyncio.AbstractServer):
                 ssl_incoming_bio_size=self._ssl_incoming_bio_size,
                 ssl_outgoing_bio_size=self._ssl_outgoing_bio_size,
                 server=self,
+                wait_connected=False,
             )
+            self._attach(transport)
         except (SystemExit, KeyboardInterrupt):
             raise
         except BaseException as exc:

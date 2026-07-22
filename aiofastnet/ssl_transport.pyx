@@ -1521,6 +1521,10 @@ cdef class SSLTransport_Transport(SSLTransportBase):
         # This helps to deallocate useless objects asap.
         self._transport = None
         self._app_protocol = None
+        server = self._server
+        if server is not None:
+            server._detach(self)
+            self._server = None
         self._wakeup_waiter(exc)
 
         if self._shutdown_timeout_handle:
