@@ -11,10 +11,8 @@ from contextvars import ContextVar
 import pytest
 
 import aiofastnet
-from aiofastnet import openssl_compat
 from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Protocol, SocketTransport, Transport
-from aiofastnet.ssl_transport import SSLTransport_Socket, SSLTransport_Transport
 from tests.utils import TestClient, TestServer, \
     make_test_ssl_contexts, AsyncClient, SomeException, _logger, \
     start_tls, sendfile
