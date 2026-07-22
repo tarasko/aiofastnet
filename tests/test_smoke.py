@@ -5,8 +5,8 @@ import tempfile
 import os
 import ssl
 import threading
-from _contextvars import ContextVar
 from contextlib import contextmanager
+from contextvars import ContextVar
 
 import pytest
 
@@ -418,7 +418,7 @@ async def test_ssl_socket_transport_repr_does_not_call_protocol_buffer_size(sele
             raise RuntimeError("get_local_write_buffer_size")
 
     loop = asyncio.get_running_loop()
-    server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
+    _, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", False)
     sock, peer = socket.socketpair()
     transport = None
     try:

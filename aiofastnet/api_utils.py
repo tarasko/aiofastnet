@@ -139,7 +139,9 @@ async def _create_connection_transport(
                     server_hostname=server_hostname
                 )
                 transport = ssl_transport
-                SocketTransport(loop, sock, ssl_transport.get_tls_protocol(), server=server)
+                socket_transport = SocketTransport(loop, sock, ssl_transport.get_tls_protocol(), server=server)
+                if server is not None:
+                    server._attach(socket_transport)
             else:
                 transport = SSLTransport_Socket(
                     loop, protocol, sslcontext,
@@ -153,9 +155,13 @@ async def _create_connection_transport(
                     server_hostname=server_hostname,
                     server=server
                 )
+                if server is not None:
+                    server._attach(transport)
         else:
             transport = SocketTransport(loop, sock, protocol,
                                         waiter=waiter, server=server)
+            if server is not None:
+                server._attach(transport)
 
     if waiter is not None:
         try:

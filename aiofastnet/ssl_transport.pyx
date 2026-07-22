@@ -50,6 +50,10 @@ cdef size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONN
 cdef Py_ssize_t DATA_RECEIVED_MAX_SIZE = constants.DATA_RECEIVED_MAX_SIZE
 
 
+def _ssl_socket_post_handshake_test_hook():
+    pass
+
+
 cdef class SendFileRequest:
     cdef:
         int fd
@@ -251,9 +255,6 @@ cdef class SSLTransportBase(Transport):
             ssl_outgoing_bio_size,
             sock=sock
         )
-
-        if self._server is not None:
-            self._server._attach(self)
 
         if self._is_debug:
             _logger.debug("%r: %s", self, ssl.OPENSSL_VERSION)
@@ -1094,13 +1095,23 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         self._write_ready_registered = False
         self._write_had_eagain = False
 
-        self._sock = sock
-        self._sock_fd_obj = self._sock.fileno()
-        self._sock_fd = self._sock_fd_obj
-        aiofn_set_nodelay(self._sock)
+        aiofn_set_nodelay(sock)
 
-        self._loop.add_reader(self._sock_fd_obj, self._read_ready)
-        self._start_handshake()
+        self._sock_fd_obj = sock.fileno()
+        self._sock_fd = self._sock_fd_obj
+        self._sock = sock
+        try:
+            self._loop.add_reader(self._sock_fd_obj, self._read_ready)
+            self._start_handshake()
+            _ssl_socket_post_handshake_test_hook()
+        except:
+            self._sock = None
+            self._loop.remove_reader(self._sock_fd_obj)
+            self._drop_writer()
+            if self._handshake_timeout_handle is not None:
+                self._handshake_timeout_handle.cancel()
+                self._handshake_timeout_handle = None
+            raise
 
     def __del__(self):
         # Should not use repr.
