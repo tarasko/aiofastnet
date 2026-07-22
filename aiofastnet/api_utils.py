@@ -475,10 +475,8 @@ async def _accept_connection2(
         ssl_incoming_bio_size,
         ssl_outgoing_bio_size
 ):
-    protocol = None
-    transport = None
     try:
-        transport, protocol = await _create_connection_transport(
+        await _create_connection_transport(
             loop, sock, protocol_factory, sslcontext,
             server_hostname=None, server_side=True,
             ssl_handshake_timeout=ssl_handshake_timeout,
@@ -490,18 +488,13 @@ async def _accept_connection2(
     except (SystemExit, KeyboardInterrupt):
         raise
     except BaseException as exc:
-        if transport is None:
-            sock.close()
+        sock.close()
         if loop.get_debug():
             context = {
                 'message':
                     'Error on transport creation for incoming connection',
                 'exception': exc,
             }
-            if protocol is not None:
-                context['protocol'] = protocol
-            if transport is not None:
-                context['transport'] = transport
             loop.call_exception_handler(context)
 
 
