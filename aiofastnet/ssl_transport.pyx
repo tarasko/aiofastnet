@@ -50,6 +50,10 @@ cdef size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONN
 cdef Py_ssize_t DATA_RECEIVED_MAX_SIZE = constants.DATA_RECEIVED_MAX_SIZE
 
 
+def _ssl_socket_post_handshake_test_hook(transport):
+    pass
+
+
 cdef class SendFileRequest:
     cdef:
         int fd
@@ -251,9 +255,6 @@ cdef class SSLTransportBase(Transport):
             ssl_outgoing_bio_size,
             sock=sock
         )
-
-        if self._server is not None:
-            self._server._attach(self)
 
         if self._is_debug:
             _logger.debug("%r: %s", self, ssl.OPENSSL_VERSION)
@@ -910,6 +911,14 @@ cdef class SSLTransportBase(Transport):
             except Exception as exc:
                 self._fatal_error_no_close(exc, "user connection_made raised an exception")
 
+    cdef inline _call_protocol_connection_lost(self, app_protocol, exc):
+        try:
+            return app_protocol.connection_lost(exc)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:
+            self._fatal_error_no_close(exc, "user connection_lost raised an exception")
+
     cdef inline _call_protocol_get_buffer(self, char** buf_ptr, Py_ssize_t* buf_len):
         try:
             if self._app_protocol_aiofn:
@@ -1094,13 +1103,31 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         self._write_ready_registered = False
         self._write_had_eagain = False
 
-        self._sock = sock
-        self._sock_fd_obj = self._sock.fileno()
-        self._sock_fd = self._sock_fd_obj
-        aiofn_set_nodelay(self._sock)
+        aiofn_set_nodelay(sock)
 
-        self._loop.add_reader(self._sock_fd_obj, self._read_ready)
-        self._start_handshake()
+        # We want a strong exception guarantee for constructor
+        # If there is an exception at any stage, SSLTransport_Socket should NOT own socket.
+        # That's why we set it to None, immediately after exception
+        # Caller is responsible for closing and cleaning up socket in case of exception.
+
+        self._sock_fd_obj = sock.fileno()
+        self._sock_fd = self._sock_fd_obj
+        self._sock = sock
+        cdef bint reader_added = False
+        try:
+            self._loop.add_reader(self._sock_fd_obj, self._read_ready)
+            reader_added = True
+            self._start_handshake()
+            _ssl_socket_post_handshake_test_hook(self)
+        except:
+            self._sock = None
+            if reader_added:
+                self._loop.remove_reader(self._sock_fd_obj)
+            self._drop_writer()
+            if self._handshake_timeout_handle is not None:
+                self._handshake_timeout_handle.cancel()
+                self._handshake_timeout_handle = None
+            raise
 
     def __del__(self):
         # Should not use repr.
@@ -1348,7 +1375,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         try:
             if self._app_protocol_connected and self._app_state in (AppProtocolState.STATE_CON_MADE, AppProtocolState.STATE_EOF):
                 self._app_state = AppProtocolState.STATE_CON_LOST
-                self._app_protocol.connection_lost(exc)
+                self._call_protocol_connection_lost(self._app_protocol, exc)
         finally:
             if self._sock is not None:
                 self._sock.close()
@@ -1494,7 +1521,8 @@ cdef class SSLTransport_Transport(SSLTransportBase):
             if self._app_state == AppProtocolState.STATE_CON_MADE or \
                     self._app_state == AppProtocolState.STATE_EOF:
                 self._app_state = AppProtocolState.STATE_CON_LOST
-                self._loop.call_soon(self._app_protocol.connection_lost, exc)
+                self._loop.call_soon(self._call_protocol_connection_lost,
+                                     self._app_protocol, exc)
         self._set_state(SSLProtocolState.UNWRAPPED)
 
         # Decrease ref counters to user instances to avoid cyclic references
@@ -1502,6 +1530,10 @@ cdef class SSLTransport_Transport(SSLTransportBase):
         # This helps to deallocate useless objects asap.
         self._transport = None
         self._app_protocol = None
+        server = self._server
+        if server is not None:
+            server._detach(self)
+            self._server = None
         self._wakeup_waiter(exc)
 
         if self._shutdown_timeout_handle:

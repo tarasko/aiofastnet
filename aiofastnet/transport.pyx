@@ -254,9 +254,6 @@ cdef class SocketTransport(Transport):
 
         self.set_protocol(protocol)
 
-        if self._server is not None:
-            self._server._attach(self)
-
         self._sendfile_compatible = os.name != 'nt'
 
         self._eof = False
