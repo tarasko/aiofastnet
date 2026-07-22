@@ -35,13 +35,6 @@ class RaisingErrorDatagramProtocol(AsyncClient):
         raise self.exc
 
 
-async def wait_exception_context(excq):
-    async with asyncio.timeout(1.0):
-        while not excq:
-            await asyncio.sleep(0)
-    return excq[0]
-
-
 async def test_datagram_rejects_different_address(all_loops, conn_type_udp):
     async with TestServer(ct=conn_type_udp) as server:
         async with TestClient(server, ct=conn_type_udp) as client:
@@ -70,14 +63,11 @@ async def test_datagram_received_exception_does_not_close_transport(all_loops, c
             async with TestClient(server, ct=conn_type_udp) as client:
                 client.transport.sendto(b"first")
 
-                context = await wait_exception_context(excq)
-                assert isinstance(context["exception"], RuntimeError)
-                assert context["message"] == (
-                    "Fatal error: protocol.datagram_received() call failed."
-                )
-
                 client.transport.sendto(b"second")
                 assert await client.readn(6) == b"second"
+
+        assert isinstance(excq[0]["exception"], RuntimeError)
+        assert excq[0]["message"] == "Fatal error: protocol.datagram_received() call failed."
 
 
 async def test_error_received_exception_does_not_close_transport(all_loops, conn_type_udp):
@@ -88,11 +78,8 @@ async def test_error_received_exception_does_not_close_transport(all_loops, conn
                                   protocol_factory=lambda: client_protocol) as client:
                 client.transport.sendto(b"x" * (UDP_MAX_PAYLOAD_SIZE + 1))
 
-                context = await wait_exception_context(excq)
-                assert isinstance(context["exception"], RuntimeError)
-                assert context["message"] == (
-                    "Fatal error: protocol.error_received() call failed."
-                )
-
                 client.transport.sendto(b"hello")
                 assert await client.readn(5) == b"hello"
+
+        assert isinstance(excq[0]["exception"], RuntimeError)
+        assert excq[0]["message"] == "Fatal error: protocol.error_received() call failed."
