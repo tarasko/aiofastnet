@@ -399,7 +399,8 @@ cdef class SocketTransportBase(Transport):
 
     cdef inline _ensure_writer(self):
         if unlikely(self._is_debug):
-            _logger.debug("%r: _ensure_writer called", self)
+            _logger.debug("%r: _ensure_writer called, conn_lost=%s, already_registered=%s",
+                          self, self._connection_lost_scheduled, self._write_ready_registered)
 
         if self._connection_lost_scheduled or self._write_ready_registered:
             return
@@ -1024,6 +1025,9 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
 
     def _write_ready(self):
         try:
+            if unlikely(self._is_debug):
+                _logger.debug("%r write_ready event, resume writing from backlog", self)
+
             while self._write_backlog:
                 data, addr = self._write_backlog[0]
                 if not self._sendto_impl(data, addr):
