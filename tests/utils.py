@@ -656,6 +656,8 @@ async def TestClient(server_or_host=None, port=None,
                 path=path if path is not None else host,
             )
         elif ct.name == "udp":
+            if is_buffered:
+                pytest.skip("UDP protocol is always simple")
             if sock is not None:
                 transport, client = await create_datagram_endpoint(
                     loop,

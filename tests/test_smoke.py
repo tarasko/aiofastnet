@@ -282,12 +282,13 @@ async def test_writelines_paused(all_loops, conn_type):
             await client.readn(total_bytes_written)
 
 
-async def test_pause_reading(all_loops, conn_type):
-    payload = b"x" * (20*1024*1024)
+async def test_pause_reading(all_loops, conn_type_plus_udp):
+    big_payload = b"x" * (6*1024*1024)
+    small_payload = b"x" * 1024
 
-    async with TestServer(ct=conn_type) as server:
-        async with TestClient(server, ct=conn_type) as client:
-            client.transport.write(payload)
+    async with TestServer(ct=conn_type_plus_udp) as server:
+        async with TestClient(server, ct=conn_type_plus_udp) as client:
+            client.write(big_payload)
             assert client.transport.is_reading()
 
             # pause_reading is idempotent
@@ -295,6 +296,7 @@ async def test_pause_reading(all_loops, conn_type):
             client.transport.pause_reading()
             assert not client.transport.is_reading()
 
+            client.write(small_payload)
             with pytest.raises(asyncio.TimeoutError):
                 await client.wait_new_data(0.3)
 
@@ -305,14 +307,16 @@ async def test_pause_reading(all_loops, conn_type):
             await client.wait_new_data(0.3)
             client.transport.pause_reading()
 
+            client.write(small_payload)
             with pytest.raises(asyncio.TimeoutError):
                 await client.wait_new_data(0.3)
 
             client.transport.resume_reading()
 
 
-async def test_pause_reading_from_read_callback(all_loops, conn_type, buffered_protocol):
-    payload = b"x" * (3 * 256 * 1024)
+async def test_pause_reading_from_read_callback(all_loops, conn_type_plus_udp, buffered_protocol):
+    big_payload = b"b" * (3 * 256 * 1024)
+    small_payload = b"s" * 1024
 
     class PauseFromReadCallbackClient(AsyncClient):
         def __init__(self):
@@ -334,12 +338,20 @@ async def test_pause_reading_from_read_callback(all_loops, conn_type, buffered_p
             super().buffer_updated(bytes_read)
             self._pause_once()
 
-    async with TestServer(ct=conn_type) as server:
-        async with TestClient(server, ct=conn_type, protocol_factory=PauseFromReadCallbackClient, is_buffered=buffered_protocol) as client:
-            client.write(payload)
+        def datagram_received(self, data, addr):
+            super().datagram_received(data, addr)
+            self._pause_once()
+
+    async with TestServer(ct=conn_type_plus_udp) as server:
+        async with TestClient(server, ct=conn_type_plus_udp, protocol_factory=PauseFromReadCallbackClient, is_buffered=buffered_protocol) as client:
+            # This is for streaming protocols
+            client.write(big_payload)
+            # This is for udp
+            client.write(small_payload)
+            client.write(small_payload)
 
             first_read_size = await asyncio.wait_for(client.first_read, timeout=1.0)
-            assert 0 < first_read_size < len(payload)
+            assert 0 < first_read_size < len(big_payload)
             assert not client.transport.is_reading()
 
             # The socket should still have data ready. Even if _read_ready() is
@@ -350,8 +362,12 @@ async def test_pause_reading_from_read_callback(all_loops, conn_type, buffered_p
             assert client.read_callback_count == 1
 
             client.transport.resume_reading()
-            assert await client.readn(len(payload), timeout=4.0) == payload
-            assert client.read_callback_count > 1
+            if conn_type_plus_udp.name == "udp":
+                assert await client.readn(None, timeout=1.0) == small_payload
+            else:
+                assert await client.readn(len(big_payload), timeout=4.0) == big_payload
+                assert client.read_callback_count > 1
+
 
 
 async def test_eof_received_keep_open(all_loops):
