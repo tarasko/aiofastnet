@@ -9,7 +9,7 @@ from pathlib import Path
 import ssl
 import sys
 import tempfile
-from typing import Tuple, Optional, Union, Any, List, Generator
+from typing import Tuple, Optional, Union, Any, List
 
 import async_timeout
 import pytest

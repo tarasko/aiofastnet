@@ -1,5 +1,4 @@
 import asyncio
-import socket
 
 import pytest
 from tests.utils import (
