@@ -33,6 +33,11 @@ Read README.md for project description.
   `TestClient`, `AsyncClient`, `EchoServerProtocol`, connection-type fixtures,
   and `exc_queue` over local protocol classes, manual endpoint setup, explicit
   transport closing, or custom exception-handler plumbing.
+* Use `SocketPair` from `tests/utils.py` when a test needs two connected
+  transport endpoints instead of creating and cleaning up socket pairs
+  manually. Its `udp` mode uses `AF_UNIX/SOCK_DGRAM`, so use it for reliable
+  datagram delivery, readiness, and backpressure tests, not for IP addressing
+  or other UDP-specific semantics.
 * Keep tests focused on the behavior under test. Add local protocols, manual
   `create_*` calls, and `try/finally` cleanup only when the shared helpers would
   hide or prevent the behavior being asserted.
