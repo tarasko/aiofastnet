@@ -264,7 +264,10 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         self.transport.writelines(parts)
 
     async def readn(self, n: Optional[int], timeout: Optional[float]=1.0) -> bytes:
-        assert self._readn_waiter is None
+        if self._readn_waiter is not None:
+            fut = self._readn_waiter[1]
+            assert fut.cancelled(), "we can only start new readn if previous was cancelled (for example due to timeout)"
+            self._readn_waiter = None
 
         if n is not None:
             assert n > 0, "n must be > 0 or n to read everything"
@@ -283,10 +286,13 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         fut = asyncio.get_running_loop().create_future()
         self._readn_waiter = (n, fut)
         if timeout is None:
-            return await asyncio.shield(fut)
+            return await fut
         else:
             async with async_timeout.timeout(timeout):
-                return await asyncio.shield(fut)
+                return await fut
+
+    def discard_all_remaing_read_data(self):
+        self._data.clear()
 
     def close(self):
         self.transport.close()

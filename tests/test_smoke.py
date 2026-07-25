@@ -298,18 +298,18 @@ async def test_pause_reading(all_loops, conn_type_plus_udp):
 
             client.write(small_payload)
             with pytest.raises(asyncio.TimeoutError):
-                await client.wait_new_data(0.3)
+                await client.readn(None, 0.3)
 
             # resume_reading is idempotent
             client.transport.resume_reading()
             client.transport.resume_reading()
 
-            await client.wait_new_data(0.3)
+            await client.readn(None, 0.3)
             client.transport.pause_reading()
-
+            client.discard_all_remaing_read_data()
             client.write(small_payload)
             with pytest.raises(asyncio.TimeoutError):
-                await client.wait_new_data(0.3)
+                await client.readn(None, 0.3)
 
             client.transport.resume_reading()
 
