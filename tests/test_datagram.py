@@ -11,10 +11,9 @@ from tests.utils import (
 )
 
 
+@pytest.mark.skipif(platform.system() != "Linux",
+                    reason="(AF_UNIX, SOCK_DGRAM) can reliably reproduce EAGAIN for writing only on linux")
 async def test_datagram_write_ready_after_eagain(selector_loop, conn_type_udp):
-    if platform.system() != "Linux":
-        pytest.skip("(AF_UNIX, SOCK_DGRAM) can reliably reproduce EAGAIN for writing only on linux")
-
     async with SocketPair(conn_type_udp) as (server, client):
         filler = b"x" * (16 * 1024)
         total_size_sent = 0
