@@ -645,7 +645,7 @@ async def test_bad_buffer(all_loops, conn_type):
 
 
 async def test_maybe_copy(all_loops):
-    bytes_obj = bytes(b"abcd")
+    bytes_obj = b"abcd"
     assert aiofn_maybe_copy_buffer(bytes_obj) is bytes_obj
 
     mv_bytes_obj = memoryview(bytes_obj)

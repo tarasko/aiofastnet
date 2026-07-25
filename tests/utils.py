@@ -551,10 +551,12 @@ def buffered_protocol(request):
 @asynccontextmanager
 async def TestServer(protocol_factory=None,
                      host="127.0.0.1", port=0,
-                     ct: ConnectionType=ConnectionType("tcp"),
+                     ct=None,
                      is_buffered=False,
                      ssl_handshake_timeout=None,
                      ssl_shutdown_timeout=None):
+    if ct is None:
+        ct = ConnectionType("tcp")
     loop = asyncio.get_running_loop()
     clients = set()
     client_waiters = []
@@ -627,13 +629,15 @@ async def TestServer(protocol_factory=None,
 
 @asynccontextmanager
 async def TestClient(server_or_host=None, port=None,
-                     ct: ConnectionType=ConnectionType("tcp"),
+                     ct=None,
                      server_hostname=None,
                      is_buffered=False,
                      protocol_factory=AsyncClient,
                      ssl_handshake_timeout=None,
                      ssl_shutdown_timeout=None,
                      sock=None):
+    if ct is None:
+        ct = ConnectionType("tcp")
     if sock is not None:
         host = None
         path = None
@@ -725,7 +729,7 @@ async def SocketPair(
     client_server_hostname=None,
 ):
     if getattr(socket, "AF_UNIX", None) is None:
-        pytest.skip(f"SocketPair requires socket.AF_UNIX and is not supported on current platform")
+        pytest.skip("SocketPair requires socket.AF_UNIX and is not supported on current platform")
 
     if ct.name == "unix":
         sock, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
