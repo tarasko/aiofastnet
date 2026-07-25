@@ -284,15 +284,21 @@ async def test_pause_reading(all_loops, conn_type_plus_udp):
     big_payload = b"x" * (6*1024*1024)
     small_payload = b"x" * 1024
 
+    is_asyncio_proactor = os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop)
+
     async with TestServer(ct=conn_type_plus_udp) as server:
         async with TestClient(server, ct=conn_type_plus_udp) as client:
             client.write(big_payload)
-            assert client.transport.is_reading()
+            # Proactor loop in asyncio doesn't have is_reading()
+            # Seems like a bug
+            if not is_asyncio_proactor:
+                assert client.transport.is_reading()
 
             # pause_reading is idempotent
             client.transport.pause_reading()
             client.transport.pause_reading()
-            assert not client.transport.is_reading()
+            if not is_asyncio_proactor:
+                assert not client.transport.is_reading()
 
             client.write(small_payload)
             with pytest.raises(asyncio.TimeoutError):
@@ -315,6 +321,7 @@ async def test_pause_reading(all_loops, conn_type_plus_udp):
 async def test_pause_reading_from_read_callback(all_loops, conn_type_plus_udp, buffered_protocol):
     big_payload = b"b" * (3 * 256 * 1024)
     small_payload = b"s" * 1024
+    is_asyncio_proactor = os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop)
 
     class PauseFromReadCallbackClient(AsyncClient):
         def __init__(self):
@@ -350,7 +357,8 @@ async def test_pause_reading_from_read_callback(all_loops, conn_type_plus_udp, b
 
             first_read_size = await asyncio.wait_for(client.first_read, timeout=1.0)
             assert 0 < first_read_size < len(big_payload)
-            assert not client.transport.is_reading()
+            if not is_asyncio_proactor:
+                assert not client.transport.is_reading()
 
             # The socket should still have data ready. Even if _read_ready() is
             # invoked directly while paused, it must not read more data.
