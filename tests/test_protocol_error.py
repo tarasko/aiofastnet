@@ -5,7 +5,7 @@ import warnings
 
 import pytest
 
-from tests.utils import AsyncClient, SomeException, TestClient, TestServer, exc_queue
+from tests.utils import AsyncClient, SomeException, TestClient, TestServer, exc_queue, SocketPair
 
 
 async def test_exc_eof_received(all_loops, conn_type):
@@ -262,3 +262,41 @@ def test_system_exit_not_reported(conn_type_plus_udp, exc, meth):
         gc.collect()
 
     assert excq == []
+
+
+
+async def test_datagram_received_exc(selector_loop, conn_type_udp):
+    class RaiseOnceDatagramProtocol(asyncio.DatagramProtocol):
+        def connection_made(self, transport):
+            self.transport = transport
+            self._raised = False
+
+        def datagram_received(self, data, addr):
+            if not self._raised:
+                self._raised = True
+                raise RuntimeError("datagram failed")
+            self.transport.sendto(data, addr)
+
+    with exc_queue() as excq:
+        async with SocketPair(conn_type_udp, server_protocol_factory=RaiseOnceDatagramProtocol) as (_server, client):
+            client.transport.sendto(b"first")
+            client.transport.sendto(b"second")
+            assert await client.readn(6) == b"second"
+
+        assert isinstance(excq[0]["exception"], RuntimeError)
+        assert excq[0]["message"] == "Fatal error: protocol.datagram_received() call failed."
+
+
+async def test_datagram_error_received_exc(selector_loop, conn_type_udp):
+    class RaisingErrorDatagramProtocol(AsyncClient):
+        def error_received(self, exc):
+            raise RuntimeError("error handler failed")
+
+    with exc_queue() as excq:
+        async with SocketPair(conn_type_udp, client_protocol_factory=RaisingErrorDatagramProtocol) as (server, client):
+            client.transport.sendto(b"x" * (1024*1024))
+            client.transport.sendto(b"hello")
+            assert await server.readn(5) == b"hello"
+
+        assert isinstance(excq[0]["exception"], RuntimeError)
+        assert excq[0]["message"] == "Fatal error: protocol.error_received() call failed."
