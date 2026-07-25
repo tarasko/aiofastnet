@@ -724,6 +724,9 @@ async def SocketPair(
     client_is_buffered=False,
     client_server_hostname=None,
 ):
+    if getattr(socket, "AF_UNIX", None) is None:
+        pytest.skip(f"SocketPair requires socket.AF_UNIX and is not supported on current platform")
+
     if ct.name == "unix":
         sock, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
     elif ct.name == "udp":
