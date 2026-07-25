@@ -6,7 +6,6 @@ from tests.utils import (
     AsyncClient,
     TestClient,
     TestServer,
-    UDP_MAX_PAYLOAD_SIZE,
     exc_queue, SocketPair,
 )
 
@@ -15,6 +14,8 @@ from tests.utils import (
                     reason="(AF_UNIX, SOCK_DGRAM) can reliably reproduce EAGAIN for writing only on linux")
 async def test_datagram_write_ready_after_eagain(selector_loop, conn_type_udp):
     async with SocketPair(conn_type_udp) as (server, client):
+        assert not client.transport.can_write_eof()
+
         filler = b"x" * (16 * 1024)
         total_size_sent = 0
         for _ in range(1024):
@@ -45,6 +46,12 @@ async def test_datagram_write_ready_after_eagain(selector_loop, conn_type_udp):
         assert client.transport.get_write_buffer_size() == 0
 
 
+async def test_datagram_ready_after_close(selector_loop, conn_type_udp):
+    async with SocketPair(conn_type_udp) as (server, client):
+        client.transport.close()
+        client.transport._read_ready()
+
+
 async def test_datagram_rejects_different_address(all_loops, conn_type_udp):
     async with TestServer(ct=conn_type_udp) as server:
         async with TestClient(server, ct=conn_type_udp) as client:
@@ -58,53 +65,38 @@ async def test_datagram_rejects_different_address(all_loops, conn_type_udp):
                 )
 
 
-async def test_datagram_received_exception_does_not_close_transport(selector_loop, conn_type_udp):
+async def test_datagram_received_exc(selector_loop, conn_type_udp):
     class RaiseOnceDatagramProtocol(asyncio.DatagramProtocol):
-        def __init__(self, exc):
-            self.transport = None
-            self.exc = exc
-            self._raised = False
-
         def connection_made(self, transport):
             self.transport = transport
+            self._raised = False
 
         def datagram_received(self, data, addr):
             if not self._raised:
                 self._raised = True
-                raise self.exc
+                raise RuntimeError("datagram failed")
             self.transport.sendto(data, addr)
 
     with exc_queue() as excq:
-        async with TestServer(lambda: RaiseOnceDatagramProtocol(RuntimeError("datagram failed")),
-                              ct=conn_type_udp) as server:
-            async with TestClient(server, ct=conn_type_udp) as client:
-                client.transport.sendto(b"first")
-
-                client.transport.sendto(b"second")
-                assert await client.readn(6) == b"second"
+        async with SocketPair(conn_type_udp, server_protocol_factory=RaiseOnceDatagramProtocol) as (server, client):
+            client.transport.sendto(b"first")
+            client.transport.sendto(b"second")
+            assert await client.readn(6) == b"second"
 
         assert isinstance(excq[0]["exception"], RuntimeError)
         assert excq[0]["message"] == "Fatal error: protocol.datagram_received() call failed."
 
 
-async def test_error_received_exception_does_not_close_transport(selector_loop, conn_type_udp):
+async def test_datagram_error_received_exc(selector_loop, conn_type_udp):
     class RaisingErrorDatagramProtocol(AsyncClient):
-        def __init__(self, exc):
-            super().__init__()
-            self.exc = exc
-
         def error_received(self, exc):
-            raise self.exc
+            raise RuntimeError("error handler failed")
 
     with exc_queue() as excq:
-        client_protocol = RaisingErrorDatagramProtocol(RuntimeError("error handler failed"))
-        async with TestServer(ct=conn_type_udp) as server:
-            async with TestClient(server, ct=conn_type_udp,
-                                  protocol_factory=lambda: client_protocol) as client:
-                client.transport.sendto(b"x" * (UDP_MAX_PAYLOAD_SIZE + 1))
-
-                client.transport.sendto(b"hello")
-                assert await client.readn(5) == b"hello"
+        async with SocketPair(conn_type_udp, client_protocol_factory=RaisingErrorDatagramProtocol) as (server, client):
+            client.transport.sendto(b"x" * (1024*1024))
+            client.transport.sendto(b"hello")
+            assert await server.readn(5) == b"hello"
 
         assert isinstance(excq[0]["exception"], RuntimeError)
         assert excq[0]["message"] == "Fatal error: protocol.error_received() call failed."

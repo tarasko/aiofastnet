@@ -704,17 +704,33 @@ async def TestClient(server_or_host=None, port=None,
 
 
 @asynccontextmanager
-async def SocketPair(ct: ConnectionType):
+async def SocketPair(
+    ct: ConnectionType,
+    server_protocol_factory=AsyncClient,
+    server_is_buffered=False,
+    server_ssl_handshake_timeout=None,
+    server_ssl_shutdown_timeout=None,
+    client_protocol_factory=AsyncClient,
+    client_is_buffered=False,
+    client_server_hostname=None,
+):
     if ct.name == "unix":
         sock, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
     elif ct.name == "udp":
-        sock, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+        sock, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)    
     else:
         pytest.skip(f"SocketPair is not supported for {ct.name}")
 
     try:
-        async with TestClient(ct=ct, sock=sock) as server:
-            async with TestClient(ct=ct, sock=peer) as client:
+        async with TestClient(ct=ct, sock=sock, is_buffered=server_is_buffered,
+                              protocol_factory=server_protocol_factory,
+                              ssl_handshake_timeout=server_ssl_handshake_timeout,
+                              ssl_shutdown_timeout=server_ssl_shutdown_timeout) as server:
+            async with TestClient(ct=ct, sock=peer,
+                                  server_hostname=client_server_hostname,
+                                  is_buffered=client_is_buffered,
+                                  protocol_factory=client_protocol_factory,
+                                  ) as client:
                 yield server, client
     finally:
         sock.close()
