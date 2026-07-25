@@ -154,16 +154,31 @@ async def test_exc_all(all_loops, conn_type):
 
 
 @pytest.mark.parametrize("exc", [SystemExit, KeyboardInterrupt], ids=["sys", "ctrlc"])
-@pytest.mark.parametrize("meth", ["connection_made", "connection_lost", "pause_writing", "resume_writing", "data_received", "get_buffer", "buffer_updated", "eof_received"])
-def test_system_exit_not_reported(conn_type, exc, meth):
+@pytest.mark.parametrize("meth", ["connection_made", "connection_lost", "pause_writing", "resume_writing",
+                                  "data_received", "get_buffer", "buffer_updated", "datagram_received",
+                                  "eof_received"])
+def test_system_exit_not_reported(conn_type_plus_udp, exc, meth):
+    if conn_type_plus_udp.name == "udp":
+        if meth in ("get_buffer", "buffer_updated", "data_received", "eof_received", "pause_writing", "resume_writing"):
+            pytest.skip("callback is unavailable in UDP")
+    else:
+        if meth in ("datagram_received", "error_received"):
+            pytest.skip("callback is unavailable in streaming protocols")
+
     class ServerProtocol:
         def connection_made(self, transport):
             self.transport = transport
+
+        def connection_lost(self, exc):
+            pass
 
         def data_received(self, data):
             self.transport.write(data)
             if meth == "eof_received":
                 self.transport.close()
+
+        def datagram_received(self, data, addr):
+            self.transport.sendto(data, addr)
 
     class ClientRaiseException(AsyncClient):
         def connection_made(self, transport):
@@ -185,6 +200,11 @@ def test_system_exit_not_reported(conn_type, exc, meth):
             if meth == "resume_writing":
                 raise exc(42)
             super().resume_writing()
+
+        def datagram_received(self, data, addr):
+            if meth == "datagram_received":
+                raise exc(42)
+            super().datagram_received(data, addr)
 
         def data_received(self, data):
             if meth == "data_received":
@@ -209,21 +229,21 @@ def test_system_exit_not_reported(conn_type, exc, meth):
         def is_buffered_protocol(self):
             return meth in ("get_buffer", "buffer_updated")
 
-    payload = b"x" * (64*1024)
+    payload = b"x" * (16*1024)
     excq = []
     async def run():
         asyncio.get_running_loop().set_debug(True)
         with exc_queue(excq):
-            async with TestServer(protocol_factory=ServerProtocol, ct=conn_type) as server:
+            async with TestServer(protocol_factory=ServerProtocol, ct=conn_type_plus_udp) as server:
                 async with TestClient(server,
                                       protocol_factory=ClientRaiseException,
-                                      ct=conn_type,
+                                      ct=conn_type_plus_udp,
                                       is_buffered=False) as client:
                     if meth in ('pause_writing', 'resume_writing'):
                         while not client.is_writing_paused:
-                            client.transport.write(payload)
+                            client.write(payload)
                     else:
-                        client.transport.write(payload)
+                        client.write(payload)
                     await asyncio.sleep(0.1)
 
     with warnings.catch_warnings():
