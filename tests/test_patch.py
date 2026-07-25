@@ -105,8 +105,8 @@ async def test_transport_methods_mockable(conn_type):
             orig_write = client.transport.write
             orig_writelines = client.transport.writelines
 
-            setattr(client.transport, "write", 123)
-            setattr(client.transport, "writelines", 123)
+            client.transport.write = 123
+            client.transport.writelines = 123
 
             client.transport.write = orig_write
             client.transport.writelines = orig_writelines

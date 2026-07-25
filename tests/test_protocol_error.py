@@ -5,7 +5,7 @@ import warnings
 
 import pytest
 
-from tests.utils import AsyncClient, SomeException, TestServer, TestClient, exc_queue
+from tests.utils import AsyncClient, SomeException, TestClient, TestServer, exc_queue
 
 
 async def test_exc_eof_received(all_loops, conn_type):

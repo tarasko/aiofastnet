@@ -75,7 +75,7 @@ def _plot_results(
     if not variants:
         return
 
-    fig, axes = _plot_absolute_results(results, transports, msg_sizes, variants)
+    fig, _axes = _plot_absolute_results(results, transports, msg_sizes, variants)
     fig.suptitle(
         f"Echo Round-Trip Benchmark | Python {python_version}\naiofastnet-{aiofastnet_version} | "
         f"uvloop-{uvloop_version} | SO_SNDBUF={sndbuf_size}"

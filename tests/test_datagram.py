@@ -2,11 +2,13 @@ import asyncio
 import platform
 
 import pytest
+
 from tests.utils import (
     AsyncClient,
+    SocketPair,
     TestClient,
     TestServer,
-    exc_queue, SocketPair,
+    exc_queue,
 )
 
 
@@ -47,7 +49,7 @@ async def test_datagram_write_ready_after_eagain(selector_loop, conn_type_udp):
 
 
 async def test_datagram_ready_after_close(selector_loop, conn_type_udp):
-    async with SocketPair(conn_type_udp) as (server, client):
+    async with SocketPair(conn_type_udp) as (_server, client):
         client.transport.close()
         client.transport._read_ready()
 
@@ -78,7 +80,7 @@ async def test_datagram_received_exc(selector_loop, conn_type_udp):
             self.transport.sendto(data, addr)
 
     with exc_queue() as excq:
-        async with SocketPair(conn_type_udp, server_protocol_factory=RaiseOnceDatagramProtocol) as (server, client):
+        async with SocketPair(conn_type_udp, server_protocol_factory=RaiseOnceDatagramProtocol) as (_server, client):
             client.transport.sendto(b"first")
             client.transport.sendto(b"second")
             assert await client.readn(6) == b"second"

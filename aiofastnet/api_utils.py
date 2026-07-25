@@ -4,6 +4,8 @@
 # Licensed under the Python Software Foundation License Version 2.
 # See LICENSES/PSF-2.0.txt and THIRD_PARTY_NOTICES for details.
 
+from __future__ import annotations
+
 import asyncio
 import errno
 import socket
@@ -11,15 +13,13 @@ import ssl
 import weakref
 from asyncio.trsock import TransportSocket
 from logging import getLogger
-from typing import Callable, Union, Optional, Tuple
+from typing import Callable
 
 from . import constants, openssl_compat
-from .constants import SSL_TIMEOUT_DEFAULTS, SSL_BIO_SIZE_DEFAULTS
+from .constants import SSL_BIO_SIZE_DEFAULTS, SSL_TIMEOUT_DEFAULTS
 from .ssl_transport import SSLTransport_Socket, SSLTransport_Transport
 from .transport import SocketTransport, aiofn_is_buffered_protocol
-from .wrapped_transport import _should_fallback_to_asyncio, \
-    _WrappedBufferedProtocol, _WrappedProtocol, _get_original_loop_method
-
+from .wrapped_transport import _get_original_loop_method, _should_fallback_to_asyncio, _WrappedBufferedProtocol, _WrappedProtocol
 
 _HAS_IPv6 = hasattr(socket, 'AF_INET6')
 _logger = getLogger('aiofastnet')
@@ -29,7 +29,7 @@ def _is_asyncio_loop(loop: asyncio.AbstractEventLoop) -> bool:
     return type(loop).__module__.startswith("asyncio.")
 
 
-def _validate_ssl_timeout(name: str, value: Optional[float], ssl_or_sslcontext: Optional[Union[bool, ssl.SSLContext]]) -> float:
+def _validate_ssl_timeout(name: str, value: float | None, ssl_or_sslcontext: bool | ssl.SSLContext | None) -> float:
     if value is not None and not ssl_or_sslcontext:
         raise ValueError(
             f'{name} is only meaningful with ssl')
@@ -43,7 +43,7 @@ def _validate_ssl_timeout(name: str, value: Optional[float], ssl_or_sslcontext: 
     return value
 
 
-def _validate_bio_size(name: str, value: Optional[int], ssl_or_sslcontext: Optional[Union[bool, ssl.SSLContext]]) -> int:
+def _validate_bio_size(name: str, value: int | None, ssl_or_sslcontext: bool | ssl.SSLContext | None) -> int:
     if value is not None and not ssl_or_sslcontext:
         raise ValueError(
             f'{name} is only meaningful with ssl')
@@ -65,15 +65,15 @@ async def _create_connection_transport(
         loop: asyncio.AbstractEventLoop,
         sock: socket.socket,
         protocol_factory: Callable[[], asyncio.BaseProtocol],
-        ssl: Union[bool, ssl.SSLContext, None],
-        server_hostname: Optional[str]=None,
+        ssl: bool | ssl.SSLContext | None,
+        server_hostname: str | None=None,
         server_side: bool=False,
-        ssl_handshake_timeout: Optional[float]=None,
-        ssl_shutdown_timeout: Optional[float]=None,
-        ssl_incoming_bio_size: Optional[int]=None,
-        ssl_outgoing_bio_size: Optional[int]=None,
+        ssl_handshake_timeout: float | None=None,
+        ssl_shutdown_timeout: float | None=None,
+        ssl_incoming_bio_size: int | None=None,
+        ssl_outgoing_bio_size: int | None=None,
         server=None
-) -> Tuple[asyncio.Transport, asyncio.BaseProtocol]:
+) -> tuple[asyncio.Transport, asyncio.BaseProtocol]:
     sock.setblocking(False)
 
     # The following big nested if-else should set transport, protocol, and

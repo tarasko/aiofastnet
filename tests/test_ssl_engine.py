@@ -9,7 +9,7 @@ import pytest
 
 import aiofastnet
 from aiofastnet import openssl_compat
-from tests.utils import TestServer, TestClient
+from tests.utils import TestClient, TestServer
 
 
 def _import_ssl_engine_direct():

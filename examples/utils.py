@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import socket
 import ssl
@@ -6,6 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import aiofastnet
+
 from .benchmark_protocol import ClientProtocol, ServerProtocol
 
 

@@ -7,7 +7,6 @@ from importlib.metadata import version
 
 import pytest
 
-
 pytest_plugins = ("tests.pytest_plugin",)
 
 

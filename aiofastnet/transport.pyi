@@ -1,5 +1,6 @@
 import asyncio
-from typing import Any, BinaryIO, Iterable, Optional
+from collections.abc import Iterable
+from typing import Any, BinaryIO
 
 _Buffer = bytes | bytearray | memoryview
 
@@ -13,8 +14,8 @@ class Transport(asyncio.Transport):
         self,
         file: BinaryIO,
         offset: int,
-        count: Optional[int],
-    ) -> Optional[asyncio.Future[None]]: ...
+        count: int | None,
+    ) -> asyncio.Future[None] | None: ...
 
 class Protocol(asyncio.BufferedProtocol):
     def is_buffered_protocol(self) -> bool: ...

@@ -1,15 +1,17 @@
+from __future__ import annotations
+
 import asyncio
-import socket
-import weakref
-from contextlib import asynccontextmanager, contextmanager, ExitStack
-from dataclasses import dataclass
 import os
-from logging import getLogger
-from pathlib import Path
+import socket
 import ssl
 import sys
 import tempfile
-from typing import Tuple, Optional, Union, Any, List
+import weakref
+from contextlib import ExitStack, asynccontextmanager, contextmanager
+from dataclasses import dataclass
+from logging import getLogger
+from pathlib import Path
+from typing import Any
 
 import async_timeout
 import pytest
@@ -83,7 +85,7 @@ async def create_datagram_endpoint(loop, *args, **kwargs):
 
 
 class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
-    def __init__(self, clients: set, client_waiters: List[Any], is_buffered: bool):
+    def __init__(self, clients: set, client_waiters: list[Any], is_buffered: bool):
         self.transport = None
         self._clients = clients
         self._client_waiters = client_waiters
@@ -135,20 +137,20 @@ class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
 
 
 class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
-    transport: Optional[asyncio.Transport]
+    transport: asyncio.Transport | None
     is_buffered: bool
     is_datagram: bool
-    errors: List[BaseException]
+    errors: list[BaseException]
 
     _read_buffer: bytearray     # buffer for buffered protocols
     _data: bytearray            # accumulated unconsumed read data
-    _readn_waiter: Optional[Tuple[Optional[int], asyncio.Future]]
+    _readn_waiter: tuple[int | None, asyncio.Future] | None
     _new_data_ev: asyncio.Event # For simple waiting for new data without consumption
 
     _is_writing_paused: bool
     _is_eof_received: bool
     _closed_fut: asyncio.Future
-    _write_resumed_fut: Optional[asyncio.Future] #
+    _write_resumed_fut: asyncio.Future | None
     _ssl_layer_num: int
 
     def __init__(self):
@@ -263,7 +265,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         _logger.debug("AsyncClient.writelines(%s)", lens)
         self.transport.writelines(parts)
 
-    async def readn(self, n: Optional[int], timeout: Optional[float]=1.0) -> bytes:
+    async def readn(self, n: int | None, timeout: float | None=1.0) -> bytes:
         if self._readn_waiter is not None:
             fut = self._readn_waiter[1]
             assert fut.cancelled(), "we can only start new readn if previous was cancelled (for example due to timeout)"
@@ -359,10 +361,10 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
 class EchoServerHandle:
     server: asyncio.Server
     clients: set[Any]
-    client_waiters: List[Any]
-    port: Optional[int]
+    client_waiters: list[Any]
+    port: int | None
     host: str = "127.0.0.1"
-    path: Optional[str] = None
+    path: str | None = None
 
     async def get_any_server_client(self, timeout=1.0) -> EchoServerProtocol:
         if self.clients:
@@ -386,8 +388,8 @@ class EchoServerHandle:
 @dataclass(frozen=True)
 class ConnectionType:
     name: str
-    server_ssl_context: Optional[ssl.SSLContext] = None
-    client_ssl_context: Optional[ssl.SSLContext] = None
+    server_ssl_context: ssl.SSLContext | None = None
+    client_ssl_context: ssl.SSLContext | None = None
 
     def check_sendfile_supported(self):
         if os.name == "nt":
@@ -563,7 +565,7 @@ async def TestServer(protocol_factory=None,
     with ExitStack() as stack:
         if ct.name == "udp":
             path = None
-            transport, protocol = await create_datagram_endpoint(
+            transport, _protocol = await create_datagram_endpoint(
                 loop,
                 protocol_factory,
                 local_addr=(host, port),
@@ -745,7 +747,7 @@ async def SocketPair(
         peer.close()
 
 
-def make_test_ssl_contexts(cert_file: Union[str, Path], key_file: Union[str, Path], enable_ktls=False):
+def make_test_ssl_contexts(cert_file: str | Path, key_file: str | Path, enable_ktls=False):
     cert_file = str(cert_file)
     key_file = str(key_file)
 

@@ -7,8 +7,8 @@
 import asyncio
 import ssl
 
+from .api_utils import _validate_bio_size, _validate_ssl_timeout
 from .ssl_transport import SSLTransport_Transport
-from .api_utils import _validate_ssl_timeout, _validate_bio_size
 from .wrapped_transport import _WrappedTransport
 
 

@@ -1,21 +1,19 @@
 import asyncio
+import os
 import socket
+import ssl
 import sys
 import tempfile
-import os
-import ssl
 import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 
 import pytest
+from aiofastnet.utils import aiofn_maybe_copy_buffer
 
 import aiofastnet
-from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Protocol, SocketTransport, Transport
-from tests.utils import TestClient, TestServer, \
-    make_test_ssl_contexts, AsyncClient, SomeException, _logger, \
-    start_tls, sendfile, UDP_MAX_PAYLOAD_SIZE
+from tests.utils import UDP_MAX_PAYLOAD_SIZE, AsyncClient, SomeException, TestClient, TestServer, _logger, make_test_ssl_contexts, sendfile, start_tls
 
 
 @pytest.mark.parametrize("msg_size", [1, 2, 3, 4, 5, 6, 7, 8, 29, 64, 256 * 1024, 6 * 1024 * 1024])

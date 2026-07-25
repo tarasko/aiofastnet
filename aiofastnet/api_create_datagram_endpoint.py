@@ -8,10 +8,9 @@ import os
 import socket
 import stat
 
-from .api_utils import _logger, _set_reuseport, _ensure_resolved
+from .api_utils import _ensure_resolved, _logger, _set_reuseport
 from .transport import SelectorDatagramTransport
-from .wrapped_transport import _should_fallback_to_asyncio, \
-    _WrappedDatagramProtocol, _get_original_loop_method
+from .wrapped_transport import _get_original_loop_method, _should_fallback_to_asyncio, _WrappedDatagramProtocol
 
 
 async def create_datagram_endpoint(

@@ -15,8 +15,8 @@ import pathlib
 import ssl
 import tempfile
 from logging import basicConfig
-import uvloop
 
+import uvloop
 from aiohttp import web
 
 import aiofastnet

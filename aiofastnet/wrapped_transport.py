@@ -3,7 +3,6 @@ import asyncio
 from .transport import Transport, aiofn_is_buffered_protocol
 from .utils import aiofn_validate_and_maybe_copy_buffer
 
-
 _AIOFASTNET_PATCHED_ATTR = "_aiofastnet_patched_methods"
 _AIOFASTNET_ORIGINAL_ATTR = "_aiofastnet_original_methods"
 

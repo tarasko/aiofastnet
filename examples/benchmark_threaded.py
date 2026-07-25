@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import ssl
@@ -7,9 +9,9 @@ import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
-import psutil
 
 import matplotlib.pyplot as plt
+import psutil
 from matplotlib.ticker import ScalarFormatter
 
 import aiofastnet
