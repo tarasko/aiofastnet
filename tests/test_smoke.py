@@ -285,20 +285,20 @@ async def test_pause_reading(all_loops, conn_type_plus_udp):
     small_payload = b"x" * 1024
 
     is_asyncio_proactor = os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop)
+    if is_asyncio_proactor and conn_type_plus_udp.name == "udp":
+        pytest.skip("ProactorDatagramTransport doesn't support read pause")
 
     async with TestServer(ct=conn_type_plus_udp) as server:
         async with TestClient(server, ct=conn_type_plus_udp) as client:
             client.write(big_payload)
             # Proactor loop in asyncio doesn't have is_reading()
             # Seems like a bug
-            if not is_asyncio_proactor:
-                assert client.transport.is_reading()
+            assert client.transport.is_reading()
 
             # pause_reading is idempotent
             client.transport.pause_reading()
             client.transport.pause_reading()
-            if not is_asyncio_proactor:
-                assert not client.transport.is_reading()
+            assert not client.transport.is_reading()
 
             client.write(small_payload)
             with pytest.raises(asyncio.TimeoutError):
@@ -322,6 +322,8 @@ async def test_pause_reading_from_read_callback(all_loops, conn_type_plus_udp, b
     big_payload = b"b" * (3 * 256 * 1024)
     small_payload = b"s" * 1024
     is_asyncio_proactor = os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop)
+    if is_asyncio_proactor and conn_type_plus_udp.name == "udp":
+        pytest.skip("ProactorDatagramTransport doesn't support read pause")
 
     class PauseFromReadCallbackClient(AsyncClient):
         def __init__(self):
@@ -357,8 +359,7 @@ async def test_pause_reading_from_read_callback(all_loops, conn_type_plus_udp, b
 
             first_read_size = await asyncio.wait_for(client.first_read, timeout=1.0)
             assert 0 < first_read_size < len(big_payload)
-            if not is_asyncio_proactor:
-                assert not client.transport.is_reading()
+            assert not client.transport.is_reading()
 
             # The socket should still have data ready. Even if _read_ready() is
             # invoked directly while paused, it must not read more data.
@@ -373,7 +374,6 @@ async def test_pause_reading_from_read_callback(all_loops, conn_type_plus_udp, b
             else:
                 assert await client.readn(len(big_payload), timeout=4.0) == big_payload
                 assert client.read_callback_count > 1
-
 
 
 async def test_eof_received_keep_open(all_loops):
