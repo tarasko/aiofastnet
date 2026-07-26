@@ -433,6 +433,9 @@ cdef class SocketTransportBase(Transport):
     cdef inline _handle_error(self, message):
         _, exc, _ = sys.exc_info()
 
+        if unlikely(self._is_debug):
+            _logger.debug("%r: _handle_error(%s), exc=%s", self, message, exc)
+
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise
 

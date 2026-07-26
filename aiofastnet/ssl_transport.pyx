@@ -603,6 +603,9 @@ cdef class SSLTransportBase(Transport):
     cdef inline _handle_error(self, message):
         _, exc, _ = sys.exc_info()
 
+        if unlikely(self._is_debug):
+            _logger.debug("%r: _handle_error(%s), exc=%r", self, message, exc)
+
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise
 
@@ -1510,19 +1513,15 @@ cdef class SSLTransport_Transport(SSLTransportBase):
         meaning a regular EOF is received or the connection was
         aborted or closed).
         """
-        _logger.debug("%r: connection_lost(%s)", self, exc)
-
         self._connection_lost_scheduled = True
         if self._write_backlog_size:
             self._clear_write_backlog(exc)
         self._ssl_engine.outgoing_bio_reset()
 
-        if self._state != SSLProtocolState.DO_HANDSHAKE:
-            if self._app_state == AppProtocolState.STATE_CON_MADE or \
-                    self._app_state == AppProtocolState.STATE_EOF:
-                self._app_state = AppProtocolState.STATE_CON_LOST
-                self._loop.call_soon(self._call_protocol_connection_lost,
-                                     self._app_protocol, exc)
+        if self._app_state in (AppProtocolState.STATE_CON_MADE, AppProtocolState.STATE_EOF):
+            self._app_state = AppProtocolState.STATE_CON_LOST
+            self._loop.call_soon(self._call_protocol_connection_lost,
+                                 self._app_protocol, exc)
         self._set_state(SSLProtocolState.UNWRAPPED)
 
         # Decrease ref counters to user instances to avoid cyclic references

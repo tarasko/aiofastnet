@@ -5,7 +5,7 @@ import warnings
 
 import pytest
 
-from tests.utils import AsyncClient, SocketPair, SomeException, TestClient, TestServer, exc_queue
+from tests.utils import AsyncClient, SocketPair, SomeException, TestClient, TestServer, exc_queue, _set_socket_sndbuf
 
 
 async def test_exc_eof_received(all_loops, conn_type):
@@ -167,50 +167,43 @@ def test_system_exit_not_reported(conn_type_plus_udp, exc, meth):
 
     class ServerProtocol:
         def connection_made(self, transport):
-            self.transport = transport
-
-        def connection_lost(self, exc):
-            pass
-
-        def data_received(self, data):
-            self.transport.write(data)
-            if meth == "eof_received":
-                self.transport.close()
-
-        def datagram_received(self, data, addr):
-            self.transport.sendto(data, addr)
-
-    class ClientRaiseException(AsyncClient):
-        def connection_made(self, transport):
             if meth == "connection_made":
                 raise exc(42)
-            super().connection_made(transport)
+            if meth == "connection_lost":
+                transport.abort()
+                return
+            self.transport = transport
+            _set_socket_sndbuf(transport, 128*1024)
 
         def connection_lost(self, e):
             if meth == "connection_lost":
                 raise exc(42)
-            super().connection_lost(e)
 
         def pause_writing(self):
             if meth == "pause_writing":
                 raise exc(42)
-            super().pause_writing()
 
         def resume_writing(self):
             if meth == "resume_writing":
                 raise exc(42)
-            super().resume_writing()
-
-        def datagram_received(self, data, addr):
-            if meth == "datagram_received":
-                raise exc(42)
-            super().datagram_received(data, addr)
 
         def data_received(self, data):
             if meth == "data_received":
                 raise exc(42)
-            super().data_received(data)
+            if meth in ("pause_writing", "resume_writing"):
+                self.transport.write(b"x" * (1024 * 1024))
+            else:
+                self.transport.write(data)
 
+            if meth == "eof_received":
+                self.transport.close()
+
+        def datagram_received(self, data, addr):
+            if meth == "datagram_received":
+                raise exc(42)
+            self.transport.sendto(data, addr)
+
+    class ClientRaiseException(AsyncClient):
         def get_buffer(self, hint):
             if meth == "get_buffer":
                 raise exc(42)
@@ -244,7 +237,7 @@ def test_system_exit_not_reported(conn_type_plus_udp, exc, meth):
                             client.write(payload)
                     else:
                         client.write(payload)
-                    await asyncio.sleep(0.1)
+                    await client.wait_closed()
 
     with warnings.catch_warnings():
         warnings.filterwarnings(
@@ -262,7 +255,6 @@ def test_system_exit_not_reported(conn_type_plus_udp, exc, meth):
         gc.collect()
 
     assert excq == []
-
 
 
 async def test_datagram_received_exc(selector_loop, conn_type_udp):

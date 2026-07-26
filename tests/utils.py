@@ -149,7 +149,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
 
     _is_writing_paused: bool
     _is_eof_received: bool
-    _closed_fut: asyncio.Future
+    _closed_fut: asyncio.Future | None
     _write_resumed_fut: asyncio.Future | None
     _ssl_layer_num: int
 
@@ -165,7 +165,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
 
         self._is_writing_paused = False
         self._is_eof_received = False
-        self._closed_fut = asyncio.get_running_loop().create_future()
+        self._closed_fut = None
         self._write_resumed_fut = None
         self._ssl_layer_num = 0
         self.errors = []
@@ -185,6 +185,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
     def connection_made(self, transport):
         _logger.debug("AsyncClient.connection_made")
         self.transport = transport
+        self._closed_fut = asyncio.get_running_loop().create_future()
         effective_sndbuf = _set_socket_sndbuf(transport, 128*1024)
         _logger.debug("AsyncClient SNDBUF set: %s", effective_sndbuf)
         ssl_protocol = self.transport.get_extra_info('ssl_protocol')
@@ -235,6 +236,7 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
 
     def connection_lost(self, exc):
         _logger.debug("AsyncClient.connection_lost, exc=%s", exc)
+        assert self._closed_fut is not None
         if not self._closed_fut.done():
             if exc is not None:
                 self._closed_fut.set_exception(exc)
@@ -303,6 +305,8 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         self.transport.abort()
 
     async def wait_closed(self, timeout=1.0):
+        if self._closed_fut is None:
+            return
         async with async_timeout.timeout(timeout):
             await asyncio.shield(self._closed_fut)
 
