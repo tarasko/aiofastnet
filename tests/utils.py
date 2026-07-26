@@ -7,7 +7,7 @@ import ssl
 import sys
 import tempfile
 import weakref
-from contextlib import ExitStack, asynccontextmanager, contextmanager, AsyncExitStack
+from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from logging import getLogger
 from pathlib import Path

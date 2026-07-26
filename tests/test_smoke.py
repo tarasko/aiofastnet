@@ -16,6 +16,8 @@ from aiofastnet.transport import Protocol, SocketTransport, Transport
 from tests.utils import (
     UDP_MAX_PAYLOAD_SIZE,
     AsyncClient,
+    EchoServerProtocol,
+    SocketPair,
     SomeException,
     TestClient,
     TestServer,
@@ -23,13 +25,11 @@ from tests.utils import (
     make_test_ssl_contexts,
     sendfile,
     start_tls,
-    SocketPair,
-    EchoServerProtocol,
 )
 
 
 async def test_echo_socketpair(conn_type_plus_udp):
-    msg_size = int(24*1024)
+    msg_size = 24*1024
     payload = b"x" * msg_size
 
     async with SocketPair(ct=conn_type_plus_udp,
