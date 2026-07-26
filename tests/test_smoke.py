@@ -13,7 +13,33 @@ from aiofastnet.utils import aiofn_maybe_copy_buffer
 
 import aiofastnet
 from aiofastnet.transport import Protocol, SocketTransport, Transport
-from tests.utils import UDP_MAX_PAYLOAD_SIZE, AsyncClient, SomeException, TestClient, TestServer, _logger, make_test_ssl_contexts, sendfile, start_tls
+from tests.utils import (
+    UDP_MAX_PAYLOAD_SIZE,
+    AsyncClient,
+    EchoServerProtocol,
+    SocketPair,
+    SomeException,
+    TestClient,
+    TestServer,
+    _logger,
+    make_test_ssl_contexts,
+    sendfile,
+    start_tls,
+)
+
+
+async def test_echo_socketpair(conn_type_plus_udp):
+    msg_size = 1024
+    payload = b"x" * msg_size
+
+    async with SocketPair(ct=conn_type_plus_udp,
+                          server_protocol_factory=EchoServerProtocol,
+                          client_server_hostname="127.0.0.1") as (_server, client):
+        client.write(payload)
+        echoed = await client.readn(msg_size)
+        assert echoed == payload
+        client.close()
+        await client.wait_closed()
 
 
 @pytest.mark.parametrize("msg_size", [1, 2, 3, 4, 5, 6, 7, 8, 29, 64, 256 * 1024, 6 * 1024 * 1024])
@@ -33,6 +59,18 @@ async def test_echo(all_loops, msg_size, conn_type_plus_udp, buffered_protocol):
             assert echoed == payload
             client.close()
             await client.wait_closed()
+
+
+@pytest.mark.parametrize("msg_size", [1, 32, 64, 256 * 1024, 6 * 1024 * 1024, 20 * 1024 * 1024])
+@pytest.mark.parametrize("num_lines", [1, 32, 4000])
+async def test_echo_writelines(all_loops, msg_size, num_lines, conn_type, buffered_protocol):
+    payload = b"x" * msg_size
+
+    async with TestServer(ct=conn_type, is_buffered=buffered_protocol) as server:
+        async with TestClient(server, ct=conn_type, is_buffered=buffered_protocol) as client:
+            client.write_in_lines(payload, num_lines)
+            echoed = await client.readn(msg_size, 4.0)
+            assert echoed == payload
 
 
 async def test_ktls_enabled(ktls_conn_type):
@@ -76,18 +114,6 @@ async def test_ssl_membio_enabled(selector_loop, ssl_conn_type):
             assert client.transport.get_extra_info("ssl_outgoing_use_membio") is expected
             assert server_client.transport.get_extra_info("ssl_incoming_use_membio") is expected
             assert server_client.transport.get_extra_info("ssl_outgoing_use_membio") is expected
-
-
-@pytest.mark.parametrize("msg_size", [1, 32, 64, 256 * 1024, 6 * 1024 * 1024, 20 * 1024 * 1024])
-@pytest.mark.parametrize("num_lines", [1, 32, 4000])
-async def test_echo_writelines(all_loops, msg_size, num_lines, conn_type, buffered_protocol):
-    payload = b"x" * msg_size
-
-    async with TestServer(ct=conn_type, is_buffered=buffered_protocol) as server:
-        async with TestClient(server, ct=conn_type, is_buffered=buffered_protocol) as client:
-            client.write_in_lines(payload, num_lines)
-            echoed = await client.readn(msg_size, 4.0)
-            assert echoed == payload
 
 
 async def test_write_huge_close(all_loops, conn_type):

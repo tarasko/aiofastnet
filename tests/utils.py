@@ -7,7 +7,7 @@ import ssl
 import sys
 import tempfile
 import weakref
-from contextlib import ExitStack, asynccontextmanager, contextmanager
+from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from logging import getLogger
 from pathlib import Path
@@ -84,12 +84,34 @@ async def create_datagram_endpoint(loop, *args, **kwargs):
         return await aiofastnet.create_datagram_endpoint(loop, *args, **kwargs)
 
 
+async def connect_accepted_socket(loop, *args, **kwargs):
+    if NO_AIOFN:
+        return await loop.connect_accepted_socket(*args, **kwargs)
+    else:
+        return await aiofastnet.connect_accepted_socket(loop, *args, **kwargs)
+
+
 class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
-    def __init__(self, clients: set, client_waiters: list[Any], is_buffered: bool):
+    transport: asyncio.Transport | None
+    _is_buffered: bool
+    _clients: set | None
+    _client_waiters: list[asyncio.Future] | None
+    _ssl_layer_num: int
+    _read_buffer: bytearray
+
+    def __init__(self,
+                 is_buffered: bool=False,
+                 clients: set | None=None,
+                 client_waiters: list[asyncio.Future] | None=None):
         self.transport = None
+        self._is_buffered = is_buffered
         self._clients = clients
         self._client_waiters = client_waiters
-        self._is_buffered = is_buffered
+        if clients is not None:
+            assert self._client_waiters is not None
+        else:
+            assert self._client_waiters is None
+        self._ssl_layer_num = 0
         self._read_buffer = bytearray(b"X") * (128*1024)
 
     def is_buffered_protocol(self):
@@ -97,19 +119,24 @@ class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
 
     def connection_made(self, transport):
         _logger.debug("EchoServer.connection_made")
-        self._clients.add(weakref.ref(self))
         self.transport = transport
+
         ssl_protocol = self.transport.get_extra_info('ssl_protocol')
         if ssl_protocol is not None and hasattr(ssl_protocol, '_allow_renegotiation'):
             ssl_protocol._allow_renegotiation()
-        for w in self._client_waiters:
-            if not w.done():
-                w.set_result(None)
-        self._client_waiters.clear()
+
+        if self._clients is not None:
+            self._clients.add(weakref.ref(self))
+            assert self._client_waiters is not None
+            for w in self._client_waiters:
+                if not w.done():
+                    w.set_result(None)
+            self._client_waiters.clear()
 
     def connection_lost(self, exc):
         _logger.debug("EchoServer.connection_lost, exc=%s", exc)
-        self._clients.remove(weakref.ref(self))
+        if self._clients is not None:
+            self._clients.remove(weakref.ref(self))
 
     def get_buffer(self, hint):
         return memoryview(self._read_buffer)
@@ -134,6 +161,20 @@ class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
 
     def eof_received(self):
         _logger.debug("EchoServer.eof_received")
+
+    async def start_tls(self, ssl_context,
+                        ssl_handshake_timeout=None, ssl_shutdown_timeout=None):
+        self.transport = await start_tls(
+            asyncio.get_running_loop(),
+            self.transport,
+            self,
+            ssl_context,
+            server_side=True,
+            ssl_handshake_timeout=ssl_handshake_timeout,
+            ssl_shutdown_timeout=ssl_shutdown_timeout,
+        )
+        _logger.debug("Server start_tls #%d completed", self._ssl_layer_num)
+        self._ssl_layer_num += 1
 
 
 class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
@@ -243,7 +284,8 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
             else:
                 self._closed_fut.set_result(None)
         if self._readn_waiter is not None:
-            self._readn_waiter[1].set_exception(ConnectionResetError())
+            if not self._readn_waiter[1].done():
+                self._readn_waiter[1].set_exception(ConnectionResetError())
             self._readn_waiter = None
         if self._write_resumed_fut is not None:
             self._write_resumed_fut.set_exception(ConnectionResetError())
@@ -566,7 +608,7 @@ async def TestServer(protocol_factory=None,
     client_waiters = []
     if protocol_factory is None:
         def protocol_factory():
-            return EchoServerProtocol(clients, client_waiters, is_buffered)
+            return EchoServerProtocol(is_buffered, clients, client_waiters)
 
     with ExitStack() as stack:
         if ct.name == "udp":
@@ -639,7 +681,8 @@ async def TestClient(server_or_host=None, port=None,
                      protocol_factory=AsyncClient,
                      ssl_handshake_timeout=None,
                      ssl_shutdown_timeout=None,
-                     sock=None):
+                     sock=None,
+                     sock_server_side=False):
     if ct is None:
         ct = ConnectionType("tcp")
     if sock is not None:
@@ -665,15 +708,10 @@ async def TestClient(server_or_host=None, port=None,
         return protocol
 
     try:
-        if ct.name == "unix":
-            transport, client = await create_unix_connection(
-                loop,
-                client_protocol_factory,
-                path=path if path is not None else host,
-            )
-        elif ct.name == "udp":
+        if ct.name == "udp":
             if is_buffered:
                 pytest.skip("UDP protocol is always simple")
+
             if sock is not None:
                 transport, client = await create_datagram_endpoint(
                     loop,
@@ -686,31 +724,57 @@ async def TestClient(server_or_host=None, port=None,
                     client_protocol_factory,
                     remote_addr=(host, port),
                 )
-        elif ct.use_start_tls or ct.client_ssl_context is None:
-            transport, client = await create_connection(
-                loop,
-                client_protocol_factory,
-                host=host,
-                port=port,
-            )
         else:
-            transport, client = await create_connection(
-                loop,
-                client_protocol_factory,
-                host=host,
-                port=port,
-                ssl=ct.client_ssl_context,
-                server_hostname=server_hostname,
-                ssl_handshake_timeout=ssl_handshake_timeout,
-                ssl_shutdown_timeout=ssl_shutdown_timeout
-            )
-        if ct.use_start_tls:
-            await client.start_tls(ct.client_ssl_context,
-                                   server_hostname=server_hostname,
-                                   ssl_handshake_timeout=ssl_handshake_timeout,
-                                   ssl_shutdown_timeout=ssl_shutdown_timeout
-                                   )
-
+            if not sock_server_side or sock is None:
+                if ct.name == "unix":
+                    transport, client = await create_unix_connection(
+                        loop,
+                        client_protocol_factory,
+                        path=path if path is not None else host,
+                        sock=sock,
+                    )
+                elif ct.use_start_tls or ct.client_ssl_context is None:
+                    transport, client = await create_connection(
+                        loop,
+                        client_protocol_factory,
+                        host=host,
+                        port=port,
+                        sock=sock
+                    )
+                else:
+                    transport, client = await create_connection(
+                        loop,
+                        client_protocol_factory,
+                        host=host,
+                        port=port,
+                        sock=sock,
+                        ssl=ct.client_ssl_context,
+                        server_hostname=server_hostname,
+                        ssl_handshake_timeout=ssl_handshake_timeout,
+                        ssl_shutdown_timeout=ssl_shutdown_timeout
+                    )
+                if ct.use_start_tls:
+                    await client.start_tls(ct.client_ssl_context,
+                                           server_hostname=server_hostname,
+                                           ssl_handshake_timeout=ssl_handshake_timeout,
+                                           ssl_shutdown_timeout=ssl_shutdown_timeout
+                                           )
+            else:
+                if ct.use_start_tls or ct.client_ssl_context is None:
+                    transport, client = await connect_accepted_socket(loop, client_protocol_factory, sock)
+                else:
+                    transport, client = await connect_accepted_socket(
+                        loop,
+                        client_protocol_factory,
+                        sock,
+                        ssl=ct.server_ssl_context,
+                        ssl_handshake_timeout=ssl_handshake_timeout,
+                        ssl_shutdown_timeout=ssl_shutdown_timeout,
+                    )
+                if ct.use_start_tls:
+                    await client.start_tls(ct.server_ssl_context,
+                                           ssl_handshake_timeout=ssl_handshake_timeout,
+                                           ssl_shutdown_timeout=ssl_shutdown_timeout                                           )
         yield client
     finally:
         if transport is not None:
@@ -735,24 +799,34 @@ async def SocketPair(
     if getattr(socket, "AF_UNIX", None) is None:
         pytest.skip("SocketPair requires socket.AF_UNIX and is not supported on current platform")
 
-    if ct.name == "unix":
-        sock, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
-    elif ct.name == "udp":
-        sock, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)    
+    if ct.name == "udp":
+        sock, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
     else:
-        pytest.skip(f"SocketPair is not supported for {ct.name}")
+        sock, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
 
     try:
-        async with TestClient(ct=ct, sock=sock, is_buffered=server_is_buffered,
-                              protocol_factory=server_protocol_factory,
-                              ssl_handshake_timeout=server_ssl_handshake_timeout,
-                              ssl_shutdown_timeout=server_ssl_shutdown_timeout) as server:
-            async with TestClient(ct=ct, sock=peer,
-                                  server_hostname=client_server_hostname,
-                                  is_buffered=client_is_buffered,
-                                  protocol_factory=client_protocol_factory,
-                                  ) as client:
-                yield server, client
+        async with AsyncExitStack() as stack:
+            server_context = TestClient(
+                ct=ct,
+                is_buffered=server_is_buffered,
+                protocol_factory=server_protocol_factory,
+                ssl_handshake_timeout=server_ssl_handshake_timeout,
+                ssl_shutdown_timeout=server_ssl_shutdown_timeout,
+                sock=sock,
+                sock_server_side=True,
+            )
+            client_context = TestClient(
+                ct=ct,
+                sock=peer,
+                server_hostname=client_server_hostname,
+                is_buffered=client_is_buffered,
+                protocol_factory=client_protocol_factory,
+            )
+            server, client = await asyncio.gather(
+                stack.enter_async_context(server_context),
+                stack.enter_async_context(client_context),
+            )
+            yield server, client
     finally:
         sock.close()
         peer.close()

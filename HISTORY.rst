@@ -10,7 +10,8 @@ aiofastnet Release History
 
 * Harden logic against exceptions in SSLTransport constructor
 * Added create_datagram_endpoint
-* Fixed Protocol.connection_lost may not be called if failure and abort happenes during start_tls
+* Added connect_accepted_socket
+* Fixed Protocol.connection_lost may not be called if failure and abort happens during start_tls
 
 0.21.0
 ------------------

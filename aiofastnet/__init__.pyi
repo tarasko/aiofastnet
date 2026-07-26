@@ -63,6 +63,18 @@ async def create_connection(
     all_errors: bool = ...,
 ) -> tuple[asyncio.Transport, _ProtocolT]: ...
 
+async def connect_accepted_socket(
+    loop: asyncio.AbstractEventLoop,
+    protocol_factory: Callable[[], _ProtocolT],
+    sock: socket.socket,
+    *,
+    ssl: bool | ssl.SSLContext | None = ...,
+    ssl_handshake_timeout: float | None = ...,
+    ssl_shutdown_timeout: float | None = ...,
+    ssl_incoming_bio_size: int | None = ...,
+    ssl_outgoing_bio_size: int | None = ...,
+) -> tuple[asyncio.Transport, _ProtocolT]: ...
+
 async def create_datagram_endpoint(
     loop: asyncio.AbstractEventLoop,
     protocol_factory: Callable[[], _DatagramProtocolT],

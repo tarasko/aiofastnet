@@ -1,5 +1,6 @@
 import socket
 
+from .api_connect_accepted_socket import connect_accepted_socket
 from .api_create_connection import create_connection
 from .api_create_datagram_endpoint import create_datagram_endpoint
 from .api_create_server import create_server
@@ -20,6 +21,7 @@ __all__ = [
     'Protocol',
     'Transport',
     'aiofn_is_buffered_protocol',
+    'connect_accepted_socket',
     'create_connection',
     'create_datagram_endpoint',
     'create_server',
