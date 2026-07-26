@@ -1,3 +1,9 @@
+# Portions of this file are derived from CPython's asyncio sources
+# (notably asyncio.base_events and asyncio.selector_events).
+# Copyright (c) Python Software Foundation.
+# Licensed under the Python Software Foundation License Version 2.
+# See LICENSES/PSF-2.0.txt and THIRD_PARTY_NOTICES for details.
+
 import socket
 
 from .api_utils import _check_ssl_socket, _create_connection_transport, _logger, _validate_bio_size, _validate_ssl_timeout
