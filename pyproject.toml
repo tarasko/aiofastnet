@@ -57,6 +57,20 @@ strict = true
 line-length = 150
 target-version = "py39"
 
+[tool.ruff.lint]
+ignore = [
+    "PYI026",
+    "SIM117",
+    "C408",
+    "PLR1704",
+    "UP024",
+    "UP031",
+    "SIM114",
+    "SIM102",
+    "BLE001",
+    "S110",
+]
+
 [tool.coverage.run]
 source = ["aiofastnet"]
 branch = true
@@ -64,6 +78,7 @@ plugins = ["Cython.Coverage"]
 core = "ctrace"
 omit = [
     "aiofastnet/api_create_connection.py",
+    "aiofastnet/api_create_datagram_endpoint.py",
     "aiofastnet/api_create_unix_connection.py",
     "aiofastnet/api_create_server.py",
     "aiofastnet/api_create_unix_server.py",

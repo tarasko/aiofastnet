@@ -28,6 +28,10 @@ async def test_patch_loop_is_idempotent():
     assert "create_unix_connection" in getattr(loop, _AIOFASTNET_PATCHED_ATTR)
     assert originals["create_unix_server"] is not loop.create_unix_server
     assert "create_unix_server" in getattr(loop, _AIOFASTNET_PATCHED_ATTR)
+    assert originals["create_datagram_endpoint"] is not \
+        loop.create_datagram_endpoint
+    assert "create_datagram_endpoint" in getattr(
+        loop, _AIOFASTNET_PATCHED_ATTR)
 
 
 def test_loop_factory_sets_and_patches_current_loop():
@@ -101,8 +105,8 @@ async def test_transport_methods_mockable(conn_type):
             orig_write = client.transport.write
             orig_writelines = client.transport.writelines
 
-            setattr(client.transport, "write", 123)
-            setattr(client.transport, "writelines", 123)
+            client.transport.write = 123
+            client.transport.writelines = 123
 
             client.transport.write = orig_write
             client.transport.writelines = orig_writelines

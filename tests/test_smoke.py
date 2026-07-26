@@ -1,29 +1,33 @@
 import asyncio
+import os
 import socket
+import ssl
 import sys
 import tempfile
-import os
-import ssl
 import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 
 import pytest
+from aiofastnet.utils import aiofn_maybe_copy_buffer
 
 import aiofastnet
-from aiofastnet.utils import aiofn_maybe_copy_buffer
 from aiofastnet.transport import Protocol, SocketTransport, Transport
-from tests.utils import TestClient, TestServer, \
-    make_test_ssl_contexts, AsyncClient, SomeException, _logger, \
-    start_tls, sendfile
+from tests.utils import UDP_MAX_PAYLOAD_SIZE, AsyncClient, SomeException, TestClient, TestServer, _logger, make_test_ssl_contexts, sendfile, start_tls
 
 
 @pytest.mark.parametrize("msg_size", [1, 2, 3, 4, 5, 6, 7, 8, 29, 64, 256 * 1024, 6 * 1024 * 1024])
-async def test_echo(all_loops, msg_size, conn_type, buffered_protocol):
+async def test_echo(all_loops, msg_size, conn_type_plus_udp, buffered_protocol):
+    if conn_type_plus_udp.name == "udp":
+        if msg_size > UDP_MAX_PAYLOAD_SIZE:
+            pytest.skip("UDP datagram payload exceeds the portable IPv4 limit")
+        if buffered_protocol:
+            pytest.skip("UDP datagram protocol is always simple")
+
     payload = b"x" * msg_size
 
-    async with TestServer(ct=conn_type, is_buffered=buffered_protocol) as server:
-        async with TestClient(server, ct=conn_type, is_buffered=buffered_protocol) as client:
+    async with TestServer(ct=conn_type_plus_udp, is_buffered=buffered_protocol) as server:
+        async with TestClient(server, ct=conn_type_plus_udp, is_buffered=buffered_protocol) as client:
             client.write(payload)
             echoed = await client.readn(msg_size)
             assert echoed == payload
@@ -147,7 +151,7 @@ async def test_write_huge_abort(all_loops, conn_type):
 
     payload = b"p" * (20*1024*1024)
 
-    class FaulyServerProtocol(asyncio.Protocol):
+    class FaultyServerProtocol(asyncio.Protocol):
         def connection_made(self, transport):
             self.is_eof_received = False
             self.transport = transport
@@ -157,10 +161,10 @@ async def test_write_huge_abort(all_loops, conn_type):
 
         def eof_received(self):
             self.is_eof_received = True
-            _logger.debug("FaulyServerProtocol.eof_received() called")
+            _logger.debug("FaultyServerProtocol.eof_received() called")
 
         def connection_lost(self, exc):
-            _logger.debug("FaulyServerProtocol.connection_lost(%s) called", str(exc))
+            _logger.debug("FaultyServerProtocol.connection_lost(%s) called", str(exc))
 
     # Normally we would expect client to not have eof_received event if peer disconnect with abort.
     # This is definitely true only for TLS where eof_received mean graceful close_notify
@@ -169,7 +173,7 @@ async def test_write_huge_abort(all_loops, conn_type):
     # becomes flaky. If write_ready happens first, then send fails and we call connection_lost
     # immediately. If read_ready happens first, then we call eof_received.
 
-    async with TestServer(FaulyServerProtocol, ct=conn_type) as server:
+    async with TestServer(FaultyServerProtocol, ct=conn_type) as server:
         async with TestClient(server, ct=conn_type) as client:
             client.transport.write(payload)
             with pytest.raises(ConnectionResetError):
@@ -276,12 +280,19 @@ async def test_writelines_paused(all_loops, conn_type):
             await client.readn(total_bytes_written)
 
 
-async def test_pause_reading(all_loops, conn_type):
-    payload = b"x" * (20*1024*1024)
+async def test_pause_reading(all_loops, conn_type_plus_udp):
+    big_payload = b"x" * (6*1024*1024)
+    small_payload = b"x" * 1024
 
-    async with TestServer(ct=conn_type) as server:
-        async with TestClient(server, ct=conn_type) as client:
-            client.transport.write(payload)
+    is_asyncio_proactor = os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop)
+    if is_asyncio_proactor and conn_type_plus_udp.name == "udp":
+        pytest.skip("ProactorDatagramTransport doesn't support read pause")
+
+    async with TestServer(ct=conn_type_plus_udp) as server:
+        async with TestClient(server, ct=conn_type_plus_udp) as client:
+            client.write(big_payload)
+            # Proactor loop in asyncio doesn't have is_reading()
+            # Seems like a bug
             assert client.transport.is_reading()
 
             # pause_reading is idempotent
@@ -289,28 +300,34 @@ async def test_pause_reading(all_loops, conn_type):
             client.transport.pause_reading()
             assert not client.transport.is_reading()
 
+            client.write(small_payload)
             with pytest.raises(asyncio.TimeoutError):
-                await client.wait_new_data(0.3)
+                await client.readn(None, 0.3)
 
             # resume_reading is idempotent
             client.transport.resume_reading()
             client.transport.resume_reading()
 
-            await client.wait_new_data(0.3)
+            await client.readn(None, 0.3)
             client.transport.pause_reading()
-
+            client.discard_all_remaing_read_data()
+            client.write(small_payload)
             with pytest.raises(asyncio.TimeoutError):
-                await client.wait_new_data(0.3)
+                await client.readn(None, 0.3)
 
             client.transport.resume_reading()
 
 
-async def test_pause_reading_from_read_callback(all_loops, conn_type, buffered_protocol):
-    payload = b"x" * (3 * 256 * 1024)
+async def test_pause_reading_from_read_callback(all_loops, conn_type_plus_udp, buffered_protocol):
+    big_payload = b"b" * (3 * 256 * 1024)
+    small_payload = b"s" * 1024
+    is_asyncio_proactor = os.name == 'nt' and isinstance(asyncio.get_running_loop(), asyncio.ProactorEventLoop)
+    if is_asyncio_proactor and conn_type_plus_udp.name == "udp":
+        pytest.skip("ProactorDatagramTransport doesn't support read pause")
 
     class PauseFromReadCallbackClient(AsyncClient):
-        def __init__(self, is_buffered):
-            super().__init__(is_buffered)
+        def __init__(self):
+            super().__init__()
             self.first_read = asyncio.get_running_loop().create_future()
             self.read_callback_count = 0
 
@@ -328,12 +345,20 @@ async def test_pause_reading_from_read_callback(all_loops, conn_type, buffered_p
             super().buffer_updated(bytes_read)
             self._pause_once()
 
-    async with TestServer(ct=conn_type) as server:
-        async with TestClient(server, ct=conn_type, protocol_factory=PauseFromReadCallbackClient, is_buffered=buffered_protocol) as client:
-            client.write(payload)
+        def datagram_received(self, data, addr):
+            super().datagram_received(data, addr)
+            self._pause_once()
+
+    async with TestServer(ct=conn_type_plus_udp) as server:
+        async with TestClient(server, ct=conn_type_plus_udp, protocol_factory=PauseFromReadCallbackClient, is_buffered=buffered_protocol) as client:
+            # This is for streaming protocols
+            client.write(big_payload)
+            # This is for udp
+            client.write(small_payload)
+            client.write(small_payload)
 
             first_read_size = await asyncio.wait_for(client.first_read, timeout=1.0)
-            assert 0 < first_read_size < len(payload)
+            assert 0 < first_read_size < len(big_payload)
             assert not client.transport.is_reading()
 
             # The socket should still have data ready. Even if _read_ready() is
@@ -344,8 +369,11 @@ async def test_pause_reading_from_read_callback(all_loops, conn_type, buffered_p
             assert client.read_callback_count == 1
 
             client.transport.resume_reading()
-            assert await client.readn(len(payload), timeout=4.0) == payload
-            assert client.read_callback_count > 1
+            if conn_type_plus_udp.name == "udp":
+                assert await client.readn(None, timeout=1.0) == small_payload
+            else:
+                assert await client.readn(len(big_payload), timeout=4.0) == big_payload
+                assert client.read_callback_count > 1
 
 
 async def test_eof_received_keep_open(all_loops):
@@ -625,7 +653,7 @@ async def test_bad_buffer(all_loops, conn_type):
 
 
 async def test_maybe_copy(all_loops):
-    bytes_obj = bytes(b"abcd")
+    bytes_obj = b"abcd"
     assert aiofn_maybe_copy_buffer(bytes_obj) is bytes_obj
 
     mv_bytes_obj = memoryview(bytes_obj)
@@ -717,9 +745,9 @@ async def test_contextvar(all_loops, conn_type, buffered_protocol):
             assert var_values[0] == ('connection_made', 'begin')
 
 
-async def test_transport_base(all_loops, conn_type):
-    async with TestServer(ct=conn_type) as server:
-        async with TestClient(server, ct=conn_type) as client:
+async def test_transport_base(all_loops, conn_type_plus_udp):
+    async with TestServer(ct=conn_type_plus_udp) as server:
+        async with TestClient(server, ct=conn_type_plus_udp) as client:
             assert isinstance(client.transport, Transport)
             client.close()
             await client.wait_closed()
@@ -829,15 +857,18 @@ async def test_start_tls(all_loops):
             assert client.is_eof_received
 
 
-async def test_peername(all_loops, conn_type):
-    async with TestServer(ct=conn_type) as server:
-        async with TestClient(server, ct=conn_type) as client:
+async def test_peername(all_loops, conn_type_plus_udp):
+    async with TestServer(ct=conn_type_plus_udp) as server:
+        async with TestClient(server, ct=conn_type_plus_udp) as client:
             server_client = await server.get_any_server_client()
             client_peername = client.transport.get_extra_info('peername')
             client_sockname = client.transport.get_extra_info('sockname')
             server_peername = server_client.transport.get_extra_info('peername')
             server_sockname = server_client.transport.get_extra_info('sockname')
             assert client_peername == server_sockname
+            if conn_type_plus_udp.name == "udp":
+                assert server_peername is None
+                return
             assert server_peername == client_sockname
 
 

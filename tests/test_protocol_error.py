@@ -5,7 +5,7 @@ import warnings
 
 import pytest
 
-from tests.utils import AsyncClient, SomeException, TestServer, TestClient, exc_queue
+from tests.utils import AsyncClient, SocketPair, SomeException, TestClient, TestServer, _set_socket_sndbuf, exc_queue
 
 
 async def test_exc_eof_received(all_loops, conn_type):
@@ -154,43 +154,64 @@ async def test_exc_all(all_loops, conn_type):
 
 
 @pytest.mark.parametrize("exc", [SystemExit, KeyboardInterrupt], ids=["sys", "ctrlc"])
-@pytest.mark.parametrize("meth", ["connection_made", "connection_lost", "pause_writing", "resume_writing", "data_received", "get_buffer", "buffer_updated", "eof_received"])
-def test_system_exit_not_reported(conn_type, exc, meth):
+@pytest.mark.parametrize("meth", ["connection_made", "connection_lost", "pause_writing", "resume_writing",
+                                  "data_received", "get_buffer", "buffer_updated",
+                                  "datagram_received", "error_received",
+                                  "eof_received"])
+def test_system_exit_not_reported(conn_type_plus_udp, exc, meth):
+    if conn_type_plus_udp.name == "udp":
+        if meth in ("get_buffer", "buffer_updated", "data_received", "eof_received", "pause_writing", "resume_writing"):
+            pytest.skip("callback is unavailable in UDP")
+    else:
+        if meth in ("datagram_received", "error_received"):
+            pytest.skip("callback is unavailable in streaming protocols")
+
     class ServerProtocol:
-        def connection_made(self, transport):
-            self.transport = transport
-
-        def data_received(self, data):
-            self.transport.write(data)
-            if meth == "eof_received":
-                self.transport.close()
-
-    class ClientRaiseException(AsyncClient):
         def connection_made(self, transport):
             if meth == "connection_made":
                 raise exc(42)
-            super().connection_made(transport)
+            if meth == "connection_lost":
+                transport.abort()
+                return
+            self.transport = transport
+            _set_socket_sndbuf(transport, 128*1024)
 
         def connection_lost(self, e):
             if meth == "connection_lost":
                 raise exc(42)
-            super().connection_lost(e)
 
         def pause_writing(self):
             if meth == "pause_writing":
                 raise exc(42)
-            super().pause_writing()
 
         def resume_writing(self):
             if meth == "resume_writing":
                 raise exc(42)
-            super().resume_writing()
 
         def data_received(self, data):
             if meth == "data_received":
                 raise exc(42)
-            super().data_received(data)
+            elif meth in ("pause_writing", "resume_writing"):
+                self.transport.write(b"x" * (1024 * 1024))
+            else:
+                self.transport.write(data)
 
+            if meth == "eof_received":
+                self.transport.close()
+
+        def datagram_received(self, data, addr):
+            if meth == "datagram_received":
+                raise exc(42)
+            if meth == "error_received":
+                self.transport.sendto(b"x" * (1024 * 1024), addr)
+            else:
+                self.transport.sendto(data, addr)
+
+        def error_received(self, e):
+            if meth == "error_received":
+                raise exc(42)
+
+    class ClientRaiseException(AsyncClient):
         def get_buffer(self, hint):
             if meth == "get_buffer":
                 raise exc(42)
@@ -209,22 +230,22 @@ def test_system_exit_not_reported(conn_type, exc, meth):
         def is_buffered_protocol(self):
             return meth in ("get_buffer", "buffer_updated")
 
-    payload = b"x" * (64*1024)
+    payload = b"x" * (16*1024)
     excq = []
     async def run():
         asyncio.get_running_loop().set_debug(True)
         with exc_queue(excq):
-            async with TestServer(protocol_factory=ServerProtocol, ct=conn_type) as server:
+            async with TestServer(protocol_factory=ServerProtocol, ct=conn_type_plus_udp) as server:
                 async with TestClient(server,
                                       protocol_factory=ClientRaiseException,
-                                      ct=conn_type,
+                                      ct=conn_type_plus_udp,
                                       is_buffered=False) as client:
                     if meth in ('pause_writing', 'resume_writing'):
                         while not client.is_writing_paused:
-                            client.transport.write(payload)
+                            client.write(payload)
                     else:
-                        client.transport.write(payload)
-                    await asyncio.sleep(0.1)
+                        client.write(payload)
+                    await client.wait_closed()
 
     with warnings.catch_warnings():
         warnings.filterwarnings(
@@ -242,3 +263,40 @@ def test_system_exit_not_reported(conn_type, exc, meth):
         gc.collect()
 
     assert excq == []
+
+
+async def test_datagram_received_exc(selector_loop, conn_type_udp):
+    class RaiseOnceDatagramProtocol(asyncio.DatagramProtocol):
+        def connection_made(self, transport):
+            self.transport = transport
+            self._raised = False
+
+        def datagram_received(self, data, addr):
+            if not self._raised:
+                self._raised = True
+                raise RuntimeError("datagram failed")
+            self.transport.sendto(data, addr)
+
+    with exc_queue() as excq:
+        async with SocketPair(conn_type_udp, server_protocol_factory=RaiseOnceDatagramProtocol) as (_server, client):
+            client.transport.sendto(b"first")
+            client.transport.sendto(b"second")
+            assert await client.readn(6) == b"second"
+
+        assert isinstance(excq[0]["exception"], RuntimeError)
+        assert excq[0]["message"] == "Fatal error: protocol.datagram_received() call failed."
+
+
+async def test_datagram_error_received_exc(selector_loop, conn_type_udp):
+    class RaisingErrorDatagramProtocol(AsyncClient):
+        def error_received(self, exc):
+            raise RuntimeError("error handler failed")
+
+    with exc_queue() as excq:
+        async with SocketPair(conn_type_udp, client_protocol_factory=RaisingErrorDatagramProtocol) as (server, client):
+            client.transport.sendto(b"x" * (1024*1024))
+            client.transport.sendto(b"hello")
+            assert await server.readn(5) == b"hello"
+
+        assert isinstance(excq[0]["exception"], RuntimeError)
+        assert excq[0]["message"] == "Fatal error: protocol.error_received() call failed."

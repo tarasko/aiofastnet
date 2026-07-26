@@ -7,8 +7,7 @@
 import os
 import socket
 
-
-from .api_utils import _create_connection_transport, _validate_ssl_timeout, _validate_bio_size
+from .api_utils import _create_connection_transport, _validate_bio_size, _validate_ssl_timeout
 
 
 async def create_unix_connection(

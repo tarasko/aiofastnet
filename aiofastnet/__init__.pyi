@@ -2,140 +2,157 @@ import asyncio
 import os
 import socket
 import ssl
+from collections.abc import Awaitable, Sequence
 from typing import (
     Any,
-    Awaitable,
     BinaryIO,
     Callable,
-    Optional,
-    Protocol as TypingProtocol,
-    Sequence,
-    Tuple,
     TypeVar,
-    Union,
+)
+from typing import (
+    Protocol as TypingProtocol,
 )
 
 from .openssl_compat import OpenSSLDynLibs as OpenSSLDynLibs
 from .transport import (
     Protocol as Protocol,
+)
+from .transport import (
     Transport as Transport,
+)
+from .transport import (
     aiofn_is_buffered_protocol as aiofn_is_buffered_protocol,
 )
 
 _ProtocolT = TypeVar("_ProtocolT", bound=asyncio.BaseProtocol)
-_Address = Tuple[Union[str, bytes], int]
-_Host = Optional[Union[str, bytes, Sequence[Union[str, bytes]]]]
+_DatagramProtocolT = TypeVar("_DatagramProtocolT", bound=asyncio.DatagramProtocol)
+_Address = tuple[str | bytes, int]
+_Host = str | bytes | Sequence[str | bytes] | None
 
 class _EventLoopPolicy(TypingProtocol):
     def get_event_loop(self) -> asyncio.AbstractEventLoop: ...
     def set_event_loop(
         self,
-        loop: Optional[asyncio.AbstractEventLoop],
+        loop: asyncio.AbstractEventLoop | None,
     ) -> None: ...
     def new_event_loop(self) -> asyncio.AbstractEventLoop: ...
 
-OPENSSL_DYN_LIBS: Optional[OpenSSLDynLibs]
+OPENSSL_DYN_LIBS: OpenSSLDynLibs | None
 __version__: str
 __author__: str
 
 async def create_connection(
     loop: asyncio.AbstractEventLoop,
     protocol_factory: Callable[[], _ProtocolT],
-    host: Optional[Union[str, bytes]] = ...,
-    port: Optional[Union[int, str]] = ...,
+    host: str | bytes | None = ...,
+    port: int | str | None = ...,
     *,
-    ssl: Optional[Union[bool, ssl.SSLContext]] = ...,
+    ssl: bool | ssl.SSLContext | None = ...,
     family: int = ...,
     proto: int = ...,
     flags: int = ...,
-    sock: Optional[socket.socket] = ...,
-    local_addr: Optional[_Address] = ...,
-    server_hostname: Optional[str] = ...,
-    ssl_handshake_timeout: Optional[float] = ...,
-    ssl_shutdown_timeout: Optional[float] = ...,
-    ssl_incoming_bio_size: Optional[int] = ...,
-    ssl_outgoing_bio_size: Optional[int] = ...,
-    happy_eyeballs_delay: Optional[float] = ...,
-    interleave: Optional[int] = ...,
+    sock: socket.socket | None = ...,
+    local_addr: _Address | None = ...,
+    server_hostname: str | None = ...,
+    ssl_handshake_timeout: float | None = ...,
+    ssl_shutdown_timeout: float | None = ...,
+    ssl_incoming_bio_size: int | None = ...,
+    ssl_outgoing_bio_size: int | None = ...,
+    happy_eyeballs_delay: float | None = ...,
+    interleave: int | None = ...,
     all_errors: bool = ...,
-) -> Tuple[asyncio.Transport, _ProtocolT]: ...
+) -> tuple[asyncio.Transport, _ProtocolT]: ...
+
+async def create_datagram_endpoint(
+    loop: asyncio.AbstractEventLoop,
+    protocol_factory: Callable[[], _DatagramProtocolT],
+    local_addr: _Address | None = ...,
+    remote_addr: _Address | None = ...,
+    *,
+    family: int = ...,
+    proto: int = ...,
+    flags: int = ...,
+    reuse_port: bool | None = ...,
+    allow_broadcast: bool | None = ...,
+    sock: socket.socket | None = ...,
+) -> tuple[asyncio.DatagramTransport, _DatagramProtocolT]: ...
 
 async def create_unix_connection(
     loop: asyncio.AbstractEventLoop,
     protocol_factory: Callable[[], _ProtocolT],
-    path: Optional[Union[str, bytes, os.PathLike[str], os.PathLike[bytes]]] = ...,
+    path: str | bytes | os.PathLike[str] | os.PathLike[bytes] | None = ...,
     *,
-    ssl: Optional[Union[bool, ssl.SSLContext]] = ...,
-    sock: Optional[socket.socket] = ...,
-    server_hostname: Optional[str] = ...,
-    ssl_handshake_timeout: Optional[float] = ...,
-    ssl_shutdown_timeout: Optional[float] = ...,
-    ssl_incoming_bio_size: Optional[int] = ...,
-    ssl_outgoing_bio_size: Optional[int] = ...,
-) -> Tuple[asyncio.Transport, _ProtocolT]: ...
+    ssl: bool | ssl.SSLContext | None = ...,
+    sock: socket.socket | None = ...,
+    server_hostname: str | None = ...,
+    ssl_handshake_timeout: float | None = ...,
+    ssl_shutdown_timeout: float | None = ...,
+    ssl_incoming_bio_size: int | None = ...,
+    ssl_outgoing_bio_size: int | None = ...,
+) -> tuple[asyncio.Transport, _ProtocolT]: ...
 
 async def create_server(
     loop: asyncio.AbstractEventLoop,
     protocol_factory: Callable[[], asyncio.BaseProtocol],
     host: _Host = ...,
-    port: Optional[Union[int, str]] = ...,
+    port: int | str | None = ...,
     *,
     family: int = ...,
     flags: int = ...,
-    sock: Optional[socket.socket] = ...,
+    sock: socket.socket | None = ...,
     backlog: int = ...,
-    ssl: Optional[ssl.SSLContext] = ...,
-    reuse_address: Optional[bool] = ...,
-    reuse_port: Optional[bool] = ...,
-    keep_alive: Optional[bool] = ...,
-    ssl_handshake_timeout: Optional[float] = ...,
-    ssl_shutdown_timeout: Optional[float] = ...,
-    ssl_incoming_bio_size: Optional[int] = ...,
-    ssl_outgoing_bio_size: Optional[int] = ...,
+    ssl: ssl.SSLContext | None = ...,
+    reuse_address: bool | None = ...,
+    reuse_port: bool | None = ...,
+    keep_alive: bool | None = ...,
+    ssl_handshake_timeout: float | None = ...,
+    ssl_shutdown_timeout: float | None = ...,
+    ssl_incoming_bio_size: int | None = ...,
+    ssl_outgoing_bio_size: int | None = ...,
     start_serving: bool = ...,
 ) -> asyncio.Server: ...
 
 async def create_unix_server(
     loop: asyncio.AbstractEventLoop,
     protocol_factory: Callable[[], asyncio.BaseProtocol],
-    path: Optional[Union[str, bytes, os.PathLike[str], os.PathLike[bytes]]] = ...,
+    path: str | bytes | os.PathLike[str] | os.PathLike[bytes] | None = ...,
     *,
-    sock: Optional[socket.socket] = ...,
+    sock: socket.socket | None = ...,
     backlog: int = ...,
-    ssl: Optional[ssl.SSLContext] = ...,
-    ssl_handshake_timeout: Optional[float] = ...,
-    ssl_shutdown_timeout: Optional[float] = ...,
-    ssl_incoming_bio_size: Optional[int] = ...,
-    ssl_outgoing_bio_size: Optional[int] = ...,
+    ssl: ssl.SSLContext | None = ...,
+    ssl_handshake_timeout: float | None = ...,
+    ssl_shutdown_timeout: float | None = ...,
+    ssl_incoming_bio_size: int | None = ...,
+    ssl_outgoing_bio_size: int | None = ...,
     start_serving: bool = ...,
     cleanup_socket: bool = ...,
 ) -> asyncio.Server: ...
 
 async def open_connection(
     loop: asyncio.AbstractEventLoop,
-    host: Optional[Union[str, bytes]] = ...,
-    port: Optional[Union[int, str]] = ...,
+    host: str | bytes | None = ...,
+    port: int | str | None = ...,
     *,
     limit: int = ...,
     **kwds: Any,
-) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]: ...
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]: ...
 
 async def open_unix_connection(
     loop: asyncio.AbstractEventLoop,
-    path: Optional[Union[str, bytes, os.PathLike[str], os.PathLike[bytes]]] = ...,
+    path: str | bytes | os.PathLike[str] | os.PathLike[bytes] | None = ...,
     *,
     limit: int = ...,
     **kwds: Any,
-) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]: ...
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]: ...
 
 async def start_server(
     loop: asyncio.AbstractEventLoop,
     client_connected_cb: Callable[
         [asyncio.StreamReader, asyncio.StreamWriter],
-        Optional[Awaitable[None]],
+        Awaitable[None] | None,
     ],
     host: _Host = ...,
-    port: Optional[Union[int, str]] = ...,
+    port: int | str | None = ...,
     *,
     limit: int = ...,
     **kwds: Any,
@@ -145,9 +162,9 @@ async def start_unix_server(
     loop: asyncio.AbstractEventLoop,
     client_connected_cb: Callable[
         [asyncio.StreamReader, asyncio.StreamWriter],
-        Optional[Awaitable[None]],
+        Awaitable[None] | None,
     ],
-    path: Optional[Union[str, bytes, os.PathLike[str], os.PathLike[bytes]]] = ...,
+    path: str | bytes | os.PathLike[str] | os.PathLike[bytes] | None = ...,
     *,
     limit: int = ...,
     **kwds: Any,
@@ -160,11 +177,11 @@ async def start_tls(
     sslcontext: ssl.SSLContext,
     *,
     server_side: bool = ...,
-    server_hostname: Optional[str] = ...,
-    ssl_handshake_timeout: Optional[float] = ...,
-    ssl_shutdown_timeout: Optional[float] = ...,
-    ssl_incoming_bio_size: Optional[int] = ...,
-    ssl_outgoing_bio_size: Optional[int] = ...,
+    server_hostname: str | None = ...,
+    ssl_handshake_timeout: float | None = ...,
+    ssl_shutdown_timeout: float | None = ...,
+    ssl_incoming_bio_size: int | None = ...,
+    ssl_outgoing_bio_size: int | None = ...,
 ) -> asyncio.Transport: ...
 
 async def sendfile(
@@ -172,19 +189,19 @@ async def sendfile(
     transport: asyncio.BaseTransport,
     file: BinaryIO,
     offset: int = ...,
-    count: Optional[int] = ...,
+    count: int | None = ...,
     *,
     fallback: bool = ...,
 ) -> None: ...
 
 def patch_loop(
-    loop: Optional[asyncio.AbstractEventLoop] = ...,
+    loop: asyncio.AbstractEventLoop | None = ...,
 ) -> asyncio.AbstractEventLoop: ...
 
 def loop_factory(
-    base_factory: Optional[Callable[[], asyncio.AbstractEventLoop]] = ...,
+    base_factory: Callable[[], asyncio.AbstractEventLoop] | None = ...,
 ) -> Callable[[], asyncio.AbstractEventLoop]: ...
 
 def install_policy(
-    base_policy: Optional[_EventLoopPolicy] = ...,
+    base_policy: _EventLoopPolicy | None = ...,
 ) -> _EventLoopPolicy: ...

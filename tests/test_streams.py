@@ -1,8 +1,8 @@
 import asyncio
-import socket
-from contextlib import asynccontextmanager
 import os
+import socket
 import tempfile
+from contextlib import asynccontextmanager
 
 import pytest
 from async_timeout import timeout

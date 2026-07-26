@@ -9,20 +9,21 @@ fixed duration and report round-trips/sec), these run a fixed, deterministic
 number of round-trips so they can be measured with CodSpeed's CPU simulation
 instrument.
 """
+from __future__ import annotations
 
 import asyncio
 import os
 import tempfile
-from typing import Union, List
 
 import pytest
 
 if os.name == "nt":
     pytest.skip("CodSpeed benchmarks are not run on Windows", allow_module_level=True)
 
-import aiofastnet
 import uvloop
-from tests.utils import ConnectionType, TestServer, TestClient, _set_socket_sndbuf
+
+import aiofastnet
+from tests.utils import ConnectionType, TestClient, TestServer, _set_socket_sndbuf
 
 # Message payload sizes (bytes) + num of rounds exercised by the benchmarks.
 MSG_SIZES = [(256, 300), (1024*1024, 15)]
@@ -80,7 +81,7 @@ class ServerProtocol(asyncio.Protocol):
 
 
 class ClientProtocol(asyncio.BufferedProtocol):
-    def __init__(self, payload: Union[bytes, List[bytes]], rounds: int):
+    def __init__(self, payload: bytes | list[bytes], rounds: int):
         self._payload = payload
         self._remaining = rounds + 1
         self._transport = None
@@ -176,7 +177,7 @@ def test_benchmark_write(benchmark, benchmark_conn_type, buffered_protocol,
     payload_size, rounds = msg_size
     payload = b"x" * payload_size
 
-    def client_factory(is_buffered: bool):
+    def client_factory():
         return ClientProtocol(payload, rounds)
 
     benchmark(run_in_loop, client_factory, payload_size, benchmark_conn_type,
@@ -189,7 +190,7 @@ def test_benchmark_writelines(benchmark, benchmark_conn_type, msg_size,
     payload_size, rounds = msg_size
     payload = [b"x" * int(payload_size/256)] * 256
 
-    def client_factory(is_buffered: bool):
+    def client_factory():
         return ClientProtocol(payload, rounds)
 
     benchmark(run_in_loop, client_factory, payload_size, benchmark_conn_type,
@@ -204,7 +205,7 @@ def test_benchmark_sendfile(benchmark, sendfile_conn_type, msg_size, asyncio_deb
         file.write(b"x" * payload_size)
         file.flush()
 
-        def client_factory(is_buffered: bool):
+        def client_factory():
             return SendfileClientProtocol(file, payload_size, rounds)
 
         benchmark(run_in_loop, client_factory, payload_size, sendfile_conn_type, True, asyncio_debug)

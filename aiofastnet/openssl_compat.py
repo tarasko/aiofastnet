@@ -1,9 +1,9 @@
+from __future__ import annotations
+
+import _ssl
 import os
 import ssl
 from dataclasses import dataclass
-
-import _ssl
-from typing import Optional
 
 _ssl_module_path = getattr(_ssl, '__file__', None)
 
@@ -30,7 +30,7 @@ else:
     raise ImportError(f"unsupported platform {os.name}")
 
 
-def _find_openssl_library_paths() -> Optional[OpenSSLDynLibs]:
+def _find_openssl_library_paths() -> OpenSSLDynLibs | None:
     if _ssl_module_path is None:
         return None
 

@@ -3,9 +3,9 @@ import socket
 
 import pytest
 
-from aiofastnet import openssl_compat, Protocol
+from aiofastnet import Protocol, openssl_compat
 from aiofastnet import ssl_transport as aiofn_ssl_transport
-from tests.utils import make_test_ssl_contexts, TestServer, TestClient
+from tests.utils import TestClient, TestServer, make_test_ssl_contexts
 
 
 async def test_ssl_transport_init_exc(selector_loop, monkeypatch, ssl_sbio_conn_type):
@@ -22,7 +22,6 @@ async def test_ssl_transport_init_exc(selector_loop, monkeypatch, ssl_sbio_conn_
         with pytest.raises(RuntimeError, match="post handshake hook boom"):
             async with TestClient(server, ct=ssl_sbio_conn_type) as client:
                 await client.transport.wait_disconnected()
-                pass
 
 
 async def test_ssl_socket_transport_repr_does_not_call_protocol_buffer_size(selector_loop):

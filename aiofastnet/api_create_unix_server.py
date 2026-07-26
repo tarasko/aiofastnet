@@ -10,9 +10,7 @@ import os
 import socket
 import stat
 
-from .api_utils import (
-    Server, _logger, _validate_ssl_timeout, _validate_bio_size
-)
+from .api_utils import Server, _logger, _validate_bio_size, _validate_ssl_timeout
 
 
 class UnixServer(Server):

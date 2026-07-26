@@ -4,10 +4,10 @@
 import argparse
 import asyncio
 import platform
+from time import time
 
 import uvloop
 from aiohttp import ClientSession, WSMsgType, web
-from time import time
 
 import aiofastnet
 from examples.utils import build_ssl_contexts

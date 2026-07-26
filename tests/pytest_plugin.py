@@ -1,19 +1,23 @@
 from tests.utils import (
-    conn_type,
-    ktls_conn_type,
-    ssl_conn_type,
-    ssl_sbio_conn_type,
-    sendfile_conn_type,
     benchmark_conn_type,
     buffered_protocol,
+    conn_type,
+    conn_type_plus_udp,
+    conn_type_udp,
+    ktls_conn_type,
+    sendfile_conn_type,
+    ssl_conn_type,
+    ssl_sbio_conn_type,
 )
 
 __all__ = [
-    "conn_type",
-    "ktls_conn_type",
-    "ssl_conn_type",
-    "ssl_sbio_conn_type",
-    "sendfile_conn_type",
     "benchmark_conn_type",
-    "buffered_protocol"
+    "buffered_protocol",
+    "conn_type",
+    "conn_type_plus_udp",
+    "conn_type_udp",
+    "ktls_conn_type",
+    "sendfile_conn_type",
+    "ssl_conn_type",
+    "ssl_sbio_conn_type"
 ]

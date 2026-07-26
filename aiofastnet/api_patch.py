@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import warnings
 from functools import partial
-from typing import Callable, Optional
+from typing import Callable
 
 from .api_create_connection import create_connection
-from .api_create_unix_connection import create_unix_connection
+from .api_create_datagram_endpoint import create_datagram_endpoint
 from .api_create_server import create_server
+from .api_create_unix_connection import create_unix_connection
 from .api_create_unix_server import create_unix_server
 from .api_sendfile import sendfile
 from .api_start_tls import start_tls
@@ -16,9 +17,9 @@ from .wrapped_transport import (
     _AIOFASTNET_PATCHED_ATTR,
 )
 
-
 _PATCHABLE_METHODS = {
     "create_connection": create_connection,
+    "create_datagram_endpoint": create_datagram_endpoint,
     "create_unix_connection": create_unix_connection,
     "create_server": create_server,
     "create_unix_server": create_unix_server,
@@ -28,7 +29,7 @@ _PATCHABLE_METHODS = {
 
 
 def patch_loop(
-        loop: Optional[asyncio.AbstractEventLoop] = None,
+        loop: asyncio.AbstractEventLoop | None = None,
 ) -> asyncio.AbstractEventLoop:
     """Patch an event loop so its networking methods use aiofastnet.
 
@@ -36,9 +37,9 @@ def patch_loop(
         loop: Event loop to patch. If omitted, the currently running loop is
             patched.
 
-    The loop's ``create_connection``, ``create_unix_connection``,
-    ``create_server``, ``create_unix_server``, ``start_tls``, and
-    ``sendfile`` methods are replaced.
+    The loop's ``create_connection``, ``create_datagram_endpoint``,
+    ``create_unix_connection``, ``create_server``, ``create_unix_server``,
+    ``start_tls``, and ``sendfile`` methods are replaced.
 
     The patch is idempotent. Original loop methods are retained on the loop so
     aiofastnet's compatibility fallbacks, such as Windows ProactorEventLoop
@@ -69,7 +70,7 @@ def patch_loop(
 
 
 def loop_factory(
-        base_factory: Optional[Callable[[], asyncio.AbstractEventLoop]] = None,
+        base_factory: Callable[[], asyncio.AbstractEventLoop] | None = None,
 ) -> Callable[[], asyncio.AbstractEventLoop]:
     """Return a loop factory that creates loops patched with aiofastnet.
 
@@ -96,7 +97,7 @@ def loop_factory(
 
 
 def install_policy(
-        base_policy: Optional[asyncio.AbstractEventLoopPolicy] = None,
+        base_policy: asyncio.AbstractEventLoopPolicy | None = None,
 ) -> asyncio.AbstractEventLoopPolicy:
     """Install a legacy event loop policy that patches newly created loops.
 
