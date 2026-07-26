@@ -284,7 +284,8 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
             else:
                 self._closed_fut.set_result(None)
         if self._readn_waiter is not None:
-            self._readn_waiter[1].set_exception(ConnectionResetError())
+            if not self._readn_waiter[1].done():
+                self._readn_waiter[1].set_exception(ConnectionResetError())
             self._readn_waiter = None
         if self._write_resumed_fut is not None:
             self._write_resumed_fut.set_exception(ConnectionResetError())
