@@ -155,7 +155,8 @@ async def test_exc_all(all_loops, conn_type):
 
 @pytest.mark.parametrize("exc", [SystemExit, KeyboardInterrupt], ids=["sys", "ctrlc"])
 @pytest.mark.parametrize("meth", ["connection_made", "connection_lost", "pause_writing", "resume_writing",
-                                  "data_received", "get_buffer", "buffer_updated", "datagram_received",
+                                  "data_received", "get_buffer", "buffer_updated",
+                                  "datagram_received", "error_received",
                                   "eof_received"])
 def test_system_exit_not_reported(conn_type_plus_udp, exc, meth):
     if conn_type_plus_udp.name == "udp":
@@ -190,7 +191,7 @@ def test_system_exit_not_reported(conn_type_plus_udp, exc, meth):
         def data_received(self, data):
             if meth == "data_received":
                 raise exc(42)
-            if meth in ("pause_writing", "resume_writing"):
+            elif meth in ("pause_writing", "resume_writing"):
                 self.transport.write(b"x" * (1024 * 1024))
             else:
                 self.transport.write(data)
@@ -201,7 +202,14 @@ def test_system_exit_not_reported(conn_type_plus_udp, exc, meth):
         def datagram_received(self, data, addr):
             if meth == "datagram_received":
                 raise exc(42)
-            self.transport.sendto(data, addr)
+            if meth == "error_received":
+                self.transport.sendto(b"x" * (1024 * 1024), addr)
+            else:
+                self.transport.sendto(data, addr)
+
+        def error_received(self, e):
+            if meth == "error_received":
+                raise exc(42)
 
     class ClientRaiseException(AsyncClient):
         def get_buffer(self, hint):
