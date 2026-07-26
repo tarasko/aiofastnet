@@ -36,7 +36,7 @@ async def test_echo_socketpair(conn_type_plus_udp):
                           server_protocol_factory=EchoServerProtocol,
                           client_server_hostname="127.0.0.1") as (_server, client):
         client.write(payload)
-        if conn_type_plus_udp.name == "udp"
+        if conn_type_plus_udp.name == "udp":
             echoed = await client.readn(None)
         else:
             echoed = await client.readn(msg_size)
