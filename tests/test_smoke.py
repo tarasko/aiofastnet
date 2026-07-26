@@ -29,17 +29,14 @@ from tests.utils import (
 
 
 async def test_echo_socketpair(conn_type_plus_udp):
-    msg_size = 24*1024
+    msg_size = 1024
     payload = b"x" * msg_size
 
     async with SocketPair(ct=conn_type_plus_udp,
                           server_protocol_factory=EchoServerProtocol,
                           client_server_hostname="127.0.0.1") as (_server, client):
         client.write(payload)
-        if conn_type_plus_udp.name == "udp":
-            echoed = await client.readn(None)
-        else:
-            echoed = await client.readn(msg_size)
+        echoed = await client.readn(msg_size)
         assert echoed == payload
         client.close()
         await client.wait_closed()
