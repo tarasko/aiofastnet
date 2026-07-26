@@ -771,7 +771,7 @@ async def TestClient(server_or_host=None, port=None,
                         ssl_shutdown_timeout=ssl_shutdown_timeout,
                     )
                 if ct.use_start_tls:
-                    await client.start_tls(ct.client_ssl_context,
+                    await client.start_tls(ct.server_ssl_context,
                                            ssl_handshake_timeout=ssl_handshake_timeout,
                                            ssl_shutdown_timeout=ssl_shutdown_timeout                                           )
         yield client
