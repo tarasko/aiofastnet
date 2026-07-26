@@ -32,7 +32,9 @@ async def test_echo_socketpair(conn_type_plus_udp):
     msg_size = int(24*1024)
     payload = b"x" * msg_size
 
-    async with SocketPair(ct=conn_type_plus_udp, server_protocol_factory=EchoServerProtocol, client_server_hostname="") as (server, client):
+    async with SocketPair(ct=conn_type_plus_udp,
+                          server_protocol_factory=EchoServerProtocol,
+                          client_server_hostname="127.0.0.1") as (server, client):
         client.write(payload)
         echoed = await client.readn(msg_size)
         assert echoed == payload

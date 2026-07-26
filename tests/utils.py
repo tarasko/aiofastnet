@@ -96,6 +96,7 @@ class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
     _is_buffered: bool
     _clients: set | None
     _client_waiters: list[asyncio.Future] | None
+    _ssl_layer_num: int
     _read_buffer: bytearray
 
     def __init__(self,
@@ -110,6 +111,7 @@ class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
             assert self._client_waiters is not None
         else:
             assert self._client_waiters is None
+        self._ssl_layer_num = 0
         self._read_buffer = bytearray(b"X") * (128*1024)
 
     def is_buffered_protocol(self):
@@ -159,6 +161,20 @@ class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
 
     def eof_received(self):
         _logger.debug("EchoServer.eof_received")
+
+    async def start_tls(self, ssl_context,
+                        ssl_handshake_timeout=None, ssl_shutdown_timeout=None):
+        self.transport = await start_tls(
+            asyncio.get_running_loop(),
+            self.transport,
+            self,
+            ssl_context,
+            server_side=True,
+            ssl_handshake_timeout=ssl_handshake_timeout,
+            ssl_shutdown_timeout=ssl_shutdown_timeout,
+        )
+        _logger.debug("Server start_tls #%d completed", self._ssl_layer_num)
+        self._ssl_layer_num += 1
 
 
 class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
@@ -756,9 +772,6 @@ async def TestClient(server_or_host=None, port=None,
                     )
                 if ct.use_start_tls:
                     await client.start_tls(ct.client_ssl_context,
-                                           ssl=ct.server_ssl_context,
-                                           server_side=sock_server_side,
-                                           server_hostname=server_hostname,
                                            ssl_handshake_timeout=ssl_handshake_timeout,
                                            ssl_shutdown_timeout=ssl_shutdown_timeout                                           )
         yield client
