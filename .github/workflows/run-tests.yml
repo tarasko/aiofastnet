@@ -250,7 +250,7 @@ jobs:
         
   benchmarks:
     name: benchmarks
-    runs-on: ubuntu-latest
+    runs-on: codspeed-macro
     timeout-minutes: 20
 
     steps:
@@ -284,7 +284,7 @@ jobs:
     - name: Run benchmarks
       uses: CodSpeedHQ/action@v4
       with:
-        mode: simulation
+        mode: walltime
         run: pytest -v tests/test_benchmarks.py --codspeed
 
   resource-leaks:
