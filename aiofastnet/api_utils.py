@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import platform
+import re
 import socket
 import ssl
 import weakref
 from asyncio.trsock import TransportSocket
 from logging import getLogger
+from pathlib import Path
 from typing import Callable
 
 from . import constants, openssl_compat
@@ -59,6 +62,58 @@ def _validate_bio_size(name: str, value: int | None, ssl_or_sslcontext: bool | s
 
 def _ssl_needs_fallback_engine(sslcontext: ssl.SSLContext) -> bool:
     return openssl_compat.OPENSSL_DYN_LIBS is None or getattr(sslcontext, "_aiofastnet_force_fallback_ssl", False)
+
+
+def _linux_kernel_at_least(major: int, minor: int) -> bool:
+    if platform.system() != "Linux":
+        return False
+
+    match = re.match(r"^(\d+)\.(\d+)", platform.release())
+    if match is None:
+        return False
+
+    current = tuple(map(int, match.groups()))
+    return current >= (major, minor)
+
+
+def _ktls_prerequisites_available() -> bool:
+    if not Path("/sys/module/tls").exists():
+        _logger.warning(
+            "Kernel TLS was requested but is unavailable because kernel module "
+            "'tls' is not loaded; load it with 'sudo modprobe tls'. "
+            "Falling back to memory BIO.")
+        return False
+
+    if not _linux_kernel_at_least(5, 1):
+        _logger.warning(
+            "Kernel TLS was requested but is unavailable because the Linux "
+            "kernel version is < 5.1. Falling back to memory BIO.")
+        return False
+
+    if ssl.OPENSSL_VERSION_INFO[:3] < (3, 0, 0):
+        _logger.warning(
+            "Kernel TLS was requested but is unavailable because OpenSSL "
+            "version is too old; OpenSSL >= 3.0 is required. "
+            "Falling back to memory BIO.")
+        if openssl_compat.OPENSSL_DYN_LIBS is not None:
+            _logger.warning("Loaded libssl: %s", openssl_compat.OPENSSL_DYN_LIBS.libssl)
+            _logger.warning("Loaded libcrypto: %s", openssl_compat.OPENSSL_DYN_LIBS.libcrypto)
+        return False
+
+    return True
+
+
+def _ssl_should_use_socket_bio(sslcontext: ssl.SSLContext) -> bool:
+    if _ssl_needs_fallback_engine(sslcontext):
+        return False
+
+    force_socket_bio = getattr(sslcontext, "_aiofastnet_force_socket_bio", False)
+    ktls_requested = (sslcontext.options & getattr(ssl, "OP_ENABLE_KTLS", 0)) != 0
+
+    # force_socket_bio is only used for testing, tests should not use it together with OP_ENABLE_KTLS
+    assert not (ktls_requested and force_socket_bio)
+
+    return force_socket_bio or (ktls_requested and _ktls_prerequisites_available())
 
 
 async def _create_connection_transport(
@@ -128,20 +183,7 @@ async def _create_connection_transport(
         waiter = loop.create_future() if server is None else None
         if ssl:
             sslcontext = openssl_compat.create_transport_context(server_side, server_hostname) if isinstance(ssl, bool) else ssl
-            if _ssl_needs_fallback_engine(sslcontext):
-                transport = SSLTransport_Transport(
-                    loop, protocol, sslcontext,
-                    server_side,
-                    ssl_handshake_timeout,
-                    ssl_shutdown_timeout,
-                    ssl_incoming_bio_size,
-                    ssl_outgoing_bio_size,
-                    waiter=waiter,
-                    server_hostname=server_hostname,
-                    server=server
-                )
-                SocketTransport(loop, sock, transport.get_tls_protocol())
-            else:
+            if _ssl_should_use_socket_bio(sslcontext):
                 transport = SSLTransport_Socket(
                     loop, protocol, sslcontext,
                     server_side,
@@ -154,6 +196,20 @@ async def _create_connection_transport(
                     server_hostname=server_hostname,
                     server=server
                 )
+            else:
+                transport = SSLTransport_Transport(
+                    loop, protocol, sslcontext,
+                    server_side,
+                    ssl_handshake_timeout,
+                    ssl_shutdown_timeout,
+                    ssl_incoming_bio_size,
+                    ssl_outgoing_bio_size,
+                    waiter=waiter,
+                    server_hostname=server_hostname,
+                    server=server
+                )
+                SocketTransport(loop, sock, transport.get_tls_protocol())
+
         else:
             transport = SocketTransport(loop, sock, protocol,
                                         waiter=waiter, server=server)

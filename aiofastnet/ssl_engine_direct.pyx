@@ -100,57 +100,16 @@ from libc.limits cimport INT_MAX
 from libc.stdint cimport uint64_t
 
 import os
-import platform
-import re
 import ssl
 import sys
 import tempfile
 import logging
-from pathlib import Path
 
 cdef object _logger = logging.getLogger('aiofastnet.ssl')
 
 
 def _set_sslobject_init_test_hook():
     pass
-
-
-def _linux_kernel_at_least(major: int, minor: int) -> bool:
-    if platform.system() != "Linux":
-        return False
-
-    match = re.match(r"^(\d+)\.(\d+)", platform.release())
-    if match is None:
-        return False
-
-    current = tuple(map(int, match.groups()))
-    return current >= (major, minor)
-
-
-def _ktls_prerequisites_available() -> bool:
-    if not Path("/sys/module/tls").exists():
-        _logger.warning(
-            "Kernel TLS was requested but is unavailable because kernel module "
-            "'tls' is not loaded; load it with 'sudo modprobe tls'. "
-            "Falling back to memory BIO.")
-        return False
-
-    if not _linux_kernel_at_least(5, 1):
-        _logger.warning(
-            "Kernel TLS was requested but is unavailable because the Linux "
-            "kernel version is < 5.1. Falling back to memory BIO.")
-        return False
-
-    if ssl.OPENSSL_VERSION_INFO[:3] < (3, 0, 0):
-        _logger.warning(
-            "Kernel TLS was requested but is unavailable because OpenSSL "
-            "version is too old; OpenSSL >= 3.0 is required. "
-            "Falling back to memory BIO.")
-        _logger.warning("Loaded libssl: %s", OPENSSL_DYN_LIBS.libssl)
-        _logger.warning("Loaded libcrypto: %s", OPENSSL_DYN_LIBS.libcrypto)
-        return False
-
-    return True
 
 
 cdef _init_openssl():
@@ -244,22 +203,9 @@ cdef class SSLEngineDirect(SSLEngine):
         self.outgoing = NULL
         self.ssl = NULL
 
-        cdef bint force_socket_bio = getattr(ssl_context, "_aiofastnet_force_socket_bio", False)
-
-        # force_socket_bio is only used for testing, tests should not use it together with OP_ENABLE_KTLS
-        assert not self.ktls_requested or (self.ktls_requested and not force_socket_bio)
-
-        cdef bint ktls_prerequisites_available = (
-            _ktls_prerequisites_available() if self.ktls_requested else False
-        )
         cdef bint enable_ktls = (
-            SSL_set_options_available() and
-            self.ktls_requested and
-            ktls_prerequisites_available
-        )
-        cdef bint use_socket_bio = (
             sock is not None and
-            (force_socket_bio or enable_ktls)
+            self.ktls_requested
         )
 
         cdef BIO* incoming = NULL
@@ -276,7 +222,7 @@ cdef class SSLEngineDirect(SSLEngine):
             if sys.version_info[:2] < (3, 10):
                 SSL_clear_options(self.ssl, SSL_OP_IGNORE_UNEXPECTED_EOF)
 
-            if use_socket_bio:
+            if sock is not None:
                 if SSL_set_fd(self.ssl, sock.fileno()) != 1:
                     raise ssl.SSLError("SSL_set_fd failed")
                 if enable_ktls:
@@ -847,4 +793,3 @@ cdef class SSLEngineDirect(SSLEngine):
         finally:
             if path:
                 os.unlink(path)
-

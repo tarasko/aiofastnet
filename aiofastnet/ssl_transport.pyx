@@ -24,8 +24,6 @@ from .utils cimport (
     aiofn_validate_buffer,
     aiofn_maybe_copy_buffer,
     aiofn_maybe_copy_buffer_tail,
-    aiofn_recv,
-    aiofn_send,
     aiofn_allocate_bytes,
     aiofn_finalize_bytes,
     aiofn_set_nodelay,
@@ -1091,6 +1089,9 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                                   server,
                                   sock)
 
+        assert not self._ssl_engine.ssl_incoming_use_membio()
+        assert not self._ssl_engine.ssl_outgoing_use_membio()
+
         self._extra['socket'] = TransportSocket(sock)
         try:
             self._extra['sockname'] = sock.getsockname()
@@ -1164,10 +1165,8 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             _logger.debug("%r: reading resumed by user", self)
         self._loop.add_reader(self._sock_fd_obj, self._read_ready)
 
-        # We need to also manually schedule _read_ready event because there
-        # might be some leftover data in incoming BIO or openssl internal
-        # read buffer. We can't rely only on _loop.add_reader, because if
-        # socket has no data to read then we will get stuck.
+        # OpenSSL may have already buffered decrypted data, so socket
+        # readability alone is not sufficient to resume processing.
         if self._state in (SSLProtocolState.WRAPPED, SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN):
             self._loop.call_soon(self._read_ready)
 
@@ -1188,51 +1187,14 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         return total
 
     cdef bint _flush_outgoing_bio(self) except -1:
-        """
-        Writes raw data to socket for outgoing BIO. 
-        Returns True if write operations can continue.
-        True is also returned if memory bio is not used, is such case _flush_outgoing_bio is no-op. 
-        """
-        if not self._ssl_engine.ssl_outgoing_use_membio():
-            return True
-
-        if self._write_had_eagain:
-            return False
-
-        cdef:
-            char* ptr
-            long sz
-            Py_ssize_t bytes_sent
-
-        while True:
-            sz = self._ssl_engine.outgoing_bio_get_data(&ptr)
-            if sz == 0:
-                return True
-
-            bytes_sent = aiofn_send(self._sock_fd, ptr, sz)
-            if unlikely(self._is_debug):
-                _logger.debug("%r: aiofn_send(...,len=%d)=%d", self, sz, bytes_sent)
-
-            if bytes_sent < 0:
-                self._ensure_writer()
-                return False
-
-            self._ssl_engine.outgoing_bio_consume(bytes_sent)
-            if bytes_sent == sz:
-                return True
-
-            ptr += bytes_sent
-            sz -= bytes_sent
+        return True
 
     cdef bint _should_retry_after_want_write(self) except -1:
         """
         Return True if we should retry the last operation after we got SSL_ERROR_WANT_WRITE
         """
-        if self._ssl_engine.ssl_outgoing_use_membio():
-            return self._flush_outgoing_bio()
-        else:
-            self._ensure_writer()
-            return False
+        self._ensure_writer()
+        return False
 
     cdef bint _should_flush_outgoing_after_read(self) except -1:
         return not self._write_ready_registered
@@ -1270,8 +1232,6 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         self._write_had_eagain = False
 
         try:
-            self._flush_outgoing_bio()
-
             if self._state == SSLProtocolState.DO_HANDSHAKE:
                 self._do_handshake()
             elif self._state == SSLProtocolState.WRAPPED:
@@ -1327,31 +1287,8 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         if self._connection_lost_scheduled:
             return
 
-        cdef:
-            char* buf_ptr
-            Py_ssize_t buf_len
-            Py_ssize_t bytes_read
-
         try:
-            if self._ssl_engine.ssl_incoming_use_membio():
-                while not self._read_paused:
-                    self._ssl_engine.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
-                    bytes_read = aiofn_recv(self._sock_fd, buf_ptr, buf_len)
-
-                    if unlikely(self._is_debug):
-                        _logger.debug("%r: aiofn_recv(...,len=%d)=%d", self, buf_len, bytes_read)
-
-                    if bytes_read == -1:  # without exception this means EGAIN
-                        return
-
-                    if unlikely(bytes_read == 0):
-                        self._process_eof()
-                        return
-
-                    self._ssl_engine.incoming_bio_produce(bytes_read)
-                    self._incoming_bio_updated()
-            else:
-                self._incoming_bio_updated()
+            self._incoming_bio_updated()
         except:
             self._handle_error("Error occurred during read")
 
@@ -1477,6 +1414,9 @@ cdef class SSLTransport_Transport(SSLTransportBase):
                                   waiter,
                                   server_hostname,
                                   server)
+
+        assert self._ssl_engine.ssl_incoming_use_membio()
+        assert self._ssl_engine.ssl_outgoing_use_membio()
 
         self._transport = None
         self._is_aiofn_transport = False
