@@ -81,7 +81,7 @@ def test_ktls_openssl_too_old(monkeypatch, caplog):
     )
     monkeypatch.setattr(api_utils.ssl, "OPENSSL_VERSION_INFO", (1, 1, 1, 0, 0))
 
-    with caplog.at_level(logging.WARNING, logger="aiofastnet.ssl"):
+    with caplog.at_level(logging.WARNING, logger="aiofastnet"):
         assert not api_utils._ktls_prerequisites_available()
 
     assert "OpenSSL >= 3.0 is required" in caplog.text
