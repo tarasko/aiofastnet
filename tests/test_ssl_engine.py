@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import aiofastnet
-from aiofastnet import openssl_compat
+from aiofastnet import api_utils, openssl_compat
 from tests.utils import TestClient, TestServer
 
 
@@ -34,11 +34,6 @@ class _Path:
         return self._exists
 
 
-class _InvalidSocket:
-    def fileno(self):
-        return -1
-
-
 def test_openssl_discovery_resolves_real_libraries():
     libs = openssl_compat.OPENSSL_DYN_LIBS
     if libs is None:
@@ -52,48 +47,42 @@ def test_openssl_discovery_resolves_real_libraries():
 
 
 def test_ktls_kernel_module_not_loaded(monkeypatch, caplog):
-    ssl_engine_direct = _import_ssl_engine_direct()
-
-    monkeypatch.setattr(ssl_engine_direct, "Path", lambda path: _Path(False))
+    monkeypatch.setattr(api_utils, "Path", lambda path: _Path(False))
     monkeypatch.setattr(
-        ssl_engine_direct,
+        api_utils,
         "_linux_kernel_at_least",
         lambda major, minor: pytest.fail("kernel version should not be checked"),
     )
 
     with caplog.at_level(logging.WARNING, logger="aiofastnet.ssl"):
-        assert not ssl_engine_direct._ktls_prerequisites_available()
+        assert not api_utils._ktls_prerequisites_available()
 
     assert "kernel module 'tls' is not loaded" in caplog.text
     assert "Falling back to memory BIO" in caplog.text
 
 
 def test_ktls_kernel_too_old(monkeypatch, caplog):
-    ssl_engine_direct = _import_ssl_engine_direct()
-
-    monkeypatch.setattr(ssl_engine_direct, "Path", lambda path: _Path(True))
+    monkeypatch.setattr(api_utils, "Path", lambda path: _Path(True))
     monkeypatch.setattr(
-        ssl_engine_direct, "_linux_kernel_at_least", lambda major, minor: False
+        api_utils, "_linux_kernel_at_least", lambda major, minor: False
     )
 
     with caplog.at_level(logging.WARNING, logger="aiofastnet.ssl"):
-        assert not ssl_engine_direct._ktls_prerequisites_available()
+        assert not api_utils._ktls_prerequisites_available()
 
     assert "Linux kernel version is < 5.1" in caplog.text
     assert "Falling back to memory BIO" in caplog.text
 
 
 def test_ktls_openssl_too_old(monkeypatch, caplog):
-    ssl_engine_direct = _import_ssl_engine_direct()
-
-    monkeypatch.setattr(ssl_engine_direct, "Path", lambda path: _Path(True))
+    monkeypatch.setattr(api_utils, "Path", lambda path: _Path(True))
     monkeypatch.setattr(
-        ssl_engine_direct, "_linux_kernel_at_least", lambda major, minor: True
+        api_utils, "_linux_kernel_at_least", lambda major, minor: True
     )
-    monkeypatch.setattr(ssl_engine_direct.ssl, "OPENSSL_VERSION_INFO", (1, 1, 1, 0, 0))
+    monkeypatch.setattr(api_utils.ssl, "OPENSSL_VERSION_INFO", (1, 1, 1, 0, 0))
 
     with caplog.at_level(logging.WARNING, logger="aiofastnet.ssl"):
-        assert not ssl_engine_direct._ktls_prerequisites_available()
+        assert not api_utils._ktls_prerequisites_available()
 
     assert "OpenSSL >= 3.0 is required" in caplog.text
     assert "Falling back to memory BIO" in caplog.text
@@ -105,24 +94,15 @@ def test_ktls_openssl_too_old(monkeypatch, caplog):
     not hasattr(ssl, "OP_ENABLE_KTLS"),
     reason="ssl.OP_ENABLE_KTLS is unavailable",
 )
-def test_ssl_engine_direct_uses_memory_bio_when_ktls_kernel_unavailable(monkeypatch):
-    ssl_engine_direct = _import_ssl_engine_direct()
-
+def test_ssl_context_does_not_use_socket_bio_when_ktls_kernel_unavailable(monkeypatch):
     monkeypatch.setattr(
-        ssl_engine_direct, "_ktls_prerequisites_available", lambda: False
+        api_utils, "_ktls_prerequisites_available", lambda: False
     )
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
     context.options |= ssl.OP_ENABLE_KTLS
 
-    ssl_engine_direct.SSLEngineDirect(
-        context,
-        False,
-        None,
-        1024,
-        1024,
-        sock=_InvalidSocket(),
-    )
+    assert not api_utils._ssl_should_use_socket_bio(context)
 
 
 def test_ssl_engine_direct_get_channel_binding_before_handshake():
