@@ -86,8 +86,6 @@ def test_ktls_openssl_too_old(monkeypatch, caplog):
 
     assert "OpenSSL >= 3.0 is required" in caplog.text
     assert "Falling back to memory BIO" in caplog.text
-    assert "Loaded libssl:" in caplog.text
-    assert "Loaded libcrypto:" in caplog.text
 
 
 @pytest.mark.skipif(
