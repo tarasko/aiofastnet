@@ -5,7 +5,7 @@ aiofastnet Release History
    :depth: 1
    :local:
 
-0.22.0
+0.23.0
 ------------------
 
 * Simplify SSL transport layer, always use SSLTransport_Transport when KTLS is not requested
