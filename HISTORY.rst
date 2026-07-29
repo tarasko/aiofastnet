@@ -8,6 +8,11 @@ aiofastnet Release History
 0.22.0
 ------------------
 
+* Simplify SSL transport layer, always use SSLTransport_Transport when KTLS is not requested
+
+0.22.0
+------------------
+
 * Harden logic against exceptions in SSLTransport constructor
 * Added create_datagram_endpoint
 * Added connect_accepted_socket
