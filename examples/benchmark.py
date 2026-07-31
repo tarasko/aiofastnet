@@ -19,9 +19,15 @@ except ImportError:
     uvloop = None
 
 
+try:
+    import blazio
+except ImportError:
+    blazio = None
+
+
 UDP_MAX_PAYLOAD_SIZE = 65507
 SUPPORTED_TRANSPORTS = ["tcp", "ssl", "udp"]
-SUPPORTED_LOOPS = ["asyncio", "uvloop"]
+SUPPORTED_LOOPS = ["asyncio", "uvloop", "blazio"]
 
 
 async def run_benchmark(args, loop_kind: str, variant: str, transport_kind: str, msg_size: int):
@@ -331,7 +337,12 @@ def main():
                 continue
             for loop_kind in args.loops:
                 for variant in args.variants:
-                    loop_factory = uvloop.Loop if loop_kind == "uvloop" else asyncio.SelectorEventLoop
+                    if loop_kind == "uvloop":
+                        loop_factory = uvloop.Loop
+                    elif loop_kind == "blazio":
+                        loop_factory = blazio.new_event_loop
+                    else:
+                        loop_factory = asyncio.SelectorEventLoop
                     rps = asyncio.run(
                         run_benchmark(args, loop_kind, variant, transport_kind, msg_size),
                         loop_factory=loop_factory,
