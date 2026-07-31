@@ -198,7 +198,7 @@ cdef class WriteWatermarks:
         self._low_water = low
 
 
-cdef class SocketTransportBase(Transport):
+cdef class SelectorFileTransportBase(Transport):
     cdef:
         object __weakref__
         unsigned long _thread_id
@@ -208,85 +208,49 @@ cdef class SocketTransportBase(Transport):
         bint _protocol_aiofn
         bint _protocol_connected
         dict _extra
-        WriteWatermarks _write_watermarks
 
-        object _server
         object _file
         object _fileno_obj
         int _fileno
 
-        object _write_backlog
-        Py_ssize_t _write_backlog_size
-        bint _write_ready_registered
         bint _connection_lost_scheduled
-        size_t _closed_write_count
         bint _closing
         bint _read_paused
-
-        public bint _sendfile_compatible
-
-        bint _eof
         bint _is_debug
 
-    def __init__(self, loop, sock, protocol, waiter=None, extra=None, server=None):
+    def __init__(self, loop, file, protocol, extra=None):
         self._thread_id = PyThread_get_thread_ident()
         assert loop is not None
         self._loop = loop
         self._extra = {} if extra is None else extra
-        self._server = server
-        self._file = sock
-        self._fileno_obj = sock.fileno()
+        self._file = file
+        self._fileno_obj = file.fileno()
         self._fileno = self._fileno_obj
-        self._write_backlog = collections.deque()
-        self._write_backlog_size = 0
-        self._write_ready_registered = False
+        if isinstance(file, socket.socket):
+            file.setblocking(False)
+        else:
+            os.set_blocking(self._fileno_obj, False)
         self._connection_lost_scheduled = False
-        self._closed_write_count = 0
-        self._closing = False  # Set when close() called.
-        self._read_paused = False  # Set when pause_reading() called
-
-        self._write_watermarks = WriteWatermarks(loop)
-        self._extra['socket'] = TransportSocket(sock)
-        try:
-            self._extra['sockname'] = sock.getsockname()
-        except OSError:
-            self._extra['sockname'] = None
-        if 'peername' not in self._extra:
-            try:
-                self._extra['peername'] = sock.getpeername()
-            except socket.error:
-                self._extra['peername'] = None
-
+        self._closing = False
+        self._read_paused = False
+        self._is_debug = loop.get_debug()
         self.set_protocol(protocol)
 
-        self._sendfile_compatible = os.name != 'nt'
-
-        self._eof = False
-        self._is_debug = loop.get_debug()
-
-        self._loop.call_soon(self._protocol.connection_made, self)
-        # only start reading when connection_made() has been called
-        self._loop.call_soon(self._loop.add_reader,
-                             self._fileno_obj, self._read_ready)
-        if waiter is not None:
-            # only wake up the waiter when connection_made() has been called
-            self._loop.call_soon(aiofn_set_result_unless_cancelled, waiter, None)
-
-    def __repr__(self):
+    cdef inline list _get_repr_info(self):
         info = [f'fd={self._fileno_obj}', self.__class__.__name__]
         if self._file is None:
             info.append('closed')
         elif self._closing:
             info.append('closing')
-        info.append(f'wbuf_size={self._write_backlog_size}')
-        return '[{}]'.format(' '.join(info))
+        return info
+
+    def __repr__(self):
+        return '[{}]'.format(' '.join(self._get_repr_info()))
 
     def __del__(self):
         if self._file is not None:
             warnings.warn(f"unclosed {self.__class__.__name__} for {self._file}", ResourceWarning, source=self)
             self._file.close()
-            if self._server is not None:
-                self._server._detach(self)
 
     cdef inline _check_thread(self, meth):
         cdef unsigned long curr_thread_id = PyThread_get_thread_ident()
@@ -311,19 +275,6 @@ cdef class SocketTransportBase(Transport):
     cpdef get_extra_info(self, name, default=None):
         self._check_thread("get_extra_info")
         return self._extra.get(name, default)
-
-    cpdef tuple get_write_buffer_limits(self):
-        self._check_thread("get_write_buffer_limits")
-        return self._write_watermarks.get_write_buffer_limits()
-
-    cpdef set_write_buffer_limits(self, high=None, low=None):
-        self._check_thread("set_write_buffer_limits")
-        self._write_watermarks.set_write_buffer_limits(
-            self, self._protocol, self.get_write_buffer_size(), high, low)
-
-    cpdef abort(self):
-        self._check_thread("abort")
-        self._force_close(None)
 
     cpdef is_closing(self):
         self._check_thread("is_closing")
@@ -354,6 +305,102 @@ cdef class SocketTransportBase(Transport):
 
         if unlikely(self._is_debug):
             _logger.debug("%r resumes reading", self)
+
+    cpdef close(self):
+        self._check_thread("close")
+        if self._connection_lost_scheduled:
+            return
+        self._close(None)
+
+    cdef inline _close(self, exc):
+        if self._connection_lost_scheduled:
+            return
+        if not self._closing:
+            self._closing = True
+            self._loop.remove_reader(self._fileno_obj)
+        self._connection_lost_scheduled = True
+        self._loop.call_soon(self._call_connection_lost, exc)
+
+    cpdef _call_connection_lost(self, exc):
+        try:
+            if self._protocol_connected:
+                self._protocol.connection_lost(exc)
+        finally:
+            self._file.close()
+            self._file = None
+            self._protocol = None
+
+
+cdef class SocketTransportBase(SelectorFileTransportBase):
+    cdef:
+        WriteWatermarks _write_watermarks
+
+        object _server
+
+        object _write_backlog
+        Py_ssize_t _write_backlog_size
+        bint _write_ready_registered
+        size_t _closed_write_count
+
+        public bint _sendfile_compatible
+
+        bint _eof
+
+    def __init__(self, loop, sock, protocol, waiter=None, extra=None, server=None):
+        SelectorFileTransportBase.__init__(self, loop, sock, protocol, extra)
+        self._server = server
+        self._write_backlog = collections.deque()
+        self._write_backlog_size = 0
+        self._write_ready_registered = False
+        self._closed_write_count = 0
+
+        self._write_watermarks = WriteWatermarks(loop)
+        self._extra['socket'] = TransportSocket(sock)
+        try:
+            self._extra['sockname'] = sock.getsockname()
+        except OSError:
+            self._extra['sockname'] = None
+        if 'peername' not in self._extra:
+            try:
+                self._extra['peername'] = sock.getpeername()
+            except socket.error:
+                self._extra['peername'] = None
+
+        self._sendfile_compatible = os.name != 'nt'
+        self._eof = False
+
+        self._loop.call_soon(self._protocol.connection_made, self)
+        # only start reading when connection_made() has been called
+        self._loop.call_soon(self._loop.add_reader,
+                             self._fileno_obj, self._read_ready)
+        if waiter is not None:
+            # only wake up the waiter when connection_made() has been called
+            self._loop.call_soon(aiofn_set_result_unless_cancelled, waiter, None)
+
+    def __repr__(self):
+        info = self._get_repr_info()
+        info.append(f'wbuf_size={self._write_backlog_size}')
+        return '[{}]'.format(' '.join(info))
+
+    def __del__(self):
+        if self._file is not None:
+            warnings.warn(f"unclosed {self.__class__.__name__} for {self._file}", ResourceWarning, source=self)
+            self._file.close()
+            if self._server is not None:
+                self._server._detach(self)
+
+    cpdef tuple get_write_buffer_limits(self):
+        self._check_thread("get_write_buffer_limits")
+        return self._write_watermarks.get_write_buffer_limits()
+
+    cpdef set_write_buffer_limits(self, high=None, low=None):
+        self._check_thread("set_write_buffer_limits")
+        self._write_watermarks.set_write_buffer_limits(
+            self, self._protocol, self.get_write_buffer_size(), high, low)
+
+    cpdef abort(self):
+        self._check_thread("abort")
+        self._force_close(None)
 
     cpdef close(self):
         self._check_thread("close")
