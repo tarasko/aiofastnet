@@ -140,7 +140,7 @@ async def create_datagram_endpoint(
 
     protocol = protocol_factory()
     waiter = loop.create_future()
-    transport = _make_datagram_transport(loop, sock, protocol, r_addr, waiter)
+    transport = SelectorDatagramTransport(loop, sock, protocol, r_addr, waiter)
     if loop.get_debug():
         if local_addr:
             _logger.info("Datagram endpoint local_addr=%r remote_addr=%r created: (%r, %r)", local_addr, remote_addr, transport, protocol)
@@ -154,7 +154,3 @@ async def create_datagram_endpoint(
         raise
 
     return transport, protocol
-
-
-def _make_datagram_transport(loop, sock, protocol, address, waiter):
-    return SelectorDatagramTransport(loop, sock, protocol, address, waiter)
