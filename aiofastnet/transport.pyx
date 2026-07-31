@@ -276,21 +276,6 @@ cdef class SelectorFileTransportBase(Transport):
         self._check_thread("get_extra_info")
         return self._extra.get(name, default)
 
-    cdef inline _call_protocol_data_received(self, data):
-        try:
-            if self._protocol_aiofn:
-                (<Protocol> self._protocol).data_received(data)
-            else:
-                self._protocol.data_received(data)
-        except:
-            aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.')
-
-    def _call_protocol_eof_received(self):
-        try:
-            return self._protocol.eof_received()
-        except:
-            aiofn_add_info_and_reraise('Fatal error: protocol.eof_received() call failed.')
-
     cpdef is_closing(self):
         self._check_thread("is_closing")
         return self._closing
@@ -323,11 +308,20 @@ cdef class SelectorFileTransportBase(Transport):
 
     cpdef close(self):
         self._check_thread("close")
-        if self._connection_lost_scheduled:
-            return
-        self._close(None)
+        self._force_close(None)
 
-    cdef inline _close(self, exc):
+    cdef _fatal_error(self, exc, message='Fatal error on transport'):
+        self._loop.call_exception_handler({
+            'message': message,
+            'exception': exc,
+            'transport': self,
+            'protocol': self._protocol,
+        })
+        self._force_close(exc)
+
+    # May be used by create_connection/create_server
+    # Keep cpdef
+    cpdef _force_close(self, exc):
         if self._connection_lost_scheduled:
             return
         if not self._closing:
@@ -335,6 +329,21 @@ cdef class SelectorFileTransportBase(Transport):
             self._loop.remove_reader(self._fileno_obj)
         self._connection_lost_scheduled = True
         self._loop.call_soon(self._call_connection_lost, exc)
+
+    cdef inline _call_protocol_data_received(self, data):
+        try:
+            if self._protocol_aiofn:
+                (<Protocol> self._protocol).data_received(data)
+            else:
+                self._protocol.data_received(data)
+        except:
+            aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.')
+
+    cdef inline _call_protocol_eof_received(self):
+        try:
+            return self._protocol.eof_received()
+        except:
+            aiofn_add_info_and_reraise('Fatal error: protocol.eof_received() call failed.')
 
     cpdef _call_connection_lost(self, exc):
         try:
@@ -344,6 +353,18 @@ cdef class SelectorFileTransportBase(Transport):
             self._file.close()
             self._file = None
             self._protocol = None
+
+    cdef inline _handle_error(self, message):
+        _, exc, _ = sys.exc_info()
+
+        if unlikely(self._is_debug):
+            _logger.debug("%r: _handle_error(%s), exc=%s", self, message, exc)
+
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+
+        message = getattr(exc, constants.EXC_INFO_ATTR, message)
+        self._fatal_error(exc, message)
 
 
 cdef class SocketTransportBase(SelectorFileTransportBase):
@@ -442,12 +463,8 @@ cdef class SocketTransportBase(SelectorFileTransportBase):
 
     cpdef _call_connection_lost(self, exc):
         try:
-            if self._protocol_connected:
-                self._protocol.connection_lost(exc)
+            SelectorFileTransportBase._call_connection_lost(self, exc)
         finally:
-            self._file.close()
-            self._file = None
-            self._protocol = None
             server = self._server
             if server is not None:
                 server._detach(self)
@@ -478,45 +495,22 @@ cdef class SocketTransportBase(SelectorFileTransportBase):
         self._write_ready_registered = False
         self._loop.remove_writer(self._fileno_obj)
 
-    cdef inline _fatal_error(self, exc, message='Fatal error on transport'):
-        # Should be called from exception handler only.
-        if isinstance(exc, OSError):
-            if self._loop.get_debug():
-                _logger.debug("%r: %s", self, message, exc_info=True)
-        else:
-            self._loop.call_exception_handler({
-                'message': message,
-                'exception': exc,
-                'transport': self,
-                'protocol': self._protocol,
-            })
-        self._force_close(exc)
-
-    cdef inline _handle_error(self, message):
-        _, exc, _ = sys.exc_info()
+    cdef _fatal_error(self, exc, message='Fatal error on transport'):
+        if not isinstance(exc, OSError):
+            SelectorFileTransportBase._fatal_error(self, exc, message)
+            return
 
         if unlikely(self._is_debug):
-            _logger.debug("%r: _handle_error(%s), exc=%s", self, message, exc)
+            _logger.debug("%r: %s", self, message, exc_info=True)
+        self._force_close(exc)
 
-        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-            raise
-
-        message = getattr(exc, constants.EXC_INFO_ATTR, message)
-        self._fatal_error(exc, message)
-
-    # May be used by create_connection/create_server
-    # Keep cpdef
     cpdef _force_close(self, exc):
         if self._connection_lost_scheduled:
             return
         if self._write_backlog:
             self._clear_write_backlog(exc)
             self._drop_writer()
-        if not self._closing:
-            self._closing = True
-            self._loop.remove_reader(self._fileno_obj)
-        self._connection_lost_scheduled = True
-        self._loop.call_soon(self._call_connection_lost, exc)
+        SelectorFileTransportBase._force_close(self, exc)
 
     cdef inline _clear_write_backlog(self, exc):
         cdef SendFileRequest req
