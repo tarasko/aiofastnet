@@ -13,7 +13,7 @@ import ssl
 import weakref
 from asyncio.trsock import TransportSocket
 from logging import getLogger
-from typing import Callable, Any
+from typing import Any, Callable
 
 from . import constants, openssl_compat
 from .constants import SSL_BIO_SIZE_DEFAULTS, SSL_TIMEOUT_DEFAULTS
