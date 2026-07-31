@@ -5,8 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
-0.23.0
+1.0.0
 ------------------
+
+First non-beta release. Loop's transport/protocol layer API is pretty much complete.
+Only subprocess transports do not exist, but they are not performance critical.
 
 * Added connect_read_pipe, connect_write_pipe
 
