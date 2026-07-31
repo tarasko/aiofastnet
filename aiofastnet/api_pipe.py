@@ -38,7 +38,7 @@ async def connect_read_pipe(loop, protocol_factory, pipe):
         raise
 
     if loop.get_debug():
-        _logger.debug("Read pipe %r connected: (%r, %r)", pipe.fileno(), transport, protocol)
+        _logger.debug("%r: read pipe connected: %r", transport, protocol)
     return transport, protocol
 
 
@@ -57,5 +57,5 @@ async def connect_write_pipe(loop, protocol_factory, pipe):
         raise
 
     if loop.get_debug():
-        _logger.debug("Write pipe %r connected: (%r, %r)", pipe.fileno(), transport, protocol)
+        _logger.debug("%r: write pipe connected: %r", transport, protocol)
     return transport, protocol

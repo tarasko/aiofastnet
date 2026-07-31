@@ -15,7 +15,8 @@ def native_pipe_loop(selector_loop):
         pytest.skip("the Windows selector loop does not support pipes")
 
 
-async def test_pipe(all_loops, conn_type_pipe):
+@pytest.mark.parametrize("msg_size", [1, 1024 * 1024])
+async def test_pipe(all_loops, conn_type_pipe, msg_size):
     async with SocketPair(conn_type_pipe) as (reader, writer):
         assert reader.transport.get_extra_info("pipe") is not None
         assert writer.transport.get_extra_info("pipe") is not None
@@ -25,6 +26,11 @@ async def test_pipe(all_loops, conn_type_pipe):
         if os.name == "nt" and not NO_AIOFN:
             assert isinstance(reader.transport, _WrappedTransport)
             assert isinstance(writer.transport, _WrappedTransport)
+
+        payload = b"p" * msg_size
+        writer.write(payload)
+        result = await reader.readn(len(payload))
+        assert payload == result
 
         reader.transport.pause_reading()
         read_task = asyncio.create_task(reader.readn(5))
