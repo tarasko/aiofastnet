@@ -7,6 +7,7 @@ from .api_create_server import create_server
 from .api_create_unix_connection import create_unix_connection
 from .api_create_unix_server import create_unix_server
 from .api_patch import install_policy, loop_factory, patch_loop
+from .api_pipe import connect_read_pipe, connect_write_pipe
 from .api_sendfile import sendfile
 from .api_start_tls import start_tls
 from .api_streams import (
@@ -22,6 +23,8 @@ __all__ = [
     'Transport',
     'aiofn_is_buffered_protocol',
     'connect_accepted_socket',
+    'connect_read_pipe',
+    'connect_write_pipe',
     'create_connection',
     'create_datagram_endpoint',
     'create_server',
@@ -50,5 +53,5 @@ if hasattr(socket, 'AF_UNIX'):
     ))
 
 
-__version__ = "0.22.0"
+__version__ = "0.23.0"
 __author__ = "Taras Kozlov"

@@ -85,13 +85,23 @@ class _WrappedTransport(Transport):
             aiofn_validate_and_maybe_copy_buffer(data), addr)
 
     def write_eof(self):
-        return self._transport.write_eof()
+        result = self._transport.write_eof()
+        # Winloop uses generic stream semantics for write pipes: write_eof()
+        # shuts down writing but does not close the transport. asyncio write
+        # pipes treat write_eof() as close().
+        if self._transport.get_extra_info("pipe") is not None:
+            self._transport.close()
+        return result
 
     def can_write_eof(self):
         return self._transport.can_write_eof()
 
     def abort(self):
-        return self._transport.abort()
+        # asyncio read-pipe transports do not provide abort().
+        abort = getattr(self._transport, "abort", None)
+        if abort is None:
+            return self._transport.close()
+        return abort()
 
     def sendfile(self, file, offset, count, *, fallback=True):
         if not getattr(self, "_sendfile_compatible", True):

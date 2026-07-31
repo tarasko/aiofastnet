@@ -26,6 +26,7 @@ cdef enum AppProtocolState:
 
 cdef aiofn_set_result_unless_cancelled(fut, result)
 cdef aiofn_set_nodelay(sock)
+cpdef aiofn_set_socket_extra_info(object extra, object sock)
 
 cpdef aiofn_validate_buffer(object buffer)
 cdef aiofn_unpack_simple_buffer(object buffer, char** ptr_out, Py_ssize_t* size_out, int flags)
@@ -37,6 +38,7 @@ cdef object aiofn_sockaddr_to_pyaddr(void* addr, unsigned int addr_len)
 cdef bint aiofn_pyaddr_to_sockaddr(object addr, void* raw_addr, unsigned int* raw_addr_len) except -1
 
 cdef Py_ssize_t aiofn_read(int fd, void* buf, Py_ssize_t len) except -2
+cdef bytes aiofn_simple_read(int fd, Py_ssize_t max_size, Py_ssize_t* bytes_read)
 cdef Py_ssize_t aiofn_recvfrom(int sockfd, void* buf, Py_ssize_t len, void* addr, unsigned int* addr_len) except -2
 cdef Py_ssize_t aiofn_write(int fd, void* buf, Py_ssize_t len) except -2
 cdef Py_ssize_t aiofn_sendto(int sockfd, void* buf, Py_ssize_t len, void* raw_addr, unsigned int raw_addr_len) except -2

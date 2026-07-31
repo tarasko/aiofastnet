@@ -91,6 +91,20 @@ async def connect_accepted_socket(loop, *args, **kwargs):
         return await aiofastnet.connect_accepted_socket(loop, *args, **kwargs)
 
 
+async def connect_read_pipe(loop, *args, **kwargs):
+    if NO_AIOFN:
+        return await loop.connect_read_pipe(*args, **kwargs)
+    else:
+        return await aiofastnet.connect_read_pipe(loop, *args, **kwargs)
+
+
+async def connect_write_pipe(loop, *args, **kwargs):
+    if NO_AIOFN:
+        return await loop.connect_write_pipe(*args, **kwargs)
+    else:
+        return await aiofastnet.connect_write_pipe(loop, *args, **kwargs)
+
+
 class EchoServerProtocol(asyncio.Protocol, asyncio.BufferedProtocol):
     transport: asyncio.Transport | None
     _is_buffered: bool
@@ -227,8 +241,12 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         _logger.debug("AsyncClient.connection_made")
         self.transport = transport
         self._closed_fut = asyncio.get_running_loop().create_future()
-        effective_sndbuf = _set_socket_sndbuf(transport, 128*1024)
-        _logger.debug("AsyncClient SNDBUF set: %s", effective_sndbuf)
+        # uvloop pipe transports expose a socket-like pseudo-object, but it
+        # does not support setting SO_SNDBUF.
+        if (transport.get_extra_info('socket') is not None
+                and transport.get_extra_info('pipe') is None):
+            effective_sndbuf = _set_socket_sndbuf(transport, 128*1024)
+            _logger.debug("AsyncClient SNDBUF set: %s", effective_sndbuf)
         ssl_protocol = self.transport.get_extra_info('ssl_protocol')
         if ssl_protocol is not None and hasattr(ssl_protocol, '_allow_renegotiation'):
             ssl_protocol._allow_renegotiation()
@@ -498,6 +516,10 @@ def _make_udp_conn_type():
     return ConnectionType("udp", None, None)
 
 
+def _make_pipe_conn_type():
+    return ConnectionType("pipe", None, None)
+
+
 @pytest.fixture
 def ktls_conn_type():
     return _make_ktls_conn_type()
@@ -511,6 +533,11 @@ def ssl_sbio_conn_type():
 @pytest.fixture
 def conn_type_udp():
     return _make_udp_conn_type()
+
+
+@pytest.fixture
+def conn_type_pipe():
+    return _make_pipe_conn_type()
 
 
 @pytest.fixture(params=["tcp", "ktls"])
@@ -562,6 +589,8 @@ def _make_conn_type_from_param(request):
         return ConnectionType(name=request.param)
     elif request.param == "udp":
         return _make_udp_conn_type()
+    elif request.param == "pipe":
+        return _make_pipe_conn_type()
     elif request.param == "unix":
         return _make_unix_conn_type()
     elif request.param in ("ssl_mbio", "ssl_mbio_fall", "stls"):
@@ -682,10 +711,12 @@ async def TestClient(server_or_host=None, port=None,
                      ssl_handshake_timeout=None,
                      ssl_shutdown_timeout=None,
                      sock=None,
-                     sock_server_side=False):
+                     sock_server_side=False,
+                     pipe=None,
+                     pipe_write=False):
     if ct is None:
         ct = ConnectionType("tcp")
-    if sock is not None:
+    if sock is not None or pipe is not None:
         host = None
         path = None
     elif isinstance(server_or_host, EchoServerHandle):
@@ -708,7 +739,19 @@ async def TestClient(server_or_host=None, port=None,
         return protocol
 
     try:
-        if ct.name == "udp":
+        if ct.name == "pipe":
+            if is_buffered:
+                pytest.skip("Pipe protocol is always simple")
+            if pipe is None:
+                raise ValueError("pipe must be provided for pipe connection type")
+
+            if pipe_write:
+                transport, client = await connect_write_pipe(
+                    loop, client_protocol_factory, pipe)
+            else:
+                transport, client = await connect_read_pipe(
+                    loop, client_protocol_factory, pipe)
+        elif ct.name == "udp":
             if is_buffered:
                 pytest.skip("UDP protocol is always simple")
 
@@ -778,7 +821,14 @@ async def TestClient(server_or_host=None, port=None,
         yield client
     finally:
         if transport is not None:
-            transport.abort()
+            if not transport.is_closing():
+                # Raw asyncio read-pipe transports used with NO_AIOFN do not
+                # provide abort().
+                abort = getattr(transport, "abort", None)
+                if abort is None:
+                    transport.close()
+                else:
+                    abort()
             try:
                 await client.wait_closed(1.0)
             except Exception:
@@ -796,6 +846,55 @@ async def SocketPair(
     client_is_buffered=False,
     client_server_hostname=None,
 ):
+    if ct.name == "pipe":
+        loop = asyncio.get_running_loop()
+        if os.name == "nt":
+            if isinstance(loop, asyncio.SelectorEventLoop):
+                pytest.skip("the Windows selector loop does not support pipes")
+
+            if isinstance(loop, asyncio.ProactorEventLoop):
+                from asyncio import windows_utils
+
+                read_handle, write_handle = windows_utils.pipe(
+                    duplex=True, overlapped=(True, True))
+                read_pipe = windows_utils.PipeHandle(read_handle)
+                write_pipe = windows_utils.PipeHandle(write_handle)
+            else:
+                if sys.version_info < (3, 12):
+                    pytest.skip("winloop write pipes require os.set_blocking() support")
+                read_fd, write_fd = os.pipe()
+                read_pipe = os.fdopen(read_fd, "rb", buffering=0)
+                write_pipe = os.fdopen(write_fd, "wb", buffering=0)
+        else:
+            read_fd, write_fd = os.pipe()
+            read_pipe = os.fdopen(read_fd, "rb", buffering=0)
+            write_pipe = os.fdopen(write_fd, "wb", buffering=0)
+
+        try:
+            async with AsyncExitStack() as stack:
+                read_context = TestClient(
+                    ct=ct,
+                    is_buffered=server_is_buffered,
+                    protocol_factory=server_protocol_factory,
+                    pipe=read_pipe,
+                )
+                write_context = TestClient(
+                    ct=ct,
+                    is_buffered=client_is_buffered,
+                    protocol_factory=client_protocol_factory,
+                    pipe=write_pipe,
+                    pipe_write=True,
+                )
+                reader, writer = await asyncio.gather(
+                    stack.enter_async_context(read_context),
+                    stack.enter_async_context(write_context),
+                )
+                yield reader, writer
+        finally:
+            read_pipe.close()
+            write_pipe.close()
+        return
+
     if getattr(socket, "AF_UNIX", None) is None:
         pytest.skip("SocketPair requires socket.AF_UNIX and is not supported on current platform")
 

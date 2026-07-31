@@ -29,6 +29,7 @@ from .utils cimport (
     aiofn_allocate_bytes,
     aiofn_finalize_bytes,
     aiofn_set_nodelay,
+    aiofn_set_socket_extra_info,
     aiofn_add_info_and_reraise,
     unlikely
 )
@@ -1092,14 +1093,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                                   sock)
 
         self._extra['socket'] = TransportSocket(sock)
-        try:
-            self._extra['sockname'] = sock.getsockname()
-        except OSError:
-            self._extra['sockname'] = None
-        try:
-            self._extra['peername'] = sock.getpeername()
-        except OSError:
-            self._extra['peername'] = None
+        aiofn_set_socket_extra_info(self._extra, sock)
 
         self._write_watermarks = WriteWatermarks(loop)
 

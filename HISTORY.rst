@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+0.23.0
+------------------
+
+* Added connect_read_pipe, connect_write_pipe
+
 0.22.0
 ------------------
 

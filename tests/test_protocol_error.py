@@ -2,10 +2,46 @@ import asyncio
 import gc
 import os
 import warnings
+from unittest.mock import Mock
 
 import pytest
+from aiofastnet.utils import aiofn_set_socket_extra_info
 
+from aiofastnet.api_utils import _wait_and_close_transport_on_exc
 from tests.utils import AsyncClient, SocketPair, SomeException, TestClient, TestServer, _set_socket_sndbuf, exc_queue
+
+
+def test_set_socket_extra_info():
+    sock = Mock()
+    sock.getsockname.return_value = ("127.0.0.1", 1234)
+    sock.getpeername.return_value = ("127.0.0.1", 5678)
+    extra = {}
+
+    aiofn_set_socket_extra_info(extra, sock)
+
+    assert extra == {
+        "sockname": ("127.0.0.1", 1234),
+        "peername": ("127.0.0.1", 5678),
+    }
+
+    sock.getsockname.side_effect = OSError
+    sock.getpeername.side_effect = OSError
+    extra = {}
+
+    aiofn_set_socket_extra_info(extra, sock)
+
+    assert extra == {"sockname": None, "peername": None}
+
+
+async def test_wait_and_close_transport_on_exc_closes_transport():
+    waiter = asyncio.get_running_loop().create_future()
+    waiter.set_exception(SomeException())
+    transport = Mock()
+
+    with pytest.raises(SomeException):
+        await _wait_and_close_transport_on_exc(waiter, transport)
+
+    transport.close.assert_called_once_with()
 
 
 async def test_exc_eof_received(all_loops, conn_type):
