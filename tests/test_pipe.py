@@ -55,7 +55,10 @@ def _windows_pipe_pair(loop, transport_end):
         write_fd = msvcrt.open_osfhandle(write_handle, os.O_WRONLY | os.O_BINARY)
         return read_pipe, os.fdopen(write_fd, "wb", buffering=0)
 
-    read_handle, write_handle = windows_utils.pipe(overlapped=(False, True))
+    # _ProactorWritePipeTransport reads from its handle to detect peer close,
+    # so its nominally write-side handle must also have read access.
+    read_handle, write_handle = windows_utils.pipe(
+        duplex=True, overlapped=(False, True))
     read_fd = msvcrt.open_osfhandle(read_handle, os.O_RDONLY | os.O_BINARY)
     write_pipe = windows_utils.PipeHandle(write_handle)
     return os.fdopen(read_fd, "rb", buffering=0), write_pipe
