@@ -349,18 +349,21 @@ cdef class SelectorTransport(Transport):
     cpdef close(self):
         self.abort()
 
-    cdef _fatal_error(self, exc, message='Fatal error on transport'):
+    cdef inline _fatal_error(self, exc, message='Fatal error on transport'):
         if self._should_report_fatal_error(exc):
-            self._loop.call_exception_handler({
-                'message': message,
-                'exception': exc,
-                'transport': self,
-                'protocol': self._protocol,
-            })
+            self._report_protocol_exception(exc, message)
         elif unlikely(self._is_debug):
             _logger.debug("%r: %s", self, message, exc_info=True)
 
         self._force_close(exc)
+
+    cdef inline _report_protocol_exception(self, exc, message):
+        self._loop.call_exception_handler({
+            'message': message,
+            'exception': exc,
+            'transport': self,
+            'protocol': self._protocol,
+        })
 
     cdef bint _should_report_fatal_error(self, exc) except -1:
         return True
@@ -1231,15 +1234,6 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
         except BaseException as exc:
             self._report_protocol_exception(
                 exc, 'Fatal error: protocol.error_received() call failed.')
-
-    cdef inline _report_protocol_exception(self, exc, message):
-        self._loop.call_exception_handler({
-            'message': message,
-            'exception': exc,
-            'transport': self,
-            'protocol': self._protocol,
-        })
-
 
 cdef class SelectorReadPipeTransport(SelectorTransport):
     """Provide the read side of a unidirectional pipe transport."""
