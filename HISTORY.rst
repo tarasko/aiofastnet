@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+1.0.1
+------------------
+
+* Small performance tweaks
+
 1.0.0
 ------------------
 
