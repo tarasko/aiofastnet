@@ -3,6 +3,7 @@ import sys
 
 from cpython.bytes cimport PyBytes_FromObject, PyBytes_FromStringAndSize, PyBytes_GET_SIZE
 from cpython.buffer cimport PyObject_GetBuffer, PyBuffer_Release, PyBUF_SIMPLE
+from cpython.ref cimport Py_XDECREF
 from cpython.unicode cimport PyUnicode_AsUTF8
 from libc cimport errno
 from .constants import EXC_INFO_ATTR
@@ -316,6 +317,21 @@ cdef Py_ssize_t aiofn_read(int fd, void* buf, Py_ssize_t len) except -2:
 
         aiofn_set_exc_from_error(last_error)
         return -2
+
+
+cdef bytes aiofn_simple_read(int fd, Py_ssize_t max_size, Py_ssize_t* bytes_read):
+    cdef:
+        PyObject* buffer
+        char* buffer_ptr
+
+    buffer = aiofn_allocate_bytes(max_size, &buffer_ptr)
+    try:
+        bytes_read[0] = aiofn_read(fd, buffer_ptr, max_size)
+    except:
+        Py_XDECREF(buffer)
+        raise
+
+    return aiofn_finalize_bytes(buffer, bytes_read[0] if bytes_read[0] > 0 else 0)
 
 
 cdef Py_ssize_t aiofn_recvfrom(int sockfd, void* buf, Py_ssize_t len, void* addr, unsigned int* addr_len) except -2:
