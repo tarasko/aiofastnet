@@ -244,6 +244,7 @@ cdef class SelectorTransport(Transport):
         object _file
         object _fileno_obj
         int _fileno
+        bint _is_socket
 
         bint _read_paused
 
@@ -259,6 +260,7 @@ cdef class SelectorTransport(Transport):
         self._file = file
         self._fileno_obj = file.fileno()
         self._fileno = self._fileno_obj
+        self._is_socket = True
         if isinstance(file, socket.socket):
             file.setblocking(False)
         else:
@@ -590,7 +592,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
             self._handle_error('Fatal write error on transport')
 
     cdef inline Py_ssize_t _flush_iovecs(self, Py_ssize_t num_iovecs, Py_ssize_t* total_bytes_sent) except -2:
-        cdef Py_ssize_t bytes_sent = aiofn_writev(self._fileno, self._iovecs, num_iovecs)
+        cdef Py_ssize_t bytes_sent = aiofn_writev(self._fileno, self._iovecs, num_iovecs, self._is_socket)
         if unlikely(self._is_debug):
             _logger.debug("%r: aiofn_writev(..., len(iovecs)=%d)=%d", self, num_iovecs, bytes_sent)
         if bytes_sent > 0:
@@ -746,7 +748,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
         cdef Py_ssize_t bytes_sent
 
         while True:
-            bytes_sent = aiofn_write(self._fileno, data_ptr, data_len)
+            bytes_sent = aiofn_write(self._fileno, data_ptr, data_len, self._is_socket)
             if unlikely(self._is_debug):
                 _logger.debug("%r aiofn_write(...,len=%d)=%d", self,
                               data_len, bytes_sent)
@@ -938,7 +940,7 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
 
             buf = self._call_protocol_get_buffer(&buf_ptr, &buf_len)
 
-            bytes_read = aiofn_read(self._fileno, buf_ptr, buf_len)
+            bytes_read = aiofn_read(self._fileno, buf_ptr, buf_len, self._is_socket)
             if unlikely(self._is_debug):
                 _logger.debug("%r: aiofn_read(,len=%d) = %d", self, buf_len, bytes_read)
 
@@ -962,7 +964,7 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
         if self._read_paused:
             return
 
-        data = aiofn_simple_read(self._fileno, DATA_RECEIVED_MAX_SIZE, &bytes_read)
+        data = aiofn_simple_read(self._fileno, DATA_RECEIVED_MAX_SIZE, &bytes_read, self._is_socket)
 
         if unlikely(self._is_debug):
             _logger.debug("%r: aiofn_read(...,len=%d)=%d", self, DATA_RECEIVED_MAX_SIZE, bytes_read)
@@ -1235,6 +1237,7 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
             self._report_protocol_exception(
                 exc, 'Fatal error: protocol.error_received() call failed.')
 
+
 cdef class SelectorReadPipeTransport(SelectorTransport):
     """Provide the read side of a unidirectional pipe transport."""
 
@@ -1247,6 +1250,7 @@ cdef class SelectorReadPipeTransport(SelectorTransport):
 
         SelectorTransport.__init__(self, loop, pipe, protocol)
         self._extra['pipe'] = pipe
+        self._is_socket = False
 
         self._loop.call_soon(self._protocol.connection_made, self)
         # only start reading when connection_made() has been called
@@ -1261,7 +1265,7 @@ cdef class SelectorReadPipeTransport(SelectorTransport):
             bytes data
 
         try:
-            data = aiofn_simple_read(self._fileno, DATA_RECEIVED_MAX_SIZE, &bytes_read)
+            data = aiofn_simple_read(self._fileno, DATA_RECEIVED_MAX_SIZE, &bytes_read, False)
 
             if bytes_read == -1:  # without exception this means EGAIN
                 return
@@ -1296,6 +1300,7 @@ cdef class SelectorWritePipeTransport(SelectorStreamTransport):
 
         SelectorStreamTransport.__init__(self, loop, pipe, protocol)
         self._extra['pipe'] = pipe
+        self._is_socket = False
 
         self._loop.call_soon(self._protocol.connection_made, self)
 

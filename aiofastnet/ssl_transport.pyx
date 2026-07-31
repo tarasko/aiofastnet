@@ -1203,7 +1203,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             if sz == 0:
                 return True
 
-            bytes_sent = aiofn_write(self._sock_fd, ptr, sz)
+            bytes_sent = aiofn_write(self._sock_fd, ptr, sz, True)
             if unlikely(self._is_debug):
                 _logger.debug("%r: aiofn_write(...,len=%d)=%d", self, sz, bytes_sent)
 
@@ -1330,7 +1330,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             if self._ssl_engine.ssl_incoming_use_membio():
                 while not self._read_paused:
                     self._ssl_engine.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
-                    bytes_read = aiofn_read(self._sock_fd, buf_ptr, buf_len)
+                    bytes_read = aiofn_read(self._sock_fd, buf_ptr, buf_len, True)
 
                     if unlikely(self._is_debug):
                         _logger.debug("%r: aiofn_read(...,len=%d)=%d", self, buf_len, bytes_read)
