@@ -91,7 +91,10 @@ class _WrappedTransport(Transport):
         return self._transport.can_write_eof()
 
     def abort(self):
-        return self._transport.abort()
+        abort = getattr(self._transport, "abort", None)
+        if abort is None:
+            return self._transport.close()
+        return abort()
 
     def sendfile(self, file, offset, count, *, fallback=True):
         if not getattr(self, "_sendfile_compatible", True):
