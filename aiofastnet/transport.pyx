@@ -7,13 +7,13 @@ The selector transport hierarchy is:
         |-- SelectorReadPipeTransport
         `-- SelectorWritableTransport
             |-- SelectorDatagramTransport
-            `-- SelectorStreamBase
+            `-- SelectorStreamTransport
                 |-- SelectorSocketTransport
                 `-- SelectorWritePipeTransport
 
 SelectorTransport owns descriptor, protocol, read-readiness, and connection
 lifecycle state. SelectorWritableTransport adds state shared by all writable
-selector transports. SelectorStreamBase implements ordered byte-stream writes.
+selector transports. SelectorStreamTransport implements ordered byte-stream writes.
 """
 
 import collections
@@ -528,7 +528,7 @@ cdef class SelectorWritableTransport(SelectorTransport):
         self._write_backlog_size = 0
 
 
-cdef class SelectorStreamBase(SelectorWritableTransport):
+cdef class SelectorStreamTransport(SelectorWritableTransport):
     """Implement ordered byte-stream writes, writev, EOF, and sendfile queues."""
 
     cdef:
@@ -875,7 +875,7 @@ cdef class SelectorStreamBase(SelectorWritableTransport):
         raise NotImplementedError()
 
 
-cdef class SelectorSocketTransport(SelectorStreamBase):
+cdef class SelectorSocketTransport(SelectorStreamTransport):
     """Provide bidirectional stream transport behavior for a socket."""
 
     cdef:
@@ -883,7 +883,7 @@ cdef class SelectorSocketTransport(SelectorStreamBase):
 
     def __init__(self, loop, sock, protocol, waiter=None, server=None):
         aiofn_set_nodelay(sock)
-        SelectorStreamBase.__init__(self, loop, sock, protocol)
+        SelectorStreamTransport.__init__(self, loop, sock, protocol)
         self._server = server
         self._extra['socket'] = TransportSocket(sock)
         aiofn_set_socket_extra_info(self._extra, sock)
@@ -1281,7 +1281,7 @@ cdef class SelectorReadPipeTransport(SelectorTransport):
         return not (isinstance(exc, OSError) and exc.errno == errno.EIO)
 
 
-cdef class SelectorWritePipeTransport(SelectorStreamBase):
+cdef class SelectorWritePipeTransport(SelectorStreamTransport):
     """Provide the write side of a pipe using stream backlog and flow control."""
 
     def __init__(self, loop, pipe, protocol, waiter):
@@ -1294,7 +1294,7 @@ cdef class SelectorWritePipeTransport(SelectorStreamBase):
             raise ValueError("Pipe transport is only for "
                              "pipes, sockets and character devices")
 
-        SelectorStreamBase.__init__(self, loop, pipe, protocol)
+        SelectorStreamTransport.__init__(self, loop, pipe, protocol)
         self._extra['pipe'] = pipe
 
         self._loop.call_soon(self._protocol.connection_made, self)

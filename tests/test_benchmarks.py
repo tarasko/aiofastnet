@@ -93,20 +93,6 @@ class ClientProtocol(asyncio.BufferedProtocol):
         _set_socket_sndbuf(self._transport, 128*1024)
         self._done = asyncio.get_running_loop().create_future()
 
-    def write(self):
-        self._remaining -= 1
-        if self._remaining <= 0:
-            self._transport.close()
-            return
-
-        self.write_impl()
-
-    def write_impl(self):
-        if isinstance(self._payload, list):
-            self._transport.writelines(self._payload)
-        else:
-            self._transport.write(self._payload)
-
     def connection_lost(self, exc):
         if self._done is not None and not self._done.done():
             if exc is None:
@@ -120,6 +106,24 @@ class ClientProtocol(asyncio.BufferedProtocol):
     def buffer_updated(self, bytes_read):
         pass
 
+    def write(self):
+        self._remaining -= 1
+        if self._remaining <= 0:
+            self._transport.close()
+            return
+
+        try:
+            self.write_impl()
+        except Exception as exc:
+            if not self._done.done():
+                self._done.set_exception(exc)
+            self._transport.abort()
+
+    def write_impl(self):
+        if isinstance(self._payload, list):
+            self._transport.writelines(self._payload)
+        else:
+            self._transport.write(self._payload)
 
     async def start_tls(self, ssl_context, server_hostname="127.0.0.1",
                         ssl_handshake_timeout=None, ssl_shutdown_timeout=None):
