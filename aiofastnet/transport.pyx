@@ -211,9 +211,9 @@ cdef class SocketTransportBase(Transport):
         WriteWatermarks _write_watermarks
 
         object _server
-        object _sock
-        object _sock_fd_obj
-        int _sock_fd
+        object _file
+        object _fileno_obj
+        int _fileno
 
         object _write_backlog
         Py_ssize_t _write_backlog_size
@@ -234,9 +234,9 @@ cdef class SocketTransportBase(Transport):
         self._loop = loop
         self._extra = {} if extra is None else extra
         self._server = server
-        self._sock = sock
-        self._sock_fd_obj = sock.fileno()
-        self._sock_fd = self._sock_fd_obj
+        self._file = sock
+        self._fileno_obj = sock.fileno()
+        self._fileno = self._fileno_obj
         self._write_backlog = collections.deque()
         self._write_backlog_size = 0
         self._write_ready_registered = False
@@ -267,14 +267,14 @@ cdef class SocketTransportBase(Transport):
         self._loop.call_soon(self._protocol.connection_made, self)
         # only start reading when connection_made() has been called
         self._loop.call_soon(self._loop.add_reader,
-                             self._sock_fd_obj, self._read_ready)
+                             self._fileno_obj, self._read_ready)
         if waiter is not None:
             # only wake up the waiter when connection_made() has been called
             self._loop.call_soon(aiofn_set_result_unless_cancelled, waiter, None)
 
     def __repr__(self):
-        info = [f'fd={self._sock_fd_obj}', self.__class__.__name__]
-        if self._sock is None:
+        info = [f'fd={self._fileno_obj}', self.__class__.__name__]
+        if self._file is None:
             info.append('closed')
         elif self._closing:
             info.append('closing')
@@ -282,9 +282,9 @@ cdef class SocketTransportBase(Transport):
         return '[{}]'.format(' '.join(info))
 
     def __del__(self):
-        if self._sock is not None:
-            warnings.warn(f"unclosed {self.__class__.__name__} for {self._sock}", ResourceWarning, source=self)
-            self._sock.close()
+        if self._file is not None:
+            warnings.warn(f"unclosed {self.__class__.__name__} for {self._file}", ResourceWarning, source=self)
+            self._file.close()
             if self._server is not None:
                 self._server._detach(self)
 
@@ -338,7 +338,7 @@ cdef class SocketTransportBase(Transport):
         if self._closing or self._read_paused:
             return
 
-        self._loop.remove_reader(self._sock_fd_obj)
+        self._loop.remove_reader(self._fileno_obj)
         self._read_paused = True
 
         if unlikely(self._is_debug):
@@ -349,7 +349,7 @@ cdef class SocketTransportBase(Transport):
         if self._closing or not self._read_paused:
             return
 
-        self._loop.add_reader(self._sock_fd_obj, self._read_ready)
+        self._loop.add_reader(self._fileno_obj, self._read_ready)
         self._read_paused = False
 
         if unlikely(self._is_debug):
@@ -360,7 +360,7 @@ cdef class SocketTransportBase(Transport):
         if self._closing:
             return
         self._closing = True
-        self._loop.remove_reader(self._sock_fd_obj)
+        self._loop.remove_reader(self._fileno_obj)
         if self._write_backlog_size == 0:
             self._connection_lost_scheduled = True
             self._drop_writer()
@@ -383,8 +383,8 @@ cdef class SocketTransportBase(Transport):
             if self._protocol_connected:
                 self._protocol.connection_lost(exc)
         finally:
-            self._sock.close()
-            self._sock = None
+            self._file.close()
+            self._file = None
             self._protocol = None
             server = self._server
             if server is not None:
@@ -405,7 +405,7 @@ cdef class SocketTransportBase(Transport):
         if self._connection_lost_scheduled or self._write_ready_registered:
             return
         self._write_ready_registered = True
-        self._loop.add_writer(self._sock_fd_obj, self._write_ready)
+        self._loop.add_writer(self._fileno_obj, self._write_ready)
 
     cdef inline _drop_writer(self):
         if unlikely(self._is_debug):
@@ -414,7 +414,7 @@ cdef class SocketTransportBase(Transport):
         if not self._write_ready_registered:
             return
         self._write_ready_registered = False
-        self._loop.remove_writer(self._sock_fd_obj)
+        self._loop.remove_writer(self._fileno_obj)
 
     cdef inline _fatal_error(self, exc, message='Fatal error on transport'):
         # Should be called from exception handler only.
@@ -452,7 +452,7 @@ cdef class SocketTransportBase(Transport):
             self._drop_writer()
         if not self._closing:
             self._closing = True
-            self._loop.remove_reader(self._sock_fd_obj)
+            self._loop.remove_reader(self._fileno_obj)
         self._connection_lost_scheduled = True
         self._loop.call_soon(self._call_connection_lost, exc)
 
@@ -500,7 +500,7 @@ cdef class SelectorSocketTransport(SocketTransportBase):
 
             buf = self._call_protocol_get_buffer(&buf_ptr, &buf_len)
 
-            bytes_read = aiofn_read(self._sock_fd, buf_ptr, buf_len)
+            bytes_read = aiofn_read(self._fileno, buf_ptr, buf_len)
             if unlikely(self._is_debug):
                 _logger.debug("%r: aiofn_read(,len=%d) = %d", self, buf_len, bytes_read)
 
@@ -529,7 +529,7 @@ cdef class SelectorSocketTransport(SocketTransportBase):
         buffer = aiofn_allocate_bytes(DATA_RECEIVED_MAX_SIZE, &buf_ptr)
 
         try:
-            bytes_read = aiofn_read(self._sock_fd, buf_ptr, DATA_RECEIVED_MAX_SIZE)
+            bytes_read = aiofn_read(self._fileno, buf_ptr, DATA_RECEIVED_MAX_SIZE)
             data = aiofn_finalize_bytes(buffer, max(bytes_read, 0))
             buffer = NULL
         except:
@@ -561,7 +561,7 @@ cdef class SelectorSocketTransport(SocketTransportBase):
             # We're keeping the connection open so the
             # protocol can write more, but we still can't
             # receive more, so remove the reader callback.
-            self._loop.remove_reader(self._sock_fd_obj)
+            self._loop.remove_reader(self._fileno_obj)
         else:
             self.close()
 
@@ -616,7 +616,7 @@ cdef class SelectorSocketTransport(SocketTransportBase):
             self._handle_error('Fatal write error on socket transport')
 
     cdef inline Py_ssize_t _flush_iovecs(self, Py_ssize_t num_iovecs, Py_ssize_t* total_bytes_sent) except -2:
-        cdef Py_ssize_t bytes_sent = aiofn_writev(self._sock_fd, self._iovecs, num_iovecs)
+        cdef Py_ssize_t bytes_sent = aiofn_writev(self._fileno, self._iovecs, num_iovecs)
         if unlikely(self._is_debug):
             _logger.debug("%r: aiofn_writev(..., len(iovecs)=%d)=%d", self, num_iovecs, bytes_sent)
         if bytes_sent > 0:
@@ -760,7 +760,7 @@ cdef class SelectorSocketTransport(SocketTransportBase):
             return
         self._eof = True
         if self._write_backlog_size == 0:
-            self._sock.shutdown(socket.SHUT_WR)
+            self._file.shutdown(socket.SHUT_WR)
             if unlikely(self._is_debug):
                 _logger.debug("%r: shutdown(SHUT_WR) done", self)
 
@@ -771,7 +771,7 @@ cdef class SelectorSocketTransport(SocketTransportBase):
         cdef Py_ssize_t bytes_sent
 
         while True:
-            bytes_sent = aiofn_write(self._sock_fd, data_ptr, data_len)
+            bytes_sent = aiofn_write(self._fileno, data_ptr, data_len)
             if unlikely(self._is_debug):
                 _logger.debug("%r aiofn_write(...,len=%d)=%d", self,
                               data_len, bytes_sent)
@@ -858,7 +858,7 @@ cdef class SelectorSocketTransport(SocketTransportBase):
                     self._connection_lost_scheduled = True
                     self._call_connection_lost(None)
                 elif self._eof:
-                    self._sock.shutdown(socket.SHUT_WR)
+                    self._file.shutdown(socket.SHUT_WR)
                     if unlikely(self._is_debug):
                         _logger.debug("%r: shutdown(SHUT_WR) done", self)
 
@@ -944,7 +944,7 @@ cdef class SelectorSocketTransport(SocketTransportBase):
 
         try:
             while req.count:
-                bytes_sent = _os_sendfile(self._sock_fd_obj, req.fileno,
+                bytes_sent = _os_sendfile(self._fileno_obj, req.fileno,
                                           req.offset, req.count)
                 if unlikely(self._is_debug):
                     _logger.debug("%r: os.sendfile(offset=%d,count=%d)=%d",
@@ -1000,7 +1000,7 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
             buffer = aiofn_allocate_bytes(DATAGRAM_RECEIVED_MAX_SIZE, &buf_ptr)
 
             try:
-                bytes_read = aiofn_recvfrom(self._sock_fd, buf_ptr, DATAGRAM_RECEIVED_MAX_SIZE,
+                bytes_read = aiofn_recvfrom(self._fileno, buf_ptr, DATAGRAM_RECEIVED_MAX_SIZE,
                                             <void*>raw_addr, &raw_addr_len)
                 data = aiofn_finalize_bytes(buffer, max(bytes_read, 0))
                 buffer = NULL
@@ -1099,13 +1099,13 @@ cdef class SelectorDatagramTransport(SocketTransportBase):
             aiofn_unpack_simple_buffer(data, &buf_ptr, &buf_len, 0)
             if not self._has_connection:
                 if not aiofn_pyaddr_to_sockaddr(addr, raw_addr, &raw_addr_len):
-                    bytes_sent = self._sock.sendto(data, addr)
+                    bytes_sent = self._file.sendto(data, addr)
                     if unlikely(self._is_debug):
                         _logger.debug("%r: socket.sendto(...,len=%d)=%d", self, buf_len, bytes_sent)
                     return True
                 raw_addr_ptr = raw_addr
 
-            bytes_sent = aiofn_sendto(self._sock_fd, buf_ptr, buf_len, raw_addr_ptr, raw_addr_len)
+            bytes_sent = aiofn_sendto(self._fileno, buf_ptr, buf_len, raw_addr_ptr, raw_addr_len)
             if unlikely(self._is_debug):
                 _logger.debug("%r: aiofn_sendto(...,len=%d)=%d", self, buf_len, bytes_sent)
             if bytes_sent == -1:
