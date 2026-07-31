@@ -8,7 +8,7 @@ import os
 
 from .api_utils import _logger
 from .transport import SelectorReadPipeTransport, SelectorWritePipeTransport
-from .wrapped_transport import _get_original_loop_method, _should_fallback_to_asyncio, _WrappedProtocol
+from .wrapped_transport import _get_original_loop_method, _WrappedProtocol
 
 
 async def _connect_pipe_asyncio(loop, method_name, protocol_factory, pipe):
