@@ -342,9 +342,12 @@ cdef class SelectorTransport(Transport):
         if unlikely(self._is_debug):
             _logger.debug("%r resumes reading", self)
 
-    cpdef close(self):
-        self._check_thread("close")
+    cpdef abort(self):
+        self._check_thread("abort")
         self._force_close(None)
+
+    cpdef close(self):
+        self.abort()
 
     cdef _fatal_error(self, exc, message='Fatal error on transport'):
         self._loop.call_exception_handler({
@@ -441,10 +444,6 @@ cdef class SelectorWritableTransport(SelectorTransport):
         self._check_thread("set_write_buffer_limits")
         self._write_watermarks.set_write_buffer_limits(
             self, self._protocol, self.get_write_buffer_size(), high, low)
-
-    cpdef abort(self):
-        self._check_thread("abort")
-        self._force_close(None)
 
     cpdef close(self):
         self._check_thread("close")
