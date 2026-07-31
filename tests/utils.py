@@ -241,6 +241,8 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
         _logger.debug("AsyncClient.connection_made")
         self.transport = transport
         self._closed_fut = asyncio.get_running_loop().create_future()
+        # uvloop pipe transports expose a socket-like pseudo-object, but it
+        # does not support setting SO_SNDBUF.
         if (transport.get_extra_info('socket') is not None
                 and transport.get_extra_info('pipe') is None):
             effective_sndbuf = _set_socket_sndbuf(transport, 128*1024)
@@ -820,6 +822,8 @@ async def TestClient(server_or_host=None, port=None,
     finally:
         if transport is not None:
             if not transport.is_closing():
+                # Raw asyncio read-pipe transports used with NO_AIOFN do not
+                # provide abort().
                 abort = getattr(transport, "abort", None)
                 if abort is None:
                     transport.close()

@@ -22,6 +22,11 @@ Read README.md for project description.
   loops, is acceptable.
 * In Cython, do not give side-effect-only helpers fake return types such as `int except -1`.
   Use a no-result helper signature instead, unless the returned value is meaningful to callers.
+* Add a concise comment for compatibility checks or defensive-looking logic
+  whose necessity is not apparent from the code. Explain the concrete platform,
+  runtime, or implementation behavior being handled, especially when using
+  `getattr`, feature detection, or seemingly redundant conditions. Do not add
+  speculative fallbacks for unsupported or hypothetical environments.
 
 # Test style
 
@@ -75,6 +80,7 @@ Defined in `tests/utils.py`; keep this list in sync with the fixtures.
 * `tcp`: plain TCP transport.
 * `unix`: Unix-domain socket transport; skipped on Windows.
 * `udp`: UDP datagram transport.
+* `pipe`: connected read and write pipe transports; Windows selector loops are unsupported.
 * `ssl_mbio`: TLS over socket transport using memory BIO.
 * `ssl_mbio_fall`: same shape as `ssl_mbio`, but forces `SSLEngineFallback`.
 * `ssl_sbio`: TLS over socket transport using socket BIO where available.

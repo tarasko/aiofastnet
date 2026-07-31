@@ -91,6 +91,7 @@ class _WrappedTransport(Transport):
         return self._transport.can_write_eof()
 
     def abort(self):
+        # asyncio read-pipe transports do not provide abort().
         abort = getattr(self._transport, "abort", None)
         if abort is None:
             return self._transport.close()
