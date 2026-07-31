@@ -4,7 +4,6 @@
 # Licensed under the Python Software Foundation License Version 2.
 # See LICENSES/PSF-2.0.txt and THIRD_PARTY_NOTICES for details.
 
-import asyncio
 
 from .api_utils import _logger
 from .transport import SelectorReadPipeTransport, SelectorWritePipeTransport
@@ -16,7 +15,7 @@ async def _connect_pipe_asyncio(loop, method_name, protocol_factory, pipe):
         return _WrappedProtocol(protocol_factory())
 
     connect_pipe = _get_original_loop_method(loop, method_name)
-    transport, protocol = await connect_pipe(wrapped_protocol_factory, pipe)
+    _transport, protocol = await connect_pipe(wrapped_protocol_factory, pipe)
     wrapped_transport = protocol._wrapped_transport
     user_protocol = protocol._protocol
     protocol._wrapped_transport = None

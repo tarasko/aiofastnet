@@ -3,6 +3,7 @@ import os
 import tempfile
 
 import pytest
+
 from aiofastnet.api_pipe import connect_read_pipe, connect_write_pipe
 from aiofastnet.transport import SelectorReadPipeTransport, SelectorWritePipeTransport
 from tests.utils import SomeException, exc_queue
