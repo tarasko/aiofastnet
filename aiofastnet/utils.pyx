@@ -14,6 +14,17 @@ cdef extern from "Python.h":
     int PyBytes_Check(PyObject *o)
 
 
+cpdef aiofn_set_socket_extra_info(object extra, object sock):
+    try:
+        extra['sockname'] = sock.getsockname()
+    except OSError:
+        extra['sockname'] = None
+    try:
+        extra['peername'] = sock.getpeername()
+    except OSError:
+        extra['peername'] = None
+
+
 # We only use syscall for non-blocking sockets
 # By not requiring nogil we minimize damage from misuse of multithreading by user code.
 

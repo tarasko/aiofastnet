@@ -883,15 +883,7 @@ cdef class SelectorSocketTransport(SelectorStreamBase):
         SelectorStreamBase.__init__(self, loop, sock, protocol)
         self._server = server
         self._extra['socket'] = TransportSocket(sock)
-        try:
-            self._extra['sockname'] = sock.getsockname()
-        except OSError:
-            self._extra['sockname'] = None
-        if 'peername' not in self._extra:
-            try:
-                self._extra['peername'] = sock.getpeername()
-            except socket.error:
-                self._extra['peername'] = None
+        aiofn_set_socket_extra_info(self._extra, sock)
         self._sendfile_compatible = os.name != 'nt'
 
         self._loop.call_soon(self._protocol.connection_made, self)
@@ -1072,15 +1064,7 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
     def __init__(self, loop, sock, protocol, address, waiter):
         SelectorWritableTransport.__init__(self, loop, sock, protocol)
         self._extra['socket'] = TransportSocket(sock)
-        try:
-            self._extra['sockname'] = sock.getsockname()
-        except OSError:
-            self._extra['sockname'] = None
-        if 'peername' not in self._extra:
-            try:
-                self._extra['peername'] = sock.getpeername()
-            except socket.error:
-                self._extra['peername'] = None
+        aiofn_set_socket_extra_info(self._extra, sock)
 
         self._address = address or None
         self._header_size = 8
