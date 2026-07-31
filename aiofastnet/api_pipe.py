@@ -6,7 +6,7 @@
 
 import os
 
-from .api_utils import _logger
+from .api_utils import _logger, _wait_and_close_transport_on_exc
 from .transport import SelectorReadPipeTransport, SelectorWritePipeTransport
 from .wrapped_transport import _get_original_loop_method, _WrappedProtocol
 
@@ -31,11 +31,7 @@ async def connect_read_pipe(loop, protocol_factory, pipe):
     waiter = loop.create_future()
     transport = SelectorReadPipeTransport(loop, pipe, protocol, waiter)
 
-    try:
-        await waiter
-    except:
-        transport.close()
-        raise
+    await _wait_and_close_transport_on_exc(waiter, transport)
 
     if loop.get_debug():
         _logger.debug("%r: read pipe connected: %r", transport, protocol)
@@ -50,11 +46,7 @@ async def connect_write_pipe(loop, protocol_factory, pipe):
     waiter = loop.create_future()
     transport = SelectorWritePipeTransport(loop, pipe, protocol, waiter)
 
-    try:
-        await waiter
-    except:
-        transport.close()
-        raise
+    await _wait_and_close_transport_on_exc(waiter, transport)
 
     if loop.get_debug():
         _logger.debug("%r: write pipe connected: %r", transport, protocol)

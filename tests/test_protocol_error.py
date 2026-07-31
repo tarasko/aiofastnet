@@ -2,10 +2,23 @@ import asyncio
 import gc
 import os
 import warnings
+from unittest.mock import Mock
 
 import pytest
 
+from aiofastnet.api_utils import _wait_and_close_transport_on_exc
 from tests.utils import AsyncClient, SocketPair, SomeException, TestClient, TestServer, _set_socket_sndbuf, exc_queue
+
+
+async def test_wait_and_close_transport_on_exc_closes_transport():
+    waiter = asyncio.get_running_loop().create_future()
+    waiter.set_exception(SomeException())
+    transport = Mock()
+
+    with pytest.raises(SomeException):
+        await _wait_and_close_transport_on_exc(waiter, transport)
+
+    transport.close.assert_called_once_with()
 
 
 async def test_exc_eof_received(all_loops, conn_type):

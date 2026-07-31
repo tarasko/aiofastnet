@@ -8,7 +8,7 @@ import os
 import socket
 import stat
 
-from .api_utils import _ensure_resolved, _logger, _set_reuseport
+from .api_utils import _ensure_resolved, _logger, _set_reuseport, _wait_and_close_transport_on_exc
 from .transport import SelectorDatagramTransport
 from .wrapped_transport import _get_original_loop_method, _should_fallback_to_asyncio, _WrappedDatagramProtocol
 
@@ -147,10 +147,6 @@ async def create_datagram_endpoint(
         else:
             _logger.debug("Datagram endpoint remote_addr=%r created: (%r, %r)", remote_addr, transport, protocol)
 
-    try:
-        await waiter
-    except:
-        transport.close()
-        raise
+    await _wait_and_close_transport_on_exc(waiter, transport)
 
     return transport, protocol

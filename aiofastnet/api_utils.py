@@ -13,7 +13,7 @@ import ssl
 import weakref
 from asyncio.trsock import TransportSocket
 from logging import getLogger
-from typing import Callable
+from typing import Callable, Any
 
 from . import constants, openssl_compat
 from .constants import SSL_BIO_SIZE_DEFAULTS, SSL_TIMEOUT_DEFAULTS
@@ -59,6 +59,14 @@ def _validate_bio_size(name: str, value: int | None, ssl_or_sslcontext: bool | s
 
 def _ssl_needs_fallback_engine(sslcontext: ssl.SSLContext) -> bool:
     return openssl_compat.OPENSSL_DYN_LIBS is None or getattr(sslcontext, "_aiofastnet_force_fallback_ssl", False)
+
+
+async def _wait_and_close_transport_on_exc(waiter: asyncio.Future[Any], transport: Any) -> Any:
+    try:
+        return await waiter
+    except:
+        transport.close()
+        raise
 
 
 async def _create_connection_transport(
