@@ -4,6 +4,7 @@
 # Licensed under the Python Software Foundation License Version 2.
 # See LICENSES/PSF-2.0.txt and THIRD_PARTY_NOTICES for details.
 
+import os
 
 from .api_utils import _logger
 from .transport import SelectorReadPipeTransport, SelectorWritePipeTransport
@@ -25,6 +26,8 @@ async def _connect_pipe_asyncio(loop, method_name, protocol_factory, pipe):
 async def connect_read_pipe(loop, protocol_factory, pipe):
     if _should_fallback_to_asyncio(loop):
         return await _connect_pipe_asyncio(loop, "connect_read_pipe", protocol_factory, pipe)
+    if os.name == "nt":
+        raise NotImplementedError("Selector event loops do not support pipes on Windows")
 
     protocol = protocol_factory()
     waiter = loop.create_future()
@@ -44,6 +47,8 @@ async def connect_read_pipe(loop, protocol_factory, pipe):
 async def connect_write_pipe(loop, protocol_factory, pipe):
     if _should_fallback_to_asyncio(loop):
         return await _connect_pipe_asyncio(loop, "connect_write_pipe", protocol_factory, pipe)
+    if os.name == "nt":
+        raise NotImplementedError("Selector event loops do not support pipes on Windows")
 
     protocol = protocol_factory()
     waiter = loop.create_future()
