@@ -75,6 +75,18 @@ async def connect_accepted_socket(
     ssl_outgoing_bio_size: int | None = ...,
 ) -> tuple[asyncio.Transport, _ProtocolT]: ...
 
+async def connect_read_pipe(
+    loop: asyncio.AbstractEventLoop,
+    protocol_factory: Callable[[], _ProtocolT],
+    pipe: Any,
+) -> tuple[asyncio.ReadTransport, _ProtocolT]: ...
+
+async def connect_write_pipe(
+    loop: asyncio.AbstractEventLoop,
+    protocol_factory: Callable[[], _ProtocolT],
+    pipe: Any,
+) -> tuple[asyncio.WriteTransport, _ProtocolT]: ...
+
 async def create_datagram_endpoint(
     loop: asyncio.AbstractEventLoop,
     protocol_factory: Callable[[], _DatagramProtocolT],

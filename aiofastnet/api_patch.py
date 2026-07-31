@@ -10,6 +10,7 @@ from .api_create_datagram_endpoint import create_datagram_endpoint
 from .api_create_server import create_server
 from .api_create_unix_connection import create_unix_connection
 from .api_create_unix_server import create_unix_server
+from .api_pipe import connect_read_pipe, connect_write_pipe
 from .api_sendfile import sendfile
 from .api_start_tls import start_tls
 from .wrapped_transport import (
@@ -18,6 +19,8 @@ from .wrapped_transport import (
 )
 
 _PATCHABLE_METHODS = {
+    "connect_read_pipe": connect_read_pipe,
+    "connect_write_pipe": connect_write_pipe,
     "create_connection": create_connection,
     "create_datagram_endpoint": create_datagram_endpoint,
     "create_unix_connection": create_unix_connection,
@@ -39,7 +42,8 @@ def patch_loop(
 
     The loop's ``create_connection``, ``create_datagram_endpoint``,
     ``create_unix_connection``, ``create_server``, ``create_unix_server``,
-    ``start_tls``, and ``sendfile`` methods are replaced.
+    ``connect_read_pipe``, ``connect_write_pipe``, ``start_tls``, and
+    ``sendfile`` methods are replaced.
 
     The patch is idempotent. Original loop methods are retained on the loop so
     aiofastnet's compatibility fallbacks, such as Windows ProactorEventLoop

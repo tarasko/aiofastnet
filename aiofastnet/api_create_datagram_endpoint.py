@@ -156,7 +156,5 @@ async def create_datagram_endpoint(
     return transport, protocol
 
 
-def _make_datagram_transport(loop, sock, protocol,
-                             address=None, waiter=None, extra=None):
-    return SelectorDatagramTransport(loop, sock, protocol,
-                                     address, waiter, extra)
+def _make_datagram_transport(loop, sock, protocol, address, waiter):
+    return SelectorDatagramTransport(loop, sock, protocol, address, waiter)
