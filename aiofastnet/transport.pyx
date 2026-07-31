@@ -276,6 +276,21 @@ cdef class SelectorFileTransportBase(Transport):
         self._check_thread("get_extra_info")
         return self._extra.get(name, default)
 
+    cdef inline _call_protocol_data_received(self, data):
+        try:
+            if self._protocol_aiofn:
+                (<Protocol> self._protocol).data_received(data)
+            else:
+                self._protocol.data_received(data)
+        except:
+            aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.')
+
+    def _call_protocol_eof_received(self):
+        try:
+            return self._protocol.eof_received()
+        except:
+            aiofn_add_info_and_reraise('Fatal error: protocol.eof_received() call failed.')
+
     cpdef is_closing(self):
         self._check_thread("is_closing")
         return self._closing
@@ -599,10 +614,7 @@ cdef class SelectorSocketTransport(SocketTransportBase):
         if self._loop.get_debug():
             _logger.debug("%r received EOF", self)
 
-        try:
-            keep_open = self._protocol.eof_received()
-        except:
-            aiofn_add_info_and_reraise('Fatal error: protocol.eof_received() call failed.')
+        keep_open = self._call_protocol_eof_received()
 
         if keep_open:
             # We're keeping the connection open so the
@@ -932,15 +944,6 @@ cdef class SelectorSocketTransport(SocketTransportBase):
                 self._protocol.buffer_updated(bytes_read)
         except:
             aiofn_add_info_and_reraise('Fatal error: protocol.buffer_updated() call failed.')
-
-    cdef inline _call_protocol_data_received(self, data):
-        try:
-            if self._protocol_aiofn:
-                (<Protocol> self._protocol).data_received(data)
-            else:
-                self._protocol.data_received(data)
-        except:
-            aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.')
 
     def sendfile(self, file, offset, count) -> Optional[asyncio.Future[None]]:
         self._check_thread("sendfile")
