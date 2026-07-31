@@ -64,11 +64,21 @@ async def test_write_pipe_drains_before_close(native_pipe_loop, conn_type_pipe):
         assert not writer.is_writing_paused
 
 
-async def test_write_pipe_peer_closed(native_pipe_loop, conn_type_pipe):
+@pytest.mark.parametrize("with_backlog", [False, True])
+async def test_write_pipe_peer_closed(native_pipe_loop, conn_type_pipe, with_backlog):
     async with SocketPair(conn_type_pipe) as (reader, writer):
-        reader.transport.get_extra_info("pipe").close()
-        writer.write(b"hello")
-        with pytest.raises(BrokenPipeError):
+        if with_backlog:
+            reader.transport.pause_reading()
+            writer.write(b"x" * (1024 * 1024))
+            assert writer.transport.get_write_buffer_size() > 0
+
+        reader.abort()
+        await reader.wait_closed()
+
+        if with_backlog:
+            with pytest.raises(BrokenPipeError):
+                await writer.wait_closed()
+        else:
             await writer.wait_closed()
 
 
