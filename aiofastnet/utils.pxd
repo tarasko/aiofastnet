@@ -36,9 +36,9 @@ cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz
 cdef object aiofn_sockaddr_to_pyaddr(void* addr, unsigned int addr_len)
 cdef bint aiofn_pyaddr_to_sockaddr(object addr, void* raw_addr, unsigned int* raw_addr_len) except -1
 
-cdef Py_ssize_t aiofn_recv(int sockfd, void* buf, Py_ssize_t len) except -2
+cdef Py_ssize_t aiofn_read(int fd, void* buf, Py_ssize_t len) except -2
 cdef Py_ssize_t aiofn_recvfrom(int sockfd, void* buf, Py_ssize_t len, void* addr, unsigned int* addr_len) except -2
-cdef Py_ssize_t aiofn_send(int sockfd, void* buf, Py_ssize_t len) except -2
+cdef Py_ssize_t aiofn_write(int fd, void* buf, Py_ssize_t len) except -2
 cdef Py_ssize_t aiofn_sendto(int sockfd, void* buf, Py_ssize_t len, void* raw_addr, unsigned int raw_addr_len) except -2
 cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* iov, Py_ssize_t iovcnt) except -2
 

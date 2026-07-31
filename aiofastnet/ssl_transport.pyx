@@ -24,8 +24,8 @@ from .utils cimport (
     aiofn_validate_buffer,
     aiofn_maybe_copy_buffer,
     aiofn_maybe_copy_buffer_tail,
-    aiofn_recv,
-    aiofn_send,
+    aiofn_read,
+    aiofn_write,
     aiofn_allocate_bytes,
     aiofn_finalize_bytes,
     aiofn_set_nodelay,
@@ -1209,9 +1209,9 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             if sz == 0:
                 return True
 
-            bytes_sent = aiofn_send(self._sock_fd, ptr, sz)
+            bytes_sent = aiofn_write(self._sock_fd, ptr, sz)
             if unlikely(self._is_debug):
-                _logger.debug("%r: aiofn_send(...,len=%d)=%d", self, sz, bytes_sent)
+                _logger.debug("%r: aiofn_write(...,len=%d)=%d", self, sz, bytes_sent)
 
             if bytes_sent < 0:
                 self._ensure_writer()
@@ -1336,10 +1336,10 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             if self._ssl_engine.ssl_incoming_use_membio():
                 while not self._read_paused:
                     self._ssl_engine.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
-                    bytes_read = aiofn_recv(self._sock_fd, buf_ptr, buf_len)
+                    bytes_read = aiofn_read(self._sock_fd, buf_ptr, buf_len)
 
                     if unlikely(self._is_debug):
-                        _logger.debug("%r: aiofn_recv(...,len=%d)=%d", self, buf_len, bytes_read)
+                        _logger.debug("%r: aiofn_read(...,len=%d)=%d", self, buf_len, bytes_read)
 
                     if bytes_read == -1:  # without exception this means EGAIN
                         return

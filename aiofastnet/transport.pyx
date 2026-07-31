@@ -500,9 +500,9 @@ cdef class SelectorSocketTransport(SocketTransportBase):
 
             buf = self._call_protocol_get_buffer(&buf_ptr, &buf_len)
 
-            bytes_read = aiofn_recv(self._sock_fd, buf_ptr, buf_len)
+            bytes_read = aiofn_read(self._sock_fd, buf_ptr, buf_len)
             if unlikely(self._is_debug):
-                _logger.debug("%r: aiofn_recv(,len=%d) = %d", self, buf_len, bytes_read)
+                _logger.debug("%r: aiofn_read(,len=%d) = %d", self, buf_len, bytes_read)
 
             if bytes_read == -1:    # without exception this means EGAIN
                 return
@@ -529,7 +529,7 @@ cdef class SelectorSocketTransport(SocketTransportBase):
         buffer = aiofn_allocate_bytes(DATA_RECEIVED_MAX_SIZE, &buf_ptr)
 
         try:
-            bytes_read = aiofn_recv(self._sock_fd, buf_ptr, DATA_RECEIVED_MAX_SIZE)
+            bytes_read = aiofn_read(self._sock_fd, buf_ptr, DATA_RECEIVED_MAX_SIZE)
             data = aiofn_finalize_bytes(buffer, max(bytes_read, 0))
             buffer = NULL
         except:
@@ -537,7 +537,7 @@ cdef class SelectorSocketTransport(SocketTransportBase):
             raise
 
         if unlikely(self._is_debug):
-            _logger.debug("%r: aiofn_recv(...,len=%d)=%d", self, DATA_RECEIVED_MAX_SIZE, bytes_read)
+            _logger.debug("%r: aiofn_read(...,len=%d)=%d", self, DATA_RECEIVED_MAX_SIZE, bytes_read)
 
         if bytes_read == -1:    # without exception this means EGAIN
             return
@@ -771,9 +771,9 @@ cdef class SelectorSocketTransport(SocketTransportBase):
         cdef Py_ssize_t bytes_sent
 
         while True:
-            bytes_sent = aiofn_send(self._sock_fd, data_ptr, data_len)
+            bytes_sent = aiofn_write(self._sock_fd, data_ptr, data_len)
             if unlikely(self._is_debug):
-                _logger.debug("%r aiofn_send(...,len=%d)=%d", self,
+                _logger.debug("%r aiofn_write(...,len=%d)=%d", self,
                               data_len, bytes_sent)
 
             if bytes_sent == data_len:
