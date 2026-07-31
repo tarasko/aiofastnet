@@ -350,13 +350,20 @@ cdef class SelectorTransport(Transport):
         self.abort()
 
     cdef _fatal_error(self, exc, message='Fatal error on transport'):
-        self._loop.call_exception_handler({
-            'message': message,
-            'exception': exc,
-            'transport': self,
-            'protocol': self._protocol,
-        })
+        if self._should_report_fatal_error(exc):
+            self._loop.call_exception_handler({
+                'message': message,
+                'exception': exc,
+                'transport': self,
+                'protocol': self._protocol,
+            })
+        elif unlikely(self._is_debug):
+            _logger.debug("%r: %s", self, message, exc_info=True)
+
         self._force_close(exc)
+
+    cdef bint _should_report_fatal_error(self, exc) except -1:
+        return True
 
     # May be used by create_connection/create_server
     # Keep cpdef
@@ -496,14 +503,8 @@ cdef class SelectorWritableTransport(SelectorTransport):
     def _write_ready(self):
         raise NotImplementedError()
 
-    cdef _fatal_error(self, exc, message='Fatal error on transport'):
-        if not isinstance(exc, OSError):
-            SelectorTransport._fatal_error(self, exc, message)
-            return
-
-        if unlikely(self._is_debug):
-            _logger.debug("%r: %s", self, message, exc_info=True)
-        self._force_close(exc)
+    cdef bint _should_report_fatal_error(self, exc) except -1:
+        return not isinstance(exc, OSError)
 
     cpdef _force_close(self, exc):
         if self._connection_lost_scheduled:
@@ -1298,14 +1299,8 @@ cdef class SelectorReadPipeTransport(SelectorTransport):
         except:
             self._handle_error('Fatal read error on pipe transport')
 
-    cdef _fatal_error(self, exc, message='Fatal error on pipe transport'):
-        if not (isinstance(exc, OSError) and exc.errno == errno.EIO):
-            SelectorTransport._fatal_error(self, exc, message)
-            return
-
-        if unlikely(self._is_debug):
-            _logger.debug("%r: %s", self, message, exc_info=True)
-        self._force_close(exc)
+    cdef bint _should_report_fatal_error(self, exc) except -1:
+        return not (isinstance(exc, OSError) and exc.errno == errno.EIO)
 
 
 cdef class SelectorWritePipeTransport(SelectorStreamBase):
