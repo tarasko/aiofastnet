@@ -467,7 +467,7 @@ cdef class SocketTransportBase(Transport):
         self._write_backlog_size = 0
 
 
-cdef class SocketTransport(SocketTransportBase):
+cdef class SelectorSocketTransport(SocketTransportBase):
     cdef:
         aiofn_iovec _iovecs[256]
 

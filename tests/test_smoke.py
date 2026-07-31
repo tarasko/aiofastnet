@@ -12,7 +12,7 @@ import pytest
 from aiofastnet.utils import aiofn_maybe_copy_buffer
 
 import aiofastnet
-from aiofastnet.transport import Protocol, SocketTransport, Transport
+from aiofastnet.transport import Protocol, SelectorSocketTransport, Transport
 from tests.utils import (
     UDP_MAX_PAYLOAD_SIZE,
     AsyncClient,
@@ -195,7 +195,7 @@ async def test_write_huge_abort(all_loops, conn_type):
     # Normally we would expect client to not have eof_received event if peer disconnect with abort.
     # This is definitely true only for TLS where eof_received mean graceful close_notify
     # However for TCP, eof_received happens when recv syscall returns with 0 bytes read.
-    # When SocketTransport is waiting for both write_ready and read_ready, the behaviour
+    # When SelectorSocketTransport is waiting for both write_ready and read_ready, the behaviour
     # becomes flaky. If write_ready happens first, then send fails and we call connection_lost
     # immediately. If read_ready happens first, then we call eof_received.
 
@@ -448,8 +448,8 @@ async def test_socket_transport_repr_does_not_call_protocol_buffer_size(selector
     transport = None
     try:
         sock.setblocking(False)
-        transport = SocketTransport(loop, sock, BadBufferSizeProtocol())
-        assert "SocketTransport" in repr(transport)
+        transport = SelectorSocketTransport(loop, sock, BadBufferSizeProtocol())
+        assert "SelectorSocketTransport" in repr(transport)
         await asyncio.sleep(0)
     finally:
         if transport is not None:

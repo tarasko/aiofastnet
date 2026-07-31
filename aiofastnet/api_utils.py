@@ -18,7 +18,7 @@ from typing import Callable
 from . import constants, openssl_compat
 from .constants import SSL_BIO_SIZE_DEFAULTS, SSL_TIMEOUT_DEFAULTS
 from .ssl_transport import SSLTransport_Socket, SSLTransport_Transport
-from .transport import SocketTransport, aiofn_is_buffered_protocol
+from .transport import SelectorSocketTransport, aiofn_is_buffered_protocol
 from .wrapped_transport import _get_original_loop_method, _should_fallback_to_asyncio, _WrappedBufferedProtocol, _WrappedProtocol
 
 _HAS_IPv6 = hasattr(socket, 'AF_INET6')
@@ -140,7 +140,7 @@ async def _create_connection_transport(
                     server_hostname=server_hostname,
                     server=server
                 )
-                SocketTransport(loop, sock, transport.get_tls_protocol())
+                SelectorSocketTransport(loop, sock, transport.get_tls_protocol())
             else:
                 transport = SSLTransport_Socket(
                     loop, protocol, sslcontext,
@@ -155,8 +155,8 @@ async def _create_connection_transport(
                     server=server
                 )
         else:
-            transport = SocketTransport(loop, sock, protocol,
-                                        waiter=waiter, server=server)
+            transport = SelectorSocketTransport(loop, sock, protocol,
+                                                waiter=waiter, server=server)
 
     if waiter is not None:
         try:

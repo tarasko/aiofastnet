@@ -250,7 +250,7 @@ def test_system_exit_not_reported(conn_type_plus_udp, exc, meth):
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",
-            message=r"unclosed SocketTransport",
+            message=r"unclosed SelectorSocketTransport",
             category=ResourceWarning,
         )
         warnings.filterwarnings(
