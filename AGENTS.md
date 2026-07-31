@@ -9,7 +9,7 @@ Read README.md for project description.
   compatible with Python 3.9 unless newer-version behavior is explicitly
   guarded or skipped; for example, do not use APIs introduced in Python 3.10+
   or 3.11+ such as `asyncio.timeout`.
-* Use Ruff for lint/style checks; the configured line length is in
+* Run `ruff check` after making changes. The configured line length is in
   `pyproject.toml`. Do not use plain `flake8` for line-length validation unless
   it is explicitly configured with the same 150-column limit.
 * Keep `api_<api_name>.py` files structurally close to the corresponding

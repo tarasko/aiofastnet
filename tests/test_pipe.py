@@ -6,7 +6,7 @@ import pytest
 
 from aiofastnet.transport import SelectorReadPipeTransport, SelectorWritePipeTransport
 from aiofastnet.wrapped_transport import _WrappedTransport
-from tests.utils import AsyncClient, NO_AIOFN, SocketPair, SomeException, exc_queue
+from tests.utils import NO_AIOFN, AsyncClient, SocketPair, SomeException, exc_queue
 
 
 @pytest.fixture
