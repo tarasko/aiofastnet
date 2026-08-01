@@ -4,6 +4,8 @@ from cpython.object cimport PyObject
 cdef enum NoResult:
     # Side-effect-only Cython helpers use EXC as their exception sentinel. The
     # generated C caller checks the value, while the Cython caller ignores it.
+    # This helps to remove unnecessary incref/decref on Py_NONE objects when
+    # function doesn't return any value.
     EXC = -1
     OK = 0
 
