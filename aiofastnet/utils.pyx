@@ -110,12 +110,18 @@ cdef extern from *:
     {
         if (is_socket)
         {
-            struct msghdr msg;
+            /* send is slightly faster than sendmsg with iovec */
+            if (iovcnt == 1)
+                return send(fd, iov[0].iov_base, iov[0].iov_len, 0);
+            else
+            {
+                struct msghdr msg;
 
-            memset(&msg, 0, sizeof(msg));
-            msg.msg_iov = iov;
-            msg.msg_iovlen = iovcnt;
-            return sendmsg(fd, &msg, 0);
+                memset(&msg, 0, sizeof(msg));
+                msg.msg_iov = iov;
+                msg.msg_iovlen = iovcnt;
+                return sendmsg(fd, &msg, 0);
+            }
         }
         else
             return writev(fd, iov, iovcnt);
