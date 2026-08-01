@@ -8,7 +8,8 @@ aiofastnet Release History
 1.0.2
 ------------------
 
-* Optimize performance of Transport.writelines
+* Optimize Transport.writelines performance
+* Various cleanups and micro-optimizations
 
 1.0.1
 ------------------
