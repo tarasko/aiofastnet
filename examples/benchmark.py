@@ -61,6 +61,7 @@ async def run_benchmark(args, loop_kind: str, variant: str, transport_kind: str,
         args.sndbuf_size,
         transport_kind,
         args.writelines,
+        args.writelines_seq,
     )
     rps = requests/args.duration
     print(f"{transport_kind}-{loop_kind}-{variant}-{msg_size}: {rps:.2f}")
@@ -291,6 +292,11 @@ def main():
     )
     parser.add_argument("--simple", action="store_true", help="Use simple protocol instead of buffered")
     parser.add_argument("--writelines", type=int, help="Divide each client message into this many chunks and send it with writelines()")
+    parser.add_argument(
+        "--writelines-seq",
+        action="store_true",
+        help="Send the --writelines chunks with individual write() calls instead of writelines()",
+    )
     parser.add_argument("--save-plot", action="store_true", help="Save plot to examples/benchmark.png")
     parser.add_argument("--no-plot", action="store_true", help="Disable plotting")
     parser.add_argument("--asyncio-debug", action="store_true", help="Enable loop debug")
@@ -302,6 +308,8 @@ def main():
         parser.error("--sndbuf-size must be > 0")
     if args.writelines is not None and args.writelines <= 0:
         parser.error("--writelines must be > 0")
+    if args.writelines_seq and args.writelines is None:
+        parser.error("--writelines-seq requires --writelines")
 
     args.transports = [transport.strip() for transport in args.transport.split(",") if transport.strip()]
     args.loops = [loop_name.strip() for loop_name in args.loops.split(",") if loop_name.strip()]
@@ -336,6 +344,7 @@ def main():
     print(f"duration={args.duration:.3f}s")
     if args.writelines is not None:
         print(f"writelines={args.writelines}")
+        print(f"writelines_seq={args.writelines_seq}")
     print(f"python={sys.version.split()[0]}")
     print(f"aiofastnet={aiofastnet_version}")
     print(f"uvloop={uvloop_version}")
