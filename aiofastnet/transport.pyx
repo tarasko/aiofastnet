@@ -43,10 +43,10 @@ from .utils cimport *
 
 cdef:
     object _logger = getLogger('aiofastnet')
-    Py_ssize_t DATA_RECEIVED_MAX_SIZE = constants.DATA_RECEIVED_MAX_SIZE
-    Py_ssize_t DATAGRAM_RECEIVED_MAX_SIZE = constants.DATAGRAM_RECEIVED_MAX_SIZE
-    size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
     object _os_sendfile = getattr(os, "sendfile", None)
+    Py_ssize_t _data_received_max_size = constants.DATA_RECEIVED_MAX_SIZE
+    Py_ssize_t _datagram_received_max_size = constants.DATAGRAM_RECEIVED_MAX_SIZE
+    size_t _log_threshold_for_connlost_writes = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
 
 
 cdef class Transport:
@@ -563,7 +563,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
             return
 
         if unlikely(self._connection_lost_scheduled):
-            if self._closed_write_count >= LOG_THRESHOLD_FOR_CONNLOST_WRITES:
+            if self._closed_write_count >= _log_threshold_for_connlost_writes:
                 _logger.warning('write() called after connection lost.')
             self._closed_write_count += 1
             return
@@ -685,7 +685,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
             raise RuntimeError('Cannot call writelines() after write_eof()')
 
         if unlikely(self._connection_lost_scheduled):
-            if self._closed_write_count >= LOG_THRESHOLD_FOR_CONNLOST_WRITES:
+            if self._closed_write_count >= _log_threshold_for_connlost_writes:
                 _logger.warning('writelines() called after connection lost.')
             self._closed_write_count += 1
             return
@@ -708,7 +708,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
             return
 
         if unlikely(self._connection_lost_scheduled):
-            if self._closed_write_count >= LOG_THRESHOLD_FOR_CONNLOST_WRITES:
+            if self._closed_write_count >= _log_threshold_for_connlost_writes:
                 _logger.warning('write_c() called after connection lost.')
             self._closed_write_count += 1
             return
@@ -967,10 +967,10 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
         if self._read_paused:
             return
 
-        data = aiofn_simple_read(self._fileno, DATA_RECEIVED_MAX_SIZE, &bytes_read, self._is_socket)
+        data = aiofn_simple_read(self._fileno, _data_received_max_size, &bytes_read, self._is_socket)
 
         if unlikely(self._is_debug):
-            _logger.debug("%r: aiofn_read(...,len=%d)=%d", self, DATA_RECEIVED_MAX_SIZE, bytes_read)
+            _logger.debug("%r: aiofn_read(...,len=%d)=%d", self, _data_received_max_size, bytes_read)
 
         if bytes_read == -1:    # without exception this means EGAIN
             return
@@ -1101,10 +1101,10 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
             return
 
         try:
-            buffer = aiofn_allocate_bytes(DATAGRAM_RECEIVED_MAX_SIZE, &buf_ptr)
+            buffer = aiofn_allocate_bytes(_datagram_received_max_size, &buf_ptr)
 
             try:
-                bytes_read = aiofn_recvfrom(self._fileno, buf_ptr, DATAGRAM_RECEIVED_MAX_SIZE,
+                bytes_read = aiofn_recvfrom(self._fileno, buf_ptr, _datagram_received_max_size,
                                             <void*>raw_addr, &raw_addr_len)
                 data = aiofn_finalize_bytes(buffer, max(bytes_read, 0))
                 buffer = NULL
@@ -1113,7 +1113,7 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
                 raise
 
             if unlikely(self._is_debug):
-                _logger.debug("%r: aiofn_recvfrom(...,len=%d)=%d", self, DATAGRAM_RECEIVED_MAX_SIZE, bytes_read)
+                _logger.debug("%r: aiofn_recvfrom(...,len=%d)=%d", self, _datagram_received_max_size, bytes_read)
 
             if bytes_read == -1:
                 return
@@ -1166,7 +1166,7 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
             addr = self._address
 
         if unlikely(self._connection_lost_scheduled and self._address):
-            if self._closed_write_count >= LOG_THRESHOLD_FOR_CONNLOST_WRITES:
+            if self._closed_write_count >= _log_threshold_for_connlost_writes:
                 _logger.warning('socket.send() raised exception.')
             self._closed_write_count += 1
             return
@@ -1268,7 +1268,7 @@ cdef class SelectorReadPipeTransport(SelectorTransport):
             bytes data
 
         try:
-            data = aiofn_simple_read(self._fileno, DATA_RECEIVED_MAX_SIZE, &bytes_read, False)
+            data = aiofn_simple_read(self._fileno, _data_received_max_size, &bytes_read, False)
 
             if bytes_read == -1:  # without exception this means EGAIN
                 return

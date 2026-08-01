@@ -108,7 +108,7 @@ import tempfile
 import logging
 from pathlib import Path
 
-cdef object _logger = logging.getLogger('aiofastnet.ssl')
+cdef object _logger = logging.getLogger('aiofastnet')
 
 
 def _set_sslobject_init_test_hook():

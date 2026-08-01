@@ -9,7 +9,7 @@ from .utils cimport unlikely
 import logging
 
 cdef:
-    _logger = logging.getLogger('aiofastnet.ssl')
+    _logger = logging.getLogger('aiofastnet')
     _zero = 0
     _ssl_want_read_exc = ssl.SSLWantReadError
     _ssl_want_write_exc = ssl.SSLWantWriteError

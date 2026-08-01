@@ -46,9 +46,10 @@ else:
     SSLEngineDirect = None
 
 
-cdef object _logger = getLogger('aiofastnet.ssl')
-cdef size_t LOG_THRESHOLD_FOR_CONNLOST_WRITES = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
-cdef Py_ssize_t DATA_RECEIVED_MAX_SIZE = constants.DATA_RECEIVED_MAX_SIZE
+cdef:
+    object _logger = getLogger('aiofastnet')
+    size_t _log_threshold_for_connlost_writes = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
+    Py_ssize_t _data_received_max_size = constants.DATA_RECEIVED_MAX_SIZE
 
 
 def _ssl_socket_post_handshake_test_hook(transport):
@@ -550,11 +551,11 @@ cdef class SSLTransportBase(Transport):
             Py_ssize_t total_bytes_read
 
         while True:
-            bytes_obj = aiofn_allocate_bytes(DATA_RECEIVED_MAX_SIZE, &bytes_buffer_ptr)
+            bytes_obj = aiofn_allocate_bytes(_data_received_max_size, &bytes_buffer_ptr)
             total_bytes_read = 0
 
             try:
-                last_error = self._ssl_engine.read(self, bytes_buffer_ptr, DATA_RECEIVED_MAX_SIZE, &bytes_read)
+                last_error = self._ssl_engine.read(self, bytes_buffer_ptr, _data_received_max_size, &bytes_read)
                 total_bytes_read += bytes_read
             except:
                 Py_XDECREF(bytes_obj)
@@ -567,7 +568,7 @@ cdef class SSLTransportBase(Transport):
             if self._read_paused:
                 return
 
-            if total_bytes_read < DATA_RECEIVED_MAX_SIZE and not self._should_retry_read(last_error):
+            if total_bytes_read < _data_received_max_size and not self._should_retry_read(last_error):
                 return
 
     cdef inline bint _should_retry_read(self, SSLError last_error) except -1:
@@ -981,7 +982,7 @@ cdef class SSLTransportBase(Transport):
             SSLProtocolState.SHUTDOWN,
             SSLProtocolState.UNWRAPPED
         ):
-            if self._closed_write_count >= LOG_THRESHOLD_FOR_CONNLOST_WRITES:
+            if self._closed_write_count >= _log_threshold_for_connlost_writes:
                 _logger.warning('SSL connection is closed')
             self._closed_write_count += 1
             return False

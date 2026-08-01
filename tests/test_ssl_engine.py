@@ -61,7 +61,7 @@ def test_ktls_kernel_module_not_loaded(monkeypatch, caplog):
         lambda major, minor: pytest.fail("kernel version should not be checked"),
     )
 
-    with caplog.at_level(logging.WARNING, logger="aiofastnet.ssl"):
+    with caplog.at_level(logging.WARNING, logger="aiofastnet"):
         assert not ssl_engine_direct._ktls_prerequisites_available()
 
     assert "kernel module 'tls' is not loaded" in caplog.text
@@ -76,7 +76,7 @@ def test_ktls_kernel_too_old(monkeypatch, caplog):
         ssl_engine_direct, "_linux_kernel_at_least", lambda major, minor: False
     )
 
-    with caplog.at_level(logging.WARNING, logger="aiofastnet.ssl"):
+    with caplog.at_level(logging.WARNING, logger="aiofastnet"):
         assert not ssl_engine_direct._ktls_prerequisites_available()
 
     assert "Linux kernel version is < 5.1" in caplog.text
@@ -92,7 +92,7 @@ def test_ktls_openssl_too_old(monkeypatch, caplog):
     )
     monkeypatch.setattr(ssl_engine_direct.ssl, "OPENSSL_VERSION_INFO", (1, 1, 1, 0, 0))
 
-    with caplog.at_level(logging.WARNING, logger="aiofastnet.ssl"):
+    with caplog.at_level(logging.WARNING, logger="aiofastnet"):
         assert not ssl_engine_direct._ktls_prerequisites_available()
 
     assert "OpenSSL >= 3.0 is required" in caplog.text
