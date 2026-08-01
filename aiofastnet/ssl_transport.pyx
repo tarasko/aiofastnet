@@ -12,7 +12,6 @@ from cpython.bytes cimport PyBytes_FromStringAndSize
 from cpython.object cimport PyObject
 from cpython.buffer cimport PyBUF_WRITE, PyBUF_WRITABLE
 from cpython.memoryview cimport PyMemoryView_FromMemory
-from cpython.pythread cimport PyThread_get_thread_ident
 from cpython.ref cimport Py_XDECREF
 from posix.types cimport off_t
 
@@ -21,7 +20,6 @@ from .utils cimport (
     SSLProtocolState,
     AppProtocolState,
     aiofn_unpack_simple_buffer,
-    aiofn_validate_buffer,
     aiofn_maybe_copy_buffer,
     aiofn_maybe_copy_buffer_tail,
     aiofn_read,
@@ -95,11 +93,7 @@ cdef SendFileRequest _make_send_file_request(file, offset, count):
 
 cdef class SSLTransportBase(Transport):
     cdef:
-        object __weakref__
-        unsigned long _thread_id
-        object _loop
         object _sock_fd_obj             # Initialized early, used in repr
-        bint _is_debug
 
         object _app_protocol
         bint _app_protocol_is_buffered
@@ -202,12 +196,8 @@ cdef class SSLTransportBase(Transport):
                  server_hostname: Optional[str]=None,
                  server=None,
                  sock=None):
-        self._thread_id = PyThread_get_thread_ident()
-
-        assert loop is not None
-        self._loop = loop
+        Transport._init(self, loop)
         self._sock_fd_obj = sock.fileno() if sock is not None else None
-        self._is_debug = loop.get_debug()
 
         assert ssl_handshake_timeout > 0
         assert ssl_shutdown_timeout > 0
@@ -362,15 +352,6 @@ cdef class SSLTransportBase(Transport):
             total += self._ssl_engine.outgoing_bio_pending()
 
         return total
-
-    cdef inline _check_thread(self, meth):
-        cdef unsigned long curr_thread_id = PyThread_get_thread_ident()
-        if self._thread_id != curr_thread_id:
-            raise RuntimeError(
-                f"SSLTransport.{meth} called from a wrong thread: "
-                f"transport thread id={self._thread_id}, "
-                f"curr thread_id={curr_thread_id}"
-            )
 
     cdef inline _set_state(self, SSLProtocolState new_state):
         cdef bint allowed = False
@@ -776,11 +757,6 @@ cdef class SSLTransportBase(Transport):
         except:
             self._handle_error('Fatal error on TLS transport')
 
-    def write(self, data):
-        self._check_thread("write")
-        aiofn_validate_buffer(data)
-        self.write_nocheck(data)
-
     cpdef write_nocheck(self, data):
         if not self._is_protocol_ready():
             return
@@ -802,12 +778,6 @@ cdef class SSLTransportBase(Transport):
             self._append_to_backlog(tail, True)
         except:
             self._handle_error('Fatal error on TLS transport')
-
-    def writelines(self, list_of_data):
-        self._check_thread("writelines")
-        for data in list_of_data:
-            aiofn_validate_buffer(data)
-        self.writelines_nocheck(list_of_data)
 
     cpdef writelines_nocheck(self, list_of_data):
         if not self._is_protocol_ready():

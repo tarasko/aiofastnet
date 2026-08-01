@@ -1,16 +1,20 @@
 """Native transports and protocols.
 
-The selector transport hierarchy is:
+The transport hierarchy is:
 
     Transport
-    `-- SelectorTransport
-        |-- SelectorReadPipeTransport
-        `-- SelectorWritableTransport
-            |-- SelectorDatagramTransport
-            `-- SelectorStreamTransport
-                |-- SelectorSocketTransport
-                `-- SelectorWritePipeTransport
+    |-- SelectorTransport
+    |   |-- SelectorReadPipeTransport
+    |   `-- SelectorWritableTransport
+    |       |-- SelectorDatagramTransport
+    |       `-- SelectorStreamTransport
+    |           |-- SelectorSocketTransport
+    |           `-- SelectorWritePipeTransport
+    `-- SSLTransportBase
+        |-- SSLTransport_Socket
+        `-- SSLTransport_Transport
 
+Transport owns loop/thread/debug state and the validated public write methods.
 SelectorTransport owns descriptor, protocol, read-readiness, and connection
 lifecycle state. SelectorWritableTransport adds state shared by all writable
 selector transports. SelectorStreamTransport implements ordered byte-stream writes.
@@ -52,14 +56,40 @@ cdef:
 cdef class Transport:
     """Internal transport interface implemented by aiofastnet transports."""
 
+    cdef _init(self, loop):
+        assert loop is not None
+        self._loop = loop
+        self._thread_id = PyThread_get_thread_ident()
+        self._is_debug = loop.get_debug()
+
+    cdef _check_thread(self, meth):
+        cdef unsigned long curr_thread_id = PyThread_get_thread_ident()
+        if self._thread_id != curr_thread_id:
+            raise RuntimeError(
+                f"{self.__class__.__name__}.{meth} called from a wrong thread: "
+                f"transport thread id={self._thread_id}, "
+                f"curr thread_id={curr_thread_id}"
+            )
+
     def write(self, data):
-        raise NotImplementedError()
+        self._check_thread("write")
+        aiofn_validate_buffer(data)
+        self.write_nocheck(data)
 
     def writelines(self, list_of_data):
-        raise NotImplementedError()
+        self._check_thread("writelines")
+        if list_of_data:
+            for data in list_of_data:
+                aiofn_validate_buffer(data)
+        else:
+            return
+
+        self.writelines_nocheck(list_of_data)
 
     def sendto(self, data, addr=None):
-        raise NotImplementedError()
+        self._check_thread("sendto")
+        aiofn_validate_buffer(data)
+        self.sendto_nocheck(data, addr)
 
     cpdef write_nocheck(self, data):
         raise NotImplementedError()
@@ -232,9 +262,6 @@ cdef class SelectorTransport(Transport):
     """Manage common selector descriptor, protocol, read, and close state."""
 
     cdef:
-        object __weakref__
-        unsigned long _thread_id
-        object _loop
         object _protocol
         bint _protocol_buffered
         bint _protocol_aiofn
@@ -250,12 +277,9 @@ cdef class SelectorTransport(Transport):
 
         bint _connection_lost_scheduled
         bint _closing
-        bint _is_debug
 
     def __init__(self, loop, file, protocol):
-        self._thread_id = PyThread_get_thread_ident()
-        assert loop is not None
-        self._loop = loop
+        Transport._init(self, loop)
         self._extra = {}
         self._file = file
         self._fileno_obj = file.fileno()
@@ -270,7 +294,6 @@ cdef class SelectorTransport(Transport):
 
         self._connection_lost_scheduled = False
         self._closing = False
-        self._is_debug = loop.get_debug()
 
         self.set_protocol(protocol)
 
@@ -289,15 +312,6 @@ cdef class SelectorTransport(Transport):
         if self._file is not None:
             warnings.warn(f"unclosed {self.__class__.__name__} for {self._file}", ResourceWarning, source=self)
             self._file.close()
-
-    cdef inline _check_thread(self, meth):
-        cdef unsigned long curr_thread_id = PyThread_get_thread_ident()
-        if self._thread_id != curr_thread_id:
-            raise RuntimeError(
-                f"{self.__class__.__name__}.{meth} called from a wrong thread: "
-                f"transport thread id={self._thread_id}, "
-                f"curr thread_id={curr_thread_id}"
-            )
 
     cpdef set_protocol(self, protocol):
         self._check_thread("set_protocol")
@@ -540,21 +554,6 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
     def __init__(self, loop, file, protocol):
         SelectorWritableTransport.__init__(self, loop, file, protocol)
         self._eof = False
-
-    def write(self, data):
-        self._check_thread("write")
-        aiofn_validate_buffer(data)
-        self.write_nocheck(data)
-
-    def writelines(self, list_of_data):
-        self._check_thread("writelines")
-        if list_of_data:
-            for data in list_of_data:
-                aiofn_validate_buffer(data)
-        else:
-            return
-
-        self.writelines_nocheck(list_of_data)
 
     cpdef write_nocheck(self, data):
         if self._eof:
@@ -1152,11 +1151,6 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
         except:
             self._drop_writer()
             self._handle_error('Fatal write error on datagram transport')
-
-    def sendto(self, data, addr=None):
-        self._check_thread("sendto")
-        aiofn_validate_buffer(data)
-        self.sendto_nocheck(data, addr)
 
     cpdef sendto_nocheck(self, data, addr):
         if self._address is not None:

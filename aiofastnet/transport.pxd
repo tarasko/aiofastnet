@@ -3,8 +3,16 @@ cdef class Transport:
     Base class for aiofastnet transports.
     """
 
-    # To allow mocking of write, writelines and other methods.
-    cdef dict __dict__
+    cdef:
+        # To allow mocking of write, writelines and other methods.
+        dict __dict__
+        object __weakref__
+        object _loop
+        unsigned long _thread_id
+        bint _is_debug
+
+    cdef _init(self, loop)
+    cdef _check_thread(self, meth)
 
     # aiofastnet extension,
     # skip checks for thread-safety and data types
