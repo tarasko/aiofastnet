@@ -11,8 +11,7 @@ cdef class Transport:
         unsigned long _thread_id
         bint _is_debug
 
-    cdef _init(self, loop)
-    cdef _check_thread(self, meth)
+    cdef inline _check_thread(self, meth)
 
     # aiofastnet extension,
     # skip checks for thread-safety and data types

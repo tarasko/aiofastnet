@@ -196,7 +196,7 @@ cdef class SSLTransportBase(Transport):
                  server_hostname: Optional[str]=None,
                  server=None,
                  sock=None):
-        Transport._init(self, loop)
+        Transport.__init__(self, loop)
         self._sock_fd_obj = sock.fileno() if sock is not None else None
 
         assert ssl_handshake_timeout > 0

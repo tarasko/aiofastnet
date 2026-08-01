@@ -56,13 +56,13 @@ cdef:
 cdef class Transport:
     """Internal transport interface implemented by aiofastnet transports."""
 
-    cdef _init(self, loop):
+    def __init__(self, loop):
         assert loop is not None
         self._loop = loop
         self._thread_id = PyThread_get_thread_ident()
         self._is_debug = loop.get_debug()
 
-    cdef _check_thread(self, meth):
+    cdef inline _check_thread(self, meth):
         cdef unsigned long curr_thread_id = PyThread_get_thread_ident()
         if self._thread_id != curr_thread_id:
             raise RuntimeError(
@@ -279,7 +279,7 @@ cdef class SelectorTransport(Transport):
         bint _closing
 
     def __init__(self, loop, file, protocol):
-        Transport._init(self, loop)
+        Transport.__init__(self, loop)
         self._extra = {}
         self._file = file
         self._fileno_obj = file.fileno()
