@@ -180,7 +180,7 @@ jobs:
 
     - name: Run tests
       run: |
-        pytest -v
+        pytest -n auto -v
 
   build-uv:
     name: build uv (${{ matrix.os }})
@@ -212,7 +212,7 @@ jobs:
       run: uv run python -c "import aiofastnet; print('aiofastnet.OPENSSL_DYN_LIBS:', aiofastnet.OPENSSL_DYN_LIBS)"
 
     - name: Run tests
-      run: uv run pytest -v
+      run: uv run pytest -n auto -v
 
   build-musllinux:
     name: musllinux (${{ matrix.python-tag }})
