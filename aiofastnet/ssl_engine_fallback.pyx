@@ -4,7 +4,7 @@ from cpython.memoryview cimport PyMemoryView_FromMemory
 from cpython.buffer cimport PyBUF_READ, PyBUF_WRITE
 
 from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
-from .utils cimport unlikely
+from .utils cimport NoResult, unlikely
 
 import logging
 
@@ -192,16 +192,16 @@ cdef class SSLEngineFallback(SSLEngine):
         bytes_written[0] = 0
         raise NotImplementedError()
 
-    cdef incoming_bio_write(self, data):
+    cdef NoResult incoming_bio_write(self, data) except NoResult.EXC:
         self._incoming.write(data)
 
-    cdef allow_renegotiation(self):
+    cdef NoResult allow_renegotiation(self) except NoResult.EXC:
         pass
 
     cdef int renegotiate(self) except -1:
         raise NotImplementedError("stdlib ssl.SSLObject does not expose renegotiation")
 
-    cdef outgoing_bio_reset(self):
+    cdef NoResult outgoing_bio_reset(self) except NoResult.EXC:
         while self._outgoing.pending:
             self._outgoing.read()
 

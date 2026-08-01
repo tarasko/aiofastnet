@@ -47,25 +47,25 @@ cdef class SSLEngine:
     cdef SSLError sendfile(self, conn, int fd, Py_ssize_t offset, Py_ssize_t count, Py_ssize_t* bytes_written) except SSLError.PYTHON_EXC:
         raise NotImplementedError()
 
-    cdef incoming_bio_get_write_buf(self, char **pp, Py_ssize_t *space):
+    cdef NoResult incoming_bio_get_write_buf(self, char **pp, Py_ssize_t *space) except NoResult.EXC:
         raise NotImplementedError()
 
-    cdef incoming_bio_produce(self, Py_ssize_t nbytes):
+    cdef NoResult incoming_bio_produce(self, Py_ssize_t nbytes) except NoResult.EXC:
         raise NotImplementedError()
 
-    cdef incoming_bio_write(self, data):
+    cdef NoResult incoming_bio_write(self, data) except NoResult.EXC:
         raise NotImplementedError()
 
     cdef bint sendfile_available(self) noexcept:
         return False
 
-    cdef allow_renegotiation(self):
+    cdef NoResult allow_renegotiation(self) except NoResult.EXC:
         raise NotImplementedError()
 
     cdef int renegotiate(self) except -1:
         raise NotImplementedError()
 
-    cdef outgoing_bio_reset(self):
+    cdef NoResult outgoing_bio_reset(self) except NoResult.EXC:
         raise NotImplementedError()
 
     cdef Py_ssize_t outgoing_bio_pending(self) except -1:
@@ -77,7 +77,7 @@ cdef class SSLEngine:
     cdef Py_ssize_t outgoing_bio_get_data(self, char** pp) except -1:
         raise NotImplementedError()
 
-    cdef outgoing_bio_consume(self, Py_ssize_t nbytes):
+    cdef NoResult outgoing_bio_consume(self, Py_ssize_t nbytes) except NoResult.EXC:
         raise NotImplementedError()
 
 

@@ -20,8 +20,12 @@ Read README.md for project description.
   aiofastnet conventions, such as `logger` -> `_logger` or `self` -> `loop`.
   Fallback code for unsupported event loop implementations, such as proactor
   loops, is acceptable.
-* In Cython, do not give side-effect-only helpers fake return types such as `int except -1`.
-  Use a no-result helper signature instead, unless the returned value is meaningful to callers.
+* In Cython, side-effect-only `cdef` helpers should return `NoResult` with
+  `except NoResult.EXC`. This avoids a `PyErr_Occurred()` call on the successful
+  path while making it clear that callers must ignore the return value. Use a
+  meaningful return type instead when callers consume the result. Helpers that
+  are passed to Python APIs as callbacks should instead be untyped `cpdef`
+  functions so Cython provides the normal Python-callable wrapper.
 * Add a concise comment for compatibility checks or defensive-looking logic
   whose necessity is not apparent from the code. Explain the concrete platform,
   runtime, or implementation behavior being handled, especially when using

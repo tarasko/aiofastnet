@@ -1,3 +1,6 @@
+from .utils cimport NoResult
+
+
 cdef class Transport:
     """
     Base class for aiofastnet transports.
@@ -11,21 +14,21 @@ cdef class Transport:
         unsigned long _thread_id
         bint _is_debug
 
-    cdef inline _check_thread(self, meth)
+    cdef inline NoResult _check_thread(self, meth) except NoResult.EXC
 
     # aiofastnet extension,
     # skip checks for thread-safety and data types
     cpdef sendto_nocheck(self, data, addr)
     cpdef write_nocheck(self, data)
     cpdef writelines_nocheck(self, list_of_data)
-    cdef write_c(self, char* ptr, Py_ssize_t sz)
+    cdef NoResult write_c(self, char* ptr, Py_ssize_t sz) except NoResult.EXC
 
 
 cdef class Protocol:
     cpdef is_buffered_protocol(self)
 
     # Speedups for buffered protocols
-    cdef get_buffer_c(self, Py_ssize_t hint, char** buf, Py_ssize_t* buf_len)
+    cdef NoResult get_buffer_c(self, Py_ssize_t hint, char** buf, Py_ssize_t* buf_len) except NoResult.EXC
     cpdef get_buffer(self, Py_ssize_t hint)
     cpdef buffer_updated(self, Py_ssize_t bytes_read)
     cpdef data_received(self, data)
@@ -48,7 +51,7 @@ cdef class WriteWatermarks:
     cpdef maybe_pause_protocol(self, transport, app_protocol, Py_ssize_t write_buffer_size)
     cpdef maybe_resume_protocol(self, transport, app_protocol, Py_ssize_t write_buffer_size)
 
-    cdef inline _set_write_buffer_limits(self, high, low)
+    cdef inline NoResult _set_write_buffer_limits(self, high, low) except NoResult.EXC
 
 
 cpdef aiofn_is_buffered_protocol(protocol)

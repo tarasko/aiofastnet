@@ -238,11 +238,11 @@ cpdef aiofn_validate_buffer(buffer):
                         f"got {type(buffer).__name__}")
 
 
-cdef aiofn_unpack_simple_buffer(object buffer, char** ptr_out, Py_ssize_t* size_out, int flags):
+cdef NoResult aiofn_unpack_simple_buffer(object buffer, char** ptr_out, Py_ssize_t* size_out, int flags) except NoResult.EXC:
     if unlikely(buffer is None):
         ptr_out[0] = NULL
         size_out[0] = 0
-        return
+        return NoResult.OK
 
     if isinstance(buffer, bytes):
         if flags & PyBUF_WRITEABLE:
@@ -250,12 +250,12 @@ cdef aiofn_unpack_simple_buffer(object buffer, char** ptr_out, Py_ssize_t* size_
 
         ptr_out[0] = PyBytes_AS_STRING(<bytes>buffer)
         size_out[0] = PyBytes_GET_SIZE(<bytes>buffer)
-        return
+        return NoResult.OK
 
     if isinstance(buffer, bytearray):
         ptr_out[0] = PyByteArray_AS_STRING(<bytearray>buffer)
         size_out[0] = PyByteArray_GET_SIZE(<bytearray>buffer)
-        return
+        return NoResult.OK
 
     cdef Py_buffer pybuf
 
@@ -489,13 +489,13 @@ cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* iov, Py_ssize_t iovcnt, bi
             raise RuntimeError(f"writev syscall has sent 0 bytes and did not indicate any error")
 
 
-cdef aiofn_set_result_unless_cancelled(fut, result):
+cpdef aiofn_set_result_unless_cancelled(fut, result):
     if fut.cancelled():
         return
     fut.set_result(result)
 
 
-cdef aiofn_set_nodelay(sock):
+cdef NoResult aiofn_set_nodelay(sock) except NoResult.EXC:
     if hasattr(socket, 'TCP_NODELAY'):
         if (sock.family in {socket.AF_INET, socket.AF_INET6} and
                 sock.type == socket.SOCK_STREAM and
@@ -503,7 +503,7 @@ cdef aiofn_set_nodelay(sock):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
 
-cdef aiofn_add_info_and_reraise(info):
+cdef NoResult aiofn_add_info_and_reraise(info) except NoResult.EXC:
     _, exc, _ = sys.exc_info()
     if exc is not None:
         setattr(exc, EXC_INFO_ATTR, info)

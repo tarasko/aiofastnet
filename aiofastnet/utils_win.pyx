@@ -3,6 +3,8 @@ from cpython.unicode cimport PyUnicode_FromWideChar
 from libc.stddef cimport wchar_t
 import os
 
+from .utils cimport NoResult
+
 
 cdef extern from "windows.h":
     ctypedef void* HANDLE
@@ -24,7 +26,7 @@ cdef extern from "psapi.h":
     )
 
 
-cdef void aiofn_raise_windows_error(const char* function_name) except *:
+cdef NoResult aiofn_raise_windows_error(const char* function_name) except NoResult.EXC:
     raise OSError(
         <int>GetLastError(),
         f"{function_name.decode('ascii')} failed",
