@@ -548,8 +548,8 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
     """Implement ordered byte-stream writes, writev, EOF, and sendfile queues."""
 
     cdef:
-        aiofn_iovec _iovecs[256]
         bint _eof
+        aiofn_iovec _iovecs[256]
 
     def __init__(self, loop, file, protocol):
         SelectorWritableTransport.__init__(self, loop, file, protocol)
