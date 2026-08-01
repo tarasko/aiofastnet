@@ -23,7 +23,7 @@ class _WrappedTransport(Transport):
     __slots__ = ('_transport',)
 
     def __init__(self, transport: asyncio.Transport):
-        super().__init__()
+        super().__init__(asyncio.get_running_loop())
         self._transport = transport
 
     def get_extra_info(self, name, default=None):
