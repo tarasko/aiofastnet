@@ -30,6 +30,10 @@ SUPPORTED_TRANSPORTS = ["tcp", "ssl", "udp"]
 SUPPORTED_LOOPS = ["asyncio", "uvloop", "blazio"]
 
 
+def _round_msg_size(msg_size: int, chunks: int) -> int:
+    return max(chunks, ((msg_size + chunks // 2) // chunks) * chunks)
+
+
 async def run_benchmark(args, loop_kind: str, variant: str, transport_kind: str, msg_size: int):
     if args.asyncio_debug:
         asyncio.get_running_loop().set_debug(True)
@@ -56,6 +60,7 @@ async def run_benchmark(args, loop_kind: str, variant: str, transport_kind: str,
         None,
         args.sndbuf_size,
         transport_kind,
+        args.writelines,
     )
     rps = requests/args.duration
     print(f"{transport_kind}-{loop_kind}-{variant}-{msg_size}: {rps:.2f}")
@@ -285,6 +290,7 @@ def main():
         help="Socket SO_SNDBUF value to request",
     )
     parser.add_argument("--simple", action="store_true", help="Use simple protocol instead of buffered")
+    parser.add_argument("--writelines", type=int, help="Divide each client message into this many chunks and send it with writelines()")
     parser.add_argument("--save-plot", action="store_true", help="Save plot to examples/benchmark.png")
     parser.add_argument("--no-plot", action="store_true", help="Disable plotting")
     parser.add_argument("--asyncio-debug", action="store_true", help="Enable loop debug")
@@ -294,7 +300,8 @@ def main():
         parser.error("--duration must be > 0")
     if args.sndbuf_size <= 0:
         parser.error("--sndbuf-size must be > 0")
-
+    if args.writelines is not None and args.writelines <= 0:
+        parser.error("--writelines must be > 0")
 
     args.transports = [transport.strip() for transport in args.transport.split(",") if transport.strip()]
     args.loops = [loop_name.strip() for loop_name in args.loops.split(",") if loop_name.strip()]
@@ -302,6 +309,8 @@ def main():
     args.msg_sizes = [int(part.strip()) for part in args.msg_sizes.split(",") if part.strip()]
     if any(msg_size <= 0 for msg_size in args.msg_sizes):
         parser.error("--msg-sizes must contain integers > 0")
+    if args.writelines is not None:
+        args.msg_sizes = [_round_msg_size(msg_size, args.writelines) for msg_size in args.msg_sizes]
 
     unknown_loops = [loop_name for loop_name in args.loops if loop_name not in SUPPORTED_LOOPS]
     if unknown_loops:
@@ -310,6 +319,8 @@ def main():
     unknown_transports = [transport for transport in args.transports if transport not in SUPPORTED_TRANSPORTS]
     if unknown_transports:
         parser.error(f"Unknown --transport values: {unknown_transports}. Valid: {SUPPORTED_TRANSPORTS}")
+    if args.writelines is not None and "udp" in args.transports:
+        parser.error("--writelines is not supported with udp")
 
     if any(loop_name == "uvloop" for loop_name in args.loops) and uvloop is None:
         parser.error("uvloop variant requested but uvloop is not installed")
@@ -323,6 +334,8 @@ def main():
     print(f"msg_sizes={','.join(str(x) for x in args.msg_sizes)}")
     print(f"loops={','.join(args.loops)}")
     print(f"duration={args.duration:.3f}s")
+    if args.writelines is not None:
+        print(f"writelines={args.writelines}")
     print(f"python={sys.version.split()[0]}")
     print(f"aiofastnet={aiofastnet_version}")
     print(f"uvloop={uvloop_version}")

@@ -92,14 +92,15 @@ async def EchoClient(use_aiofastnet,
                      client_ssl: ssl.SSLContext | None,
                      is_buffered: bool = True,
                      sndbuf_size: int | None = None,
-                     host: str = "127.0.0.1"
+                     host: str = "127.0.0.1",
+                     writelines: int | None = None,
                      ) -> ClientProtocol:
     loop = asyncio.get_running_loop()
 
     if use_aiofastnet:
         transport, client = await aiofastnet.create_connection(
             loop,
-            lambda: ClientProtocol(payload, duration, is_buffered, 0),
+            lambda: ClientProtocol(payload, duration, is_buffered, 0, writelines=writelines),
             host=host,
             port=port,
             ssl=client_ssl,
@@ -107,7 +108,7 @@ async def EchoClient(use_aiofastnet,
         )
     else:
         transport, client = await loop.create_connection(
-            lambda: ClientProtocol(payload, duration, is_buffered, 0),
+            lambda: ClientProtocol(payload, duration, is_buffered, 0, writelines=writelines),
             host=host,
             port=port,
             ssl=client_ssl,
@@ -192,6 +193,7 @@ async def run_pair(
     barrier: threading.Barrier | asyncio.Barrier | None,
     sndbuf_size: int | None = None,
     transport_kind: str = "tcp",
+    writelines: int | None = None,
 ) -> int:
     if transport_kind == "udp":
         server_context = DatagramEchoServer(use_aiofastnet, sndbuf_size)
@@ -202,7 +204,7 @@ async def run_pair(
         server_context = EchoServer(use_aiofastnet, server_ssl, is_buffered, sndbuf_size)
 
         def client_context_factory(server_port):
-            return EchoClient(use_aiofastnet, server_port, duration, payload, client_ssl, is_buffered, sndbuf_size)
+            return EchoClient(use_aiofastnet, server_port, duration, payload, client_ssl, is_buffered, sndbuf_size, writelines=writelines)
 
     async with server_context as server_port:
         async with client_context_factory(server_port) as client:

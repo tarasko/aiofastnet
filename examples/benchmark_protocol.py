@@ -61,6 +61,7 @@ class ClientProtocol(Protocol, asyncio.BufferedProtocol):
     _loop: object
     _is_buffered: cython.bint
     _is_datagram: cython.bint
+    _payload_lines: object
 
     _transport: object
     _read_buf: bytearray
@@ -75,12 +76,18 @@ class ClientProtocol(Protocol, asyncio.BufferedProtocol):
     def __init__(self, payload: bytes, duration: cython.float,
                  is_buffered: cython.bint = True,
                  warmup_rounds: cython.int = 10,
-                 is_datagram: cython.bint = False):
+                 is_datagram: cython.bint = False,
+                 writelines: object = None):
         self._payload = payload
         self._duration = duration
         self._loop = asyncio.get_running_loop()
         self._is_buffered = is_buffered
         self._is_datagram = is_datagram
+        if writelines is None:
+            self._payload_lines = None
+        else:
+            chunk_size = len(payload) // writelines
+            self._payload_lines = [payload[offset:offset + chunk_size] for offset in range(0, len(payload), chunk_size)]
 
         self._transport = None
         self._read_buf = bytearray(262144)
@@ -155,6 +162,8 @@ class ClientProtocol(Protocol, asyncio.BufferedProtocol):
 
         if self._is_datagram:
             self._transport.sendto(self._payload)
+        elif self._payload_lines is not None:
+            self._transport.writelines(self._payload_lines)
         elif isinstance(self._transport, Transport):
             cython.cast(Transport, self._transport).write_nocheck(self._payload)
         else:
