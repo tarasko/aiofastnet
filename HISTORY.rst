@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+1.0.2
+------------------
+
+* Optimize performance of Transport.writelines
+
 1.0.1
 ------------------
 
