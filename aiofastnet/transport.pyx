@@ -624,7 +624,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
                 elif isinstance(data, SendFileRequest):
                     break
                 else:
-                    raise RuntimeError("assert: unsupported type in the _write_backlog, must be either SendFileRequest or WriteRequest")
+                    assert False, "unsupported type in the _write_backlog, must be either SendFileRequest or WriteRequest"
             else:
                 aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
 
