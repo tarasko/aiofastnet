@@ -1,3 +1,6 @@
+from .utils cimport NoResult
+
+
 cpdef enum SSLError:
     PYTHON_EXC = -1
     SSL_ERROR_NONE = 0
@@ -31,21 +34,21 @@ cdef class SSLEngine:
     cdef SSLError write(self, conn, char *data_ptr, Py_ssize_t data_len, Py_ssize_t* bytes_written) except SSLError.PYTHON_EXC
     cdef SSLError sendfile(self, conn, int fd, Py_ssize_t offset, Py_ssize_t count, Py_ssize_t* bytes_written) except SSLError.PYTHON_EXC
 
-    cdef incoming_bio_get_write_buf(self, char **pp, Py_ssize_t *space)
-    cdef incoming_bio_produce(self, Py_ssize_t nbytes)
-    cdef incoming_bio_write(self, data)
+    cdef NoResult incoming_bio_get_write_buf(self, char **pp, Py_ssize_t *space) except NoResult.EXC
+    cdef NoResult incoming_bio_produce(self, Py_ssize_t nbytes) except NoResult.EXC
+    cdef NoResult incoming_bio_write(self, data) except NoResult.EXC
 
     cdef bint sendfile_available(self) noexcept
-    cdef allow_renegotiation(self)
+    cdef NoResult allow_renegotiation(self) except NoResult.EXC
     cdef int renegotiate(self) except -1
 
     # Available both for SSLEngineDirect and SSLEngineFallback
     cdef Py_ssize_t outgoing_bio_pending(self) except -1
-    cdef outgoing_bio_reset(self)
+    cdef NoResult outgoing_bio_reset(self) except NoResult.EXC
 
     # SSLEngineDirect methods only
     cdef Py_ssize_t outgoing_bio_get_data(self, char** pp) except -1
-    cdef outgoing_bio_consume(self, Py_ssize_t nbytes)
+    cdef NoResult outgoing_bio_consume(self, Py_ssize_t nbytes) except NoResult.EXC
 
     # SSLEngineFallback methods only
     cdef bytes outgoing_bio_read(self)
