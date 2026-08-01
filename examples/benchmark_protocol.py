@@ -162,9 +162,13 @@ class ClientProtocol(Protocol, asyncio.BufferedProtocol):
 
         if self._is_datagram:
             self._transport.sendto(self._payload)
-        elif self._payload_lines is not None:
-            self._transport.writelines(self._payload_lines)
         elif isinstance(self._transport, Transport):
-            cython.cast(Transport, self._transport).write_nocheck(self._payload)
+            if self._payload_lines is not None:
+                cython.cast(Transport, self._transport).writelines_nocheck(self._payload_lines)
+            else:
+                cython.cast(Transport, self._transport).write_nocheck(self._payload)
         else:
-            self._transport.write(self._payload)
+            if self._payload_lines is not None:
+                self._transport.writelines(self._payload_lines)
+            else:
+                self._transport.write(self._payload)

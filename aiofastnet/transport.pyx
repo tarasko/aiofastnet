@@ -613,21 +613,24 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
             Py_ssize_t bytes_sent = 0
             Py_ssize_t bytes_to_send = 0
             Py_ssize_t idx = 0
-            WriteRequest req
 
         for data in list_of_data:
-            if isinstance(data, SendFileRequest):
-                break
-
-            if isinstance(data, WriteRequest):
-                req = <WriteRequest>data
-                data_ptr = req.ptr
-                data_len = req.size
+            # Optimization: if it is a direct write from writelines than do not do somewhat expensive testing
+            # for data types. Just do aiofn_unpack_simple_buffer.
+            if list_of_data is self._write_backlog:
+                if isinstance(data, WriteRequest):
+                    data_ptr = (<WriteRequest>data).ptr
+                    data_len = (<WriteRequest>data).size
+                elif isinstance(data, SendFileRequest):
+                    break
+                else:
+                    raise RuntimeError("assert: unsupported type in the _write_backlog, must be either SendFileRequest or WriteRequest")
             else:
                 aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
 
-            if data_len == 0:
+            if unlikely(data_len == 0):
                 continue
+
             self._iovecs[idx].iov_base = data_ptr
             self._iovecs[idx].iov_len = data_len
             bytes_to_send += data_len
