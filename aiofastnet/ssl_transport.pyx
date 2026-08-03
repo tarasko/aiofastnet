@@ -1301,7 +1301,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             if self._ssl_engine.ssl_incoming_use_membio():
                 for idx in range(_max_reads_per_socket_per_cycle):
                     if unlikely(self._read_paused):
-                        break
+                        return
 
                     self._ssl_engine.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
                     bytes_read = aiofn_read(self._sock_fd, buf_ptr, buf_len, True)
@@ -1320,7 +1320,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                     self._incoming_bio_updated()
 
                     if bytes_read < buf_len:
-                        break
+                        return
             else:
                 self._incoming_bio_updated()
         except:
