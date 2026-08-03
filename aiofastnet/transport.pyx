@@ -51,6 +51,7 @@ cdef:
     object _os_sendfile = getattr(os, "sendfile", None)
     Py_ssize_t _data_received_max_size = constants.DATA_RECEIVED_MAX_SIZE
     Py_ssize_t _datagram_received_max_size = constants.DATAGRAM_RECEIVED_MAX_SIZE
+    Py_ssize_t _max_reads_per_socket_per_cycle = constants.MAX_READS_PER_SOCKET_PER_CYCLE
     size_t _log_threshold_for_connlost_writes = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
 
 
@@ -750,23 +751,22 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
         """
         cdef Py_ssize_t bytes_sent
 
-        while True:
-            bytes_sent = aiofn_write(self._fileno, data_ptr, data_len, self._is_socket)
-            if unlikely(self._is_debug):
-                _logger.debug("%r aiofn_write(...,len=%d)=%d", self,
-                              data_len, bytes_sent)
+        bytes_sent = aiofn_write(self._fileno, data_ptr, data_len, self._is_socket)
+        if unlikely(self._is_debug):
+            _logger.debug("%r aiofn_write(...,len=%d)=%d", self,
+                          data_len, bytes_sent)
 
-            if bytes_sent == data_len:
-                return None
+        if bytes_sent == data_len:
+            return None
 
-            if bytes_sent == -1:
-                if data is None:
-                    return _make_write_request_from_ptr(data_ptr, data_len)
-                else:
-                    return _make_write_request_tail(data, data_ptr, data_len)
-
+        if bytes_sent > 0:
             data_ptr += bytes_sent
             data_len -= bytes_sent
+
+        if data is None:
+            return _make_write_request_from_ptr(data_ptr, data_len)
+        else:
+            return _make_write_request_tail(data, data_ptr, data_len)
 
     cdef inline NoResult _adjust_write_backlog(self, Py_ssize_t bytes_sent) except NoResult.EXC:
         cdef:
@@ -933,8 +933,9 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
             char* buf_ptr
             Py_ssize_t buf_len
             Py_ssize_t bytes_read
+            Py_ssize_t idx
 
-        while True:
+        for idx in range(_max_reads_per_socket_per_cycle):
             if self._connection_lost_scheduled:
                 return NoResult.OK
 
@@ -956,30 +957,50 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
 
             self._call_protocol_buffer_updated(bytes_read)
 
+            if bytes_read < buf_len:
+                return NoResult.OK
+
+            # Protocol may have been switched from buffered to simple
+            if not self._protocol_buffered:
+                return NoResult.OK
+
+        return NoResult.OK
+
     cdef inline NoResult _read_ready__data_received(self) except NoResult.EXC:
         cdef:
             Py_ssize_t bytes_read
             bytes data
+            Py_ssize_t idx
 
-        if self._connection_lost_scheduled:
-            return NoResult.OK
+        for idx in range(_max_reads_per_socket_per_cycle):
+            if self._connection_lost_scheduled:
+                return NoResult.OK
 
-        if self._read_paused:
-            return NoResult.OK
+            if self._read_paused:
+                return NoResult.OK
 
-        data = aiofn_simple_read(self._fileno, _data_received_max_size, &bytes_read, self._is_socket)
+            data = aiofn_simple_read(self._fileno, _data_received_max_size, &bytes_read, self._is_socket)
 
-        if unlikely(self._is_debug):
-            _logger.debug("%r: aiofn_read(...,len=%d)=%d", self, _data_received_max_size, bytes_read)
+            if unlikely(self._is_debug):
+                _logger.debug("%r: aiofn_read(...,len=%d)=%d", self, _data_received_max_size, bytes_read)
 
-        if bytes_read == -1:    # without exception this means EGAIN
-            return NoResult.OK
+            if bytes_read == -1:    # without exception this means EGAIN
+                return NoResult.OK
 
-        if bytes_read == 0:
-            self._read_ready__on_eof()
-            return NoResult.OK
+            if bytes_read == 0:
+                self._read_ready__on_eof()
+                return NoResult.OK
 
-        self._call_protocol_data_received(data)
+            self._call_protocol_data_received(data)
+
+            if bytes_read < _data_received_max_size:
+                return NoResult.OK
+
+            # Protocol may have been switched from simple to buffered
+            if self._protocol_buffered:
+                return NoResult.OK
+
+        return NoResult.OK
 
     cdef inline NoResult _read_ready__on_eof(self) except NoResult.EXC:
         if self._loop.get_debug():
