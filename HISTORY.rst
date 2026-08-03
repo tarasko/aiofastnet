@@ -5,6 +5,12 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+1.0.3
+------------------
+
+* Optimize syscall usage
+* Prevent possible starvation, limit number of consecutive reads per client per cycle
+
 1.0.2
 ------------------
 

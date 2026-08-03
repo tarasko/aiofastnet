@@ -49,6 +49,7 @@ cdef:
     object _logger = getLogger('aiofastnet')
     size_t _log_threshold_for_connlost_writes = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
     Py_ssize_t _data_received_max_size = constants.DATA_RECEIVED_MAX_SIZE
+    Py_ssize_t _max_reads_per_socket_per_cycle = constants.MAX_READS_PER_SOCKET_PER_CYCLE
 
 
 def _ssl_socket_post_handshake_test_hook(transport):
@@ -1170,25 +1171,22 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             long sz
             Py_ssize_t bytes_sent
 
-        while True:
-            sz = self._ssl_engine.outgoing_bio_get_data(&ptr)
-            if sz == 0:
-                return True
+        sz = self._ssl_engine.outgoing_bio_get_data(&ptr)
+        if sz == 0:
+            return True
 
-            bytes_sent = aiofn_write(self._sock_fd, ptr, sz, True)
-            if unlikely(self._is_debug):
-                _logger.debug("%r: aiofn_write(...,len=%d)=%d", self, sz, bytes_sent)
+        bytes_sent = aiofn_write(self._sock_fd, ptr, sz, True)
+        if unlikely(self._is_debug):
+            _logger.debug("%r: aiofn_write(...,len=%d)=%d", self, sz, bytes_sent)
 
-            if bytes_sent < 0:
-                self._ensure_writer()
-                return False
-
+        if bytes_sent > 0:
             self._ssl_engine.outgoing_bio_consume(bytes_sent)
-            if bytes_sent == sz:
-                return True
 
-            ptr += bytes_sent
-            sz -= bytes_sent
+        if bytes_sent < sz:
+            self._ensure_writer()
+            return False
+        else:
+            return True
 
     cdef bint _should_retry_after_want_write(self) except -1:
         """
@@ -1297,25 +1295,32 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             char* buf_ptr
             Py_ssize_t buf_len
             Py_ssize_t bytes_read
+            Py_ssize_t idx
 
         try:
             if self._ssl_engine.ssl_incoming_use_membio():
-                while not self._read_paused:
+                for idx in range(_max_reads_per_socket_per_cycle):
+                    if unlikely(self._read_paused):
+                        return
+
                     self._ssl_engine.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
                     bytes_read = aiofn_read(self._sock_fd, buf_ptr, buf_len, True)
 
                     if unlikely(self._is_debug):
                         _logger.debug("%r: aiofn_read(...,len=%d)=%d", self, buf_len, bytes_read)
 
-                    if bytes_read == -1:  # without exception this means EGAIN
-                        return
-
                     if unlikely(bytes_read == 0):
                         self._process_eof()
                         return
 
+                    if unlikely(bytes_read == -1):  # without exception this means EGAIN
+                        return
+
                     self._ssl_engine.incoming_bio_produce(bytes_read)
                     self._incoming_bio_updated()
+
+                    if bytes_read < buf_len:
+                        return
             else:
                 self._incoming_bio_updated()
         except:
