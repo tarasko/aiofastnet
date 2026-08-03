@@ -26,7 +26,7 @@ except ImportError:
 
 
 UDP_MAX_PAYLOAD_SIZE = 65507
-SUPPORTED_TRANSPORTS = ["tcp", "ssl", "udp"]
+SUPPORTED_TRANSPORTS = ["ssl", "tcp", "udp"]
 SUPPORTED_LOOPS = ["asyncio", "uvloop", "blazio"]
 
 
