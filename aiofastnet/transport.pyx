@@ -280,6 +280,9 @@ cdef class SelectorTransport(Transport):
         bint _connection_lost_scheduled
         bint _closing
 
+        Callback _read_ready_callback
+        Callback _write_ready_callback
+
     def __init__(self, loop, file, protocol):
         Transport.__init__(self, loop)
         self._extra = {}
@@ -296,6 +299,7 @@ cdef class SelectorTransport(Transport):
 
         self._connection_lost_scheduled = False
         self._closing = False
+        self._read_ready_callback = _SelectorReadCallback(self)
 
         self.set_protocol(protocol)
 
@@ -354,7 +358,7 @@ cdef class SelectorTransport(Transport):
         if self._closing or not self._read_paused:
             return
 
-        self._loop.add_reader(self._fileno_obj, self._read_ready)
+        self._loop.add_reader(self._fileno_obj, self._read_ready_callback)
         self._read_paused = False
 
         if unlikely(self._is_debug):
@@ -406,6 +410,12 @@ cdef class SelectorTransport(Transport):
         except:
             aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.')
 
+    def _read_ready(self):
+        self._read_ready_c()
+
+    cdef NoResult _read_ready_c(self) except NoResult.EXC:
+        raise NotImplementedError()
+
     cdef inline _call_protocol_eof_received(self):
         try:
             return self._protocol.eof_received()
@@ -420,6 +430,8 @@ cdef class SelectorTransport(Transport):
             self._file.close()
             self._file = None
             self._protocol = None
+            self._read_ready_callback = None
+            self._write_ready_callback = None
 
     cdef inline NoResult _handle_error(self, message) except NoResult.EXC:
         _, exc, _ = sys.exc_info()
@@ -432,6 +444,18 @@ cdef class SelectorTransport(Transport):
 
         message = getattr(exc, constants.EXC_INFO_ATTR, message)
         self._fatal_error(exc, message)
+
+
+cdef class _SelectorReadCallback(Callback):
+    cdef SelectorTransport _transport
+
+    def __cinit__(self, SelectorTransport transport):
+        self._transport = transport
+
+    cdef NoResult run(self) except NoResult.EXC:
+        self._transport._read_ready_c()
+        return NoResult.OK
+
 
 cdef class SelectorWritableTransport(SelectorTransport):
     """Manage write backlog, readiness, flow control, and close state.
@@ -455,6 +479,7 @@ cdef class SelectorWritableTransport(SelectorTransport):
         self._write_backlog_size = 0
         self._write_ready_registered = False
         self._closed_write_count = 0
+        self._write_ready_callback = _SelectorWriteCallback(self)
 
         self._write_watermarks = WriteWatermarks(loop)
         self._sendfile_compatible = False
@@ -510,7 +535,7 @@ cdef class SelectorWritableTransport(SelectorTransport):
         if self._connection_lost_scheduled or self._write_ready_registered:
             return NoResult.OK
         self._write_ready_registered = True
-        self._loop.add_writer(self._fileno_obj, self._write_ready)
+        self._loop.add_writer(self._fileno_obj, self._write_ready_callback)
 
     cdef inline NoResult _drop_writer(self) except NoResult.EXC:
         if unlikely(self._is_debug):
@@ -522,6 +547,9 @@ cdef class SelectorWritableTransport(SelectorTransport):
         self._loop.remove_writer(self._fileno_obj)
 
     def _write_ready(self):
+        self._write_ready_c()
+
+    cdef NoResult _write_ready_c(self) except NoResult.EXC:
         raise NotImplementedError()
 
     cdef bint _should_report_fatal_error(self, exc) except -1:
@@ -544,6 +572,17 @@ cdef class SelectorWritableTransport(SelectorTransport):
                     req.waiter.set_exception(exc)
         self._write_backlog.clear()
         self._write_backlog_size = 0
+
+
+cdef class _SelectorWriteCallback(Callback):
+    cdef SelectorWritableTransport _transport
+
+    def __cinit__(self, SelectorWritableTransport transport):
+        self._transport = transport
+
+    cdef NoResult run(self) except NoResult.EXC:
+        self._transport._write_ready_c()
+        return NoResult.OK
 
 
 cdef class SelectorStreamTransport(SelectorWritableTransport):
@@ -818,10 +857,10 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
                 all_sent = self._try_write_list_of_data(self._write_backlog, &bytes_sent)
                 self._adjust_write_backlog(bytes_sent)
 
-    def _write_ready(self):
+    cdef NoResult _write_ready_c(self) except NoResult.EXC:
         assert self._write_backlog, 'Data should not be empty'
         if self._connection_lost_scheduled:
-            return
+            return NoResult.OK
 
         try:
             if unlikely(self._is_debug):
@@ -839,6 +878,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
                     self._call_connection_lost(None)
                 elif self._eof:
                     self._write_eof_now()
+        return NoResult.OK
 
     def sendfile(self, file, offset, count) -> Optional[asyncio.Future[None]]:
         self._check_thread("sendfile")
@@ -897,7 +937,7 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
         self._loop.call_soon(self._protocol.connection_made, self)
         # only start reading when connection_made() has been called
         self._loop.call_soon(self._loop.add_reader,
-                             self._fileno_obj, self._read_ready)
+                             self._fileno_obj, self._read_ready_callback)
         if waiter is not None:
             # only wake up the waiter when connection_made() has been called
             self._loop.call_soon(_set_result_unless_cancelled_callback, waiter, None)
@@ -918,7 +958,7 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
                 server._detach(self)
                 self._server = None
 
-    def _read_ready(self):
+    cdef NoResult _read_ready_c(self) except NoResult.EXC:
         try:
             if self._protocol_buffered:
                 self._read_ready__get_buffer()
@@ -926,6 +966,7 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
                 self._read_ready__data_received()
         except:
             self._handle_error('Fatal read error on socket transport')
+        return NoResult.OK
 
     cdef inline NoResult _read_ready__get_buffer(self) except NoResult.EXC:
         cdef:
@@ -1102,11 +1143,11 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
         self._loop.call_soon(self._protocol.connection_made, self)
         # only start reading when connection_made() has been called
         self._loop.call_soon(self._loop.add_reader,
-                             self._fileno_obj, self._read_ready)
+                             self._fileno_obj, self._read_ready_callback)
         # only wake up the waiter when connection_made() has been called
         self._loop.call_soon(_set_result_unless_cancelled_callback, waiter, None)
 
-    def _read_ready(self):
+    cdef NoResult _read_ready_c(self) except NoResult.EXC:
         cdef:
             PyObject* buffer
             char* buf_ptr
@@ -1116,10 +1157,10 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
             object data
 
         if self._connection_lost_scheduled:
-            return
+            return NoResult.OK
 
         if unlikely(self._read_paused):
-            return
+            return NoResult.OK
 
         try:
             buffer = aiofn_allocate_bytes(_datagram_received_max_size, &buf_ptr)
@@ -1137,21 +1178,22 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
                 _logger.debug("%r: aiofn_recvfrom(...,len=%d)=%d", self, _datagram_received_max_size, bytes_read)
 
             if bytes_read == -1:
-                return
+                return NoResult.OK
 
             addr = aiofn_sockaddr_to_pyaddr(<void*>raw_addr, raw_addr_len)
         except OSError as exc:
             self._call_protocol_error_received(exc)
-            return
+            return NoResult.OK
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException:
             self._handle_error('Fatal read error on datagram transport')
-            return
+            return NoResult.OK
 
         self._call_protocol_datagram_received(data, addr)
+        return NoResult.OK
 
-    def _write_ready(self):
+    cdef NoResult _write_ready_c(self) except NoResult.EXC:
         try:
             if unlikely(self._is_debug):
                 _logger.debug("%r write_ready event, resume writing from backlog", self)
@@ -1173,6 +1215,7 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
         except:
             self._drop_writer()
             self._handle_error('Fatal write error on datagram transport')
+        return NoResult.OK
 
     cpdef sendto_nocheck(self, data, addr):
         if self._address is not None:
@@ -1274,11 +1317,11 @@ cdef class SelectorReadPipeTransport(SelectorTransport):
         self._loop.call_soon(self._protocol.connection_made, self)
         # only start reading when connection_made() has been called
         self._loop.call_soon(self._loop.add_reader,
-                             self._fileno_obj, self._read_ready)
+                             self._fileno_obj, self._read_ready_callback)
         # only wake up the waiter when connection_made() has been called
         self._loop.call_soon(_set_result_unless_cancelled_callback, waiter, None)
 
-    def _read_ready(self):
+    cdef NoResult _read_ready_c(self) except NoResult.EXC:
         cdef:
             Py_ssize_t bytes_read
             bytes data
@@ -1287,18 +1330,19 @@ cdef class SelectorReadPipeTransport(SelectorTransport):
             data = aiofn_simple_read(self._fileno, _data_received_max_size, &bytes_read, False)
 
             if bytes_read == -1:  # without exception this means EGAIN
-                return
+                return NoResult.OK
 
             if bytes_read == 0:
                 if unlikely(self._is_debug):
                     _logger.info("%r was closed by peer", self)
                 self._call_protocol_eof_received()
                 self._force_close(None)
-                return
+                return NoResult.OK
 
             self._call_protocol_data_received(data)
         except:
             self._handle_error('Fatal read error on pipe transport')
+        return NoResult.OK
 
     cdef bint _should_report_fatal_error(self, exc) except -1:
         return not (isinstance(exc, OSError) and exc.errno == errno.EIO)
@@ -1341,12 +1385,12 @@ cdef class SelectorWritePipeTransport(SelectorStreamTransport):
                          and not is_named_fifo_on_apple):
             # only start reading when connection_made() has been called
             self._loop.call_soon(self._loop.add_reader,
-                                 self._fileno_obj, self._read_ready)
+                                 self._fileno_obj, self._read_ready_callback)
 
         # only wake up the waiter when connection_made() has been called
         self._loop.call_soon(_set_result_unless_cancelled_callback, waiter, None)
 
-    def _read_ready(self):
+    cdef NoResult _read_ready_c(self) except NoResult.EXC:
         # Pipe was closed by peer.
         if unlikely(self._is_debug):
             _logger.info("%r was closed by peer", self)
@@ -1354,6 +1398,7 @@ cdef class SelectorWritePipeTransport(SelectorStreamTransport):
             self._force_close(BrokenPipeError())
         else:
             self._force_close(None)
+        return NoResult.OK
 
     cdef NoResult _write_eof_now(self) except NoResult.EXC:
         SelectorWritableTransport.close(self)

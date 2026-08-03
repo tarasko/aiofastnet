@@ -8,6 +8,9 @@
 extern "C" {
 #endif
 
+/* PyCapsule name accepted by the current SelectorLoopBase constructor. */
+#define AIOFN_LOOP_BACKEND_CAPSULE_NAME "aiofastnet.loop_backend"
+
 /* Fixed-width typedefs keep the ABI independent of a compiler's enum layout. */
 typedef int32_t aiofn_loop_status;
 enum {

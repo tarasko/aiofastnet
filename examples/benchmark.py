@@ -27,7 +27,7 @@ except ImportError:
 
 UDP_MAX_PAYLOAD_SIZE = 65507
 SUPPORTED_TRANSPORTS = ["tcp", "ssl", "udp"]
-SUPPORTED_LOOPS = ["asyncio", "uvloop", "blazio"]
+SUPPORTED_LOOPS = ["asyncio", "uvloop", "blazio", "libevent"]
 
 
 def _round_msg_size(msg_size: int, chunks: int) -> int:
@@ -363,6 +363,8 @@ def main():
                         loop_factory = uvloop.Loop
                     elif loop_kind == "blazio":
                         loop_factory = blazio.new_event_loop
+                    elif loop_kind == "libevent":
+                        loop_factory = aiofastnet.libevent_loop.new_event_loop
                     else:
                         loop_factory = asyncio.SelectorEventLoop
                     rps = asyncio.run(

@@ -65,4 +65,6 @@ Slow-callback measurement does not require an aiofastnet scheduling queue. Compl
 - The adapter owns all of its allocations. Passing Python allocators is unnecessary for correctness and can be added later as optional construction data without putting the Python C API in the adapter.
 - The draft has generic status values and an optional diagnostic string. Before freezing a public ABI, error propagation should be revisited to decide whether syscall error numbers need a separate, portable field.
 - Fork recovery is not included yet. If native backends need it, an optional `after_fork_child()` operation can be appended with a capability bit without changing the core scheduling interface.
-- Ownership of `state` stays with the adapter. The eventual Python/Cython construction API must keep the adapter owner alive until `close()` returns; this is separate from the native scheduling ABI.
+- Ownership of `state` stays with the adapter. The current construction API accepts a `PyCapsule` named by
+  `AIOFN_LOOP_BACKEND_CAPSULE_NAME`, copies the covered backend fields, and retains the capsule as the adapter owner until `close()` returns. This capsule is
+  construction glue only; backend operations do not use the Python C API.

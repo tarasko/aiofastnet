@@ -82,6 +82,20 @@ if os.name == 'posix':
             ["aiofastnet/utils_posix.pyx"],
         )
     )
+    extensions.extend((
+        make_extension(
+            "aiofastnet.loop_base",
+            ["aiofastnet/loop_base.pyx"],
+        ),
+        Extension(
+            "aiofastnet.libevent_loop",
+            ["aiofastnet/libevent_loop.pyx", "aiofastnet/libevent_backend.c"],
+            libraries=[*libs, "event", "pthread"],
+            define_macros=macros,
+            extra_compile_args=extra_compile_args,
+            extra_link_args=extra_link_args,
+        ),
+    ))
 elif os.name == 'nt':
     extensions.append(
         make_extension(
