@@ -101,7 +101,7 @@ cdef extern from *:
     static inline Py_ssize_t aiofn_read_sys(int fd, void* buf, size_t len, int is_socket)
     {
         if (is_socket)
-            return recv(fd, buf, len, 0);
+            return recv(fd, buf, len, MSG_DONTWAIT);
         else
             return read(fd, buf, len);
     }
@@ -109,7 +109,14 @@ cdef extern from *:
     static inline Py_ssize_t aiofn_write_sys(int fd, const void* buf, size_t len, int is_socket)
     {
         if (is_socket)
-            return send(fd, buf, len, 0);
+        {
+            int flags = MSG_DONTWAIT;
+            #ifdef MSG_NOSIGNAL
+                flags |= MSG_NOSIGNAL;
+            #endif
+
+            return send(fd, buf, len, flags);
+        }
         else
             return write(fd, buf, len);
     }
@@ -118,9 +125,14 @@ cdef extern from *:
     {
         if (is_socket)
         {
+            int flags = MSG_DONTWAIT;
+            #ifdef MSG_NOSIGNAL
+                flags |= MSG_NOSIGNAL;
+            #endif
+
             /* send is slightly faster than sendmsg with iovec */
             if (iovcnt == 1)
-                return send(fd, iov[0].iov_base, iov[0].iov_len, 0);
+                return send(fd, iov[0].iov_base, iov[0].iov_len, flags);
             else
             {
                 struct msghdr msg;
@@ -128,7 +140,7 @@ cdef extern from *:
                 memset(&msg, 0, sizeof(msg));
                 msg.msg_iov = iov;
                 msg.msg_iovlen = iovcnt;
-                return sendmsg(fd, &msg, 0);
+                return sendmsg(fd, &msg, flags);
             }
         }
         else
@@ -145,18 +157,28 @@ cdef extern from *:
 
     static inline Py_ssize_t aiofn_recvfrom_sys(int fd, void* buf, size_t len, void* addr, unsigned int* addrlen)
     {
+        int flags = 0;
+        #ifdef MSG_DONTWAIT
+            flags |= MSG_DONTWAIT;
+        #endif
+
         socklen_t sock_addrlen = (socklen_t)*addrlen;
-        Py_ssize_t ret = recvfrom(fd, buf, len, 0, (struct sockaddr*)addr, &sock_addrlen);
+        Py_ssize_t ret = recvfrom(fd, buf, len, flags, (struct sockaddr*)addr, &sock_addrlen);
         *addrlen = (unsigned int)sock_addrlen;
         return ret;
     }
 
     static inline Py_ssize_t aiofn_sendto_sys(int fd, void* buf, size_t len, void* addr, unsigned int addrlen)
     {
-        if (addr == NULL)
-            return send(fd, buf, len, 0);
-        else
-            return sendto(fd, buf, len, 0, (struct sockaddr*)addr, (socklen_t)addrlen);
+        int flags = 0;
+        #ifdef MSG_DONTWAIT
+            flags |= MSG_DONTWAIT;
+        #endif
+        #ifdef MSG_NOSIGNAL
+            flags |= MSG_NOSIGNAL;
+        #endif
+
+        return sendto(fd, buf, len, flags, (struct sockaddr*)addr, (socklen_t)addrlen);
     }
 
     static inline int aiofn_set_ipv4_sockaddr(const char* host, long port, void* raw_addr, unsigned int* addrlen)

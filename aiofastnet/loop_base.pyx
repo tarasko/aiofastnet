@@ -280,6 +280,7 @@ cdef class LoopBase:
     """Asyncio event loop frontend driven by an ``aiofn_loop_backend``."""
 
     cdef:
+        object __weakref__
         aiofn_loop_backend *_backend
         object _backend_owner
         str _backend_name
@@ -306,8 +307,6 @@ cdef class LoopBase:
         int _coroutine_origin_tracking_saved_depth
         Handle _current_handle
 
-        object __weakref__
-
     connect_accepted_socket = connect_accepted_socket
     connect_read_pipe = connect_read_pipe
     connect_write_pipe = connect_write_pipe
@@ -324,9 +323,11 @@ cdef class LoopBase:
 
         if not PyCapsule_CheckExact(backend):
             raise TypeError("backend must be an aiofastnet loop backend capsule")
+
         backend_ptr = <aiofn_loop_backend *>PyCapsule_GetPointer(backend, _CAPSULE_NAME)
         if backend_ptr.struct_size < AIOFN_LOOP_BACKEND_MIN_SIZE:
             raise ValueError("loop backend structure is too small")
+
         if (backend_ptr.state == NULL or backend_ptr.run == NULL or backend_ptr.stop == NULL or backend_ptr.close == NULL or
                 backend_ptr.now_ns == NULL or backend_ptr.call_soon == NULL or backend_ptr.call_soon_threadsafe == NULL or
                 backend_ptr.call_at == NULL or backend_ptr.timer_cancel == NULL or backend_ptr.fd_watch == NULL or
@@ -335,10 +336,8 @@ cdef class LoopBase:
 
         self._backend = backend_ptr
         self._backend_owner = backend
-        if backend_ptr.name == NULL:
-            self._backend_name = "unknown"
-        else:
-            self._backend_name = backend_ptr.name.decode("utf-8", "replace")
+        assert backend_ptr.name != NULL
+        self._backend_name = backend_ptr.name.decode("utf-8", "replace")
         self._backend_fatal_error = None
         self._backend_fd_callbacks = {}
         self._backend_signal_handlers = {}
@@ -1040,8 +1039,10 @@ cdef class LoopBase:
     def add_signal_handler(self, sig, callback, *args):
         if threading.current_thread() is not threading.main_thread():
             raise RuntimeError("set_wakeup_fd only works in main thread")
+
         self._check_signal(sig)
         self._check_callback(callback, "add_signal_handler")
+
         old = self._backend_signal_handlers.get(sig)
         if old is not None:
             old.cancel()
