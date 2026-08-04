@@ -93,15 +93,20 @@ cdef extern from *:
     static inline Py_ssize_t aiofn_read_sys(int fd, void* buf, size_t len, int is_socket)
     {
         if (is_socket)
-            return recv(fd, buf, len, 0);
+            return recv(fd, buf, len, MSG_DONTWAIT);
         else
             return read(fd, buf, len);
     }
 
     static inline Py_ssize_t aiofn_write_sys(int fd, const void* buf, size_t len, int is_socket)
     {
+        int flags = MSG_DONTWAIT;
+        #ifdef MSG_NOSIGNAL
+            flags |= MSG_NOSIGNAL;
+        #endif
+
         if (is_socket)
-            return send(fd, buf, len, 0);
+            return send(fd, buf, len, flags);
         else
             return write(fd, buf, len);
     }
