@@ -40,7 +40,7 @@ There is no attach phase. The backend `state` is fully initialized before the `a
 
 On successful scheduling, the backend borrows the action until callback invocation or cancellation; `SelectorLoopBase` keeps its containing handle alive in an intrusive pending list. Cancelling any backend-pending handle calls `action_cancel()`, giving the backend an opportunity to release its native scheduling resources immediately. User-visible cancellation remains a frontend property: a cancelled handle never executes user code. `action_cancel()` synchronously removes either a scheduled callback or timer and guarantees that the backend will never access the action again. It clears `backend_token` but does not invoke `callback`; the frontend then unlinks and releases the handle.
 
-`SelectorLoopBase.call_soon_threadsafe()` writes an owned handle pointer to a private nonblocking pipe. The read end is registered as a persistent backend fd watch. Its readiness callback executes a bounded batch immediately on the loop thread, and closing the loop cancels every handle still in the pipe. The pipe is therefore both the cross-thread queue and wakeup mechanism; adapters implement no cross-thread operation.
+The frontend-owned `_SelfPipe` implements `SelectorLoopBase.call_soon_threadsafe()` by writing an owned handle pointer to a private nonblocking pipe. It owns the lifecycle lock, pipe descriptors, and persistent backend fd watch. Its readiness callback executes a bounded batch immediately on the loop thread, and closing the loop cancels every handle still in the pipe. The pipe is therefore both the cross-thread queue and wakeup mechanism; adapters implement no cross-thread operation.
 
 The fd adapter calls `callback(callback_data, events)` immediately when readiness is reported. The function executes the current Python reader and/or writer handle before returning to the native backend. It must not route the handle through `call_soon()` or add another native scheduling round trip. This keeps the transport read and write paths on the native readiness callback's critical path.
 
@@ -68,7 +68,7 @@ Slow-callback measurement does not require an aiofastnet scheduling queue. Actio
 - An action embedded in each frontend handle combines completion state and the opaque backend-native token without forcing an integer lookup table or a second adapter wrapper.
 - The frontend-owned fd watch is shared by separate read and write registrations. Backends whose native API uses one interest mask aggregate those registrations internally.
 - Signal watches keep per-operation typed function pointers and opaque contexts; there is no loop-wide callback table or attach phase.
-- `call_soon_threadsafe()` is implemented entirely by `SelectorLoopBase` with a private pointer pipe, so adapters are never entered from foreign threads.
+- `call_soon_threadsafe()` is implemented entirely by the frontend-owned `_SelfPipe`, so adapters are never entered from foreign threads.
 - `run()` has no mode argument. Single-poll APIs are not uniform across native loops and are not required for `run_until_complete()`, signals, or slow-callback measurement.
 - Timers use absolute unsigned nanoseconds. This avoids floating-point and unit ambiguity at the ABI while leaving epoch selection to the backend.
 - The adapter owns its native allocations; the embedded action storage remains frontend-owned. Passing Python allocators is unnecessary for correctness and can be added later as optional construction data without putting the Python C API in the adapter.

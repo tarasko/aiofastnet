@@ -25,8 +25,11 @@ from .api_start_tls import start_tls
 from .loop_backend cimport (
     AIOFN_LOOP_BACKEND_CAPSULE_NAME,
     AIOFN_LOOP_BACKEND_MIN_SIZE,
+    AIOFN_LOOP_INVALID_ARGUMENT,
     AIOFN_LOOP_FD_READ,
     AIOFN_LOOP_FD_WRITE,
+    AIOFN_LOOP_NOT_SUPPORTED,
+    AIOFN_LOOP_NO_MEMORY,
     AIOFN_LOOP_OK,
     aiofn_loop_backend_t,
     aiofn_loop_action_t,
@@ -66,6 +69,7 @@ cdef:
 
 
 cdef class LoopBase
+cdef class _SelfPipe
 
 
 cdef class Handle:
@@ -129,8 +133,6 @@ cdef class Handle:
         return self._context
 
     cpdef cancel(self):
-        cdef aiofn_loop_status status
-
         if not self._cancelled:
             self._cancelled = True
             if self._loop._debug:
@@ -138,9 +140,7 @@ cdef class Handle:
             self._callback = None
             self._args = None
             if self._action_pending:
-                status = self._loop._backend.action_cancel(self._loop._backend.state, &self._action)
-                if status != AIOFN_LOOP_OK:
-                    raise self._loop._backend_error("action_cancel")
+                self._loop._check_status(self._loop._backend.action_cancel(self._loop._backend.state, &self._action))
                 self._loop._unlink_handle(self)
 
     cpdef bint cancelled(self):
@@ -224,7 +224,7 @@ cdef inline TimerHandle create_timer_handle(callback, args, LoopBase loop, doubl
     return self
 
 
-cdef inline object fileobj_to_fd(fileobj):
+cdef inline object _fileobj_to_fileno_obj(fileobj):
     if isinstance(fileobj, int):
         fd = fileobj
     else:
@@ -275,6 +275,151 @@ cdef class _SignalCallback:
         self.signum = signum
 
 
+cdef void _threadsafe_ready_callback(void *callback_data, uint32_t events) noexcept with gil:
+    cdef _SelfPipe self_pipe = <_SelfPipe>callback_data
+    try:
+        if events & AIOFN_LOOP_FD_READ:
+            self_pipe.process(True)
+    except BaseException as exc:
+        self_pipe.loop._backend_failed(exc)
+
+
+cdef class _SelfPipe:
+    cdef:
+        LoopBase loop
+        PyThread_type_lock lifecycle_lock
+        aiofn_loop_fd_watch_t watch
+        int reader
+        int writer
+
+    def __cinit__(self):
+        self.watch.backend_read_token = NULL
+        self.watch.backend_write_token = NULL
+        self.reader = -1
+        self.writer = -1
+        self.lifecycle_lock = PyThread_allocate_lock()
+        if self.lifecycle_lock == NULL:
+            raise MemoryError()
+
+    def __init__(self, LoopBase loop):
+        self.loop = loop
+        reader, writer = os.pipe()
+        self.reader = reader
+        self.writer = writer
+        try:
+            os.set_blocking(reader, False)
+            os.set_blocking(writer, False)
+            os.set_inheritable(reader, False)
+            os.set_inheritable(writer, False)
+            self.watch.fd = reader
+            self.watch.callback = _threadsafe_ready_callback
+            self.watch.callback_data = <void *>self
+            loop._check_status(loop._backend.add_reader(loop._backend.state, &self.watch))
+        except:
+            posix_close(self.reader)
+            posix_close(self.writer)
+            self.reader = -1
+            self.writer = -1
+            raise
+
+    def __dealloc__(self):
+        if self.reader >= 0:
+            posix_close(self.reader)
+            self.reader = -1
+        if self.writer >= 0:
+            posix_close(self.writer)
+            self.writer = -1
+        if self.lifecycle_lock != NULL:
+            PyThread_free_lock(self.lifecycle_lock)
+            self.lifecycle_lock = NULL
+
+    cdef inline NoResult acquire(self) except NoResult.EXC:
+        cdef int acquired
+        with nogil:
+            acquired = PyThread_acquire_lock(self.lifecycle_lock, WAIT_LOCK)
+        if not acquired:
+            raise RuntimeError("could not acquire event loop lifecycle lock")
+        return NoResult.OK
+
+    cdef inline NoResult release(self) except NoResult.EXC:
+        with nogil:
+            PyThread_release_lock(self.lifecycle_lock)
+        return NoResult.OK
+
+    cdef inline NoResult submit(self, Handle handle) except NoResult.EXC:
+        cdef:
+            void *handle_ptr
+            Py_ssize_t bytes_written
+            int last_error
+
+        handle_ptr = <void *>handle
+        Py_INCREF(handle)
+        while True:
+            with nogil:
+                bytes_written = posix_write(self.writer, &handle_ptr, sizeof(handle_ptr))
+            if bytes_written >= 0:
+                break
+            last_error = errno
+            if last_error == EINTR:
+                continue
+            Py_DECREF(handle)
+            if last_error == EAGAIN:
+                raise RuntimeError("call_soon_threadsafe failed: callback pipe is full")
+            raise OSError(last_error, os.strerror(last_error))
+        if bytes_written != sizeof(handle_ptr):
+            Py_DECREF(handle)
+            raise RuntimeError("call_soon_threadsafe failed: partial pointer write")
+        return NoResult.OK
+
+    cdef inline Py_ssize_t process(self, bint execute) except -1:
+        cdef:
+            void *handles[256]
+            Handle handle
+            Py_ssize_t bytes_read
+            Py_ssize_t handle_count
+            Py_ssize_t idx
+            int last_error
+
+        while True:
+            with nogil:
+                bytes_read = posix_read(self.reader, handles, sizeof(handles))
+            if bytes_read >= 0:
+                break
+            last_error = errno
+            if last_error == EINTR:
+                continue
+            if last_error == EAGAIN:
+                return 0
+            raise OSError(last_error, os.strerror(last_error))
+
+        if bytes_read == 0:
+            return 0
+        if bytes_read % <Py_ssize_t>sizeof(handles[0]) != 0:
+            raise RuntimeError("call_soon_threadsafe pipe returned a partial pointer")
+        handle_count = bytes_read // <Py_ssize_t>sizeof(handles[0])
+        for idx in range(handle_count):
+            handle = <Handle>handles[idx]
+            try:
+                if execute and not handle._cancelled:
+                    self.loop._run_handle(handle)
+            finally:
+                Py_DECREF(handle)
+        return handle_count
+
+    cdef inline NoResult close(self) except NoResult.EXC:
+        if self.watch.backend_read_token != NULL:
+            self.loop._check_status(self.loop._backend.remove_reader(self.loop._backend.state, &self.watch))
+
+        while self.process(False) != 0:
+            pass
+
+        posix_close(self.reader)
+        posix_close(self.writer)
+        self.reader = -1
+        self.writer = -1
+        return NoResult.OK
+
+
 cdef void _action_callback(aiofn_loop_action_t *action) noexcept with gil:
     cdef:
         Handle handle = <Handle>action.callback_data
@@ -302,15 +447,6 @@ cdef void _signal_callback(void *callback_data, int signum) noexcept with gil:
         callback.loop._backend_failed(exc)
 
 
-cdef void _threadsafe_ready_callback(void *callback_data, uint32_t events) noexcept with gil:
-    cdef LoopBase loop = <LoopBase>callback_data
-    try:
-        if events & AIOFN_LOOP_FD_READ:
-            loop._process_threadsafe_handles(True)
-    except BaseException as exc:
-        loop._backend_failed(exc)
-
-
 def _run_until_complete_cb(future):
     if not future.cancelled():
         exc = future.exception()
@@ -332,23 +468,21 @@ cdef class LoopBase:
         dict _backend_signal_handlers
 
         # We need _pending_handles because:
-        #
         # * it keeps each Handle alive while the backend retains a pointer to its embedded aiofn_loop_action_t.
         #   The caller may immediately discard the returned Python handle.
-        #
         # * it lets LoopBase.close() enumerate pending actions, call action_cancel(), and release backend-native
         #   resources before closing the backend.
-        #
         # * this simplifies backend implementation as it does not have to keep a list of active events
         Handle _pending_handles
 
         # Lets exception reports raised indirectly during a callback include where that callback's handle was scheduled.
         Handle _current_handle
 
-        PyThread_type_lock _lifecycle_lock
-        aiofn_loop_fd_watch_t _threadsafe_watch
-        int _threadsafe_reader
-        int _threadsafe_writer
+        # Self-pipe is used to implement call_soon_threadsafe
+        # Another thread creates Handle object and push its pointer into the write side of the pipe
+        # Loop thread receives read ready event, read from pipe, immediately run received Handle and discard it.
+        # The Handle is not pushed through the usual call_soon machinery.
+        _SelfPipe _self_pipe
 
         bint _closed
         bint _debug
@@ -364,26 +498,6 @@ cdef class LoopBase:
         bint _asyncgens_shutdown_called
         bint _coroutine_origin_tracking_enabled
         int _coroutine_origin_tracking_saved_depth
-
-    def __cinit__(self):
-        self._threadsafe_watch.backend_read_token = NULL
-        self._threadsafe_watch.backend_write_token = NULL
-        self._threadsafe_reader = -1
-        self._threadsafe_writer = -1
-        self._lifecycle_lock = PyThread_allocate_lock()
-        if self._lifecycle_lock == NULL:
-            raise MemoryError()
-
-    def __dealloc__(self):
-        if self._threadsafe_reader >= 0:
-            posix_close(self._threadsafe_reader)
-            self._threadsafe_reader = -1
-        if self._threadsafe_writer >= 0:
-            posix_close(self._threadsafe_writer)
-            self._threadsafe_writer = -1
-        if self._lifecycle_lock != NULL:
-            PyThread_free_lock(self._lifecycle_lock)
-            self._lifecycle_lock = NULL
 
     connect_accepted_socket = connect_accepted_socket
     connect_read_pipe = connect_read_pipe
@@ -434,20 +548,28 @@ cdef class LoopBase:
         self._coroutine_origin_tracking_enabled = False
         self._coroutine_origin_tracking_saved_depth = 0
         self._current_handle = None
-        self._setup_threadsafe_pipe()
+        self._self_pipe = _SelfPipe(self)
 
     def __repr__(self):
         return "<{}.{} backend={!r} running={} closed={} debug={}>".format(
             self.__class__.__module__, self.__class__.__name__, self._backend_name, self.is_running(), self.is_closed(), self.get_debug()
         )
 
-    cdef inline object _backend_error(self, str operation):
+    cdef inline NoResult _check_status(self, aiofn_loop_status status) except NoResult.EXC:
         cdef const char *detail = NULL
+
+        if status == AIOFN_LOOP_OK:
+            return NoResult.OK
         if self._backend.last_error != NULL:
             detail = self._backend.last_error(self._backend.state)
-        if detail != NULL:
-            return RuntimeError(f"{operation} failed: {detail.decode('utf-8', 'replace')}")
-        return RuntimeError(f"{operation} failed in {self._backend_name} backend")
+        message = detail.decode("utf-8", "replace") if detail != NULL else f"{self._backend_name} backend error {status}"
+        if status == AIOFN_LOOP_NO_MEMORY:
+            raise MemoryError(message)
+        if status == AIOFN_LOOP_INVALID_ARGUMENT:
+            raise ValueError(message)
+        if status == AIOFN_LOOP_NOT_SUPPORTED:
+            raise NotImplementedError(message)
+        raise RuntimeError(message)
 
     cdef inline NoResult _link_handle(self, Handle handle) except NoResult.EXC:
         handle._pending_next = self._pending_handles
@@ -484,40 +606,32 @@ cdef class LoopBase:
         return NoResult.OK
 
     cdef inline NoResult _backend_watch_fd(self, aiofn_loop_fd_watch_t *watch, bint reader) except NoResult.EXC:
-        cdef aiofn_loop_status status
         if reader:
-            status = self._backend.add_reader(self._backend.state, watch)
+            self._check_status(self._backend.add_reader(self._backend.state, watch))
         else:
-            status = self._backend.add_writer(self._backend.state, watch)
-        if status != AIOFN_LOOP_OK:
-            raise self._backend_error("add_reader" if reader else "add_writer")
+            self._check_status(self._backend.add_writer(self._backend.state, watch))
         return NoResult.OK
 
     cdef inline NoResult _backend_unwatch_fd(self, aiofn_loop_fd_watch_t *watch, bint reader) except NoResult.EXC:
-        cdef aiofn_loop_status status
         if reader:
-            status = self._backend.remove_reader(self._backend.state, watch)
+            self._check_status(self._backend.remove_reader(self._backend.state, watch))
         else:
-            status = self._backend.remove_writer(self._backend.state, watch)
-        if status != AIOFN_LOOP_OK:
-            raise self._backend_error("remove_reader" if reader else "remove_writer")
+            self._check_status(self._backend.remove_writer(self._backend.state, watch))
         return NoResult.OK
 
     cdef inline aiofn_loop_signal_watch_t *_backend_signal_watch(self, int signum, object callback_data) except NULL:
         cdef:
             aiofn_loop_signal_watch_t *watch = NULL
-            aiofn_loop_status status
         Py_INCREF(callback_data)
-        status = self._backend.signal_watch(self._backend.state, signum, _signal_callback, <void *>callback_data, &watch)
-        if status != AIOFN_LOOP_OK:
+        try:
+            self._check_status(self._backend.signal_watch(self._backend.state, signum, _signal_callback, <void *>callback_data, &watch))
+        except:
             Py_DECREF(callback_data)
-            raise self._backend_error("signal_watch")
+            raise
         return watch
 
     cdef inline NoResult _backend_signal_unwatch(self, aiofn_loop_signal_watch_t *watch, object callback_data) except NoResult.EXC:
-        cdef aiofn_loop_status status = self._backend.signal_unwatch(self._backend.state, watch)
-        if status != AIOFN_LOOP_OK:
-            raise self._backend_error("signal_unwatch")
+        self._check_status(self._backend.signal_unwatch(self._backend.state, watch))
         Py_DECREF(callback_data)
         return NoResult.OK
 
@@ -526,96 +640,6 @@ cdef class LoopBase:
         with nogil:
             status = self._backend.run(self._backend.state)
         return status
-
-    cdef inline NoResult _acquire_lifecycle_lock(self) except NoResult.EXC:
-        cdef int acquired
-        with nogil:
-            acquired = PyThread_acquire_lock(self._lifecycle_lock, WAIT_LOCK)
-        if not acquired:
-            raise RuntimeError("could not acquire event loop lifecycle lock")
-        return NoResult.OK
-
-    cdef inline NoResult _release_lifecycle_lock(self) except NoResult.EXC:
-        with nogil:
-            PyThread_release_lock(self._lifecycle_lock)
-        return NoResult.OK
-
-    cdef inline NoResult _setup_threadsafe_pipe(self) except NoResult.EXC:
-        cdef aiofn_loop_status status
-
-        reader, writer = os.pipe()
-        self._threadsafe_reader = reader
-        self._threadsafe_writer = writer
-        try:
-            os.set_blocking(reader, False)
-            os.set_blocking(writer, False)
-            os.set_inheritable(reader, False)
-            os.set_inheritable(writer, False)
-            self._threadsafe_watch.callback = _threadsafe_ready_callback
-            self._threadsafe_watch.callback_data = <void *>self
-            self._threadsafe_watch.fd = reader
-            status = self._backend.add_reader(self._backend.state, &self._threadsafe_watch)
-            if status != AIOFN_LOOP_OK:
-                raise self._backend_error("add_reader(call_soon_threadsafe pipe)")
-        except:
-            posix_close(self._threadsafe_reader)
-            posix_close(self._threadsafe_writer)
-            self._threadsafe_reader = -1
-            self._threadsafe_writer = -1
-            raise
-        return NoResult.OK
-
-    cdef inline Py_ssize_t _process_threadsafe_handles(self, bint execute) except -1:
-        cdef:
-            void *handles[256]
-            Handle handle
-            Py_ssize_t bytes_read
-            Py_ssize_t handle_count
-            Py_ssize_t idx
-            int last_error
-
-        while True:
-            with nogil:
-                bytes_read = posix_read(self._threadsafe_reader, handles, sizeof(handles))
-            if bytes_read >= 0:
-                break
-            last_error = errno
-            if last_error == EINTR:
-                continue
-            if last_error == EAGAIN:
-                return 0
-            raise OSError(last_error, os.strerror(last_error))
-
-        if bytes_read == 0:
-            return 0
-        if bytes_read % <Py_ssize_t>sizeof(handles[0]) != 0:
-            raise RuntimeError("call_soon_threadsafe pipe returned a partial pointer")
-        handle_count = bytes_read // <Py_ssize_t>sizeof(handles[0])
-        for idx in range(handle_count):
-            handle = <Handle>handles[idx]
-            try:
-                if execute and not handle._cancelled:
-                    self._run_handle(handle)
-            finally:
-                Py_DECREF(handle)
-        return handle_count
-
-    cdef inline NoResult _close_threadsafe_pipe(self) except NoResult.EXC:
-        cdef aiofn_loop_status status
-
-        if self._threadsafe_watch.backend_read_token != NULL:
-            status = self._backend.remove_reader(self._backend.state, &self._threadsafe_watch)
-            if status != AIOFN_LOOP_OK:
-                raise self._backend_error("remove_reader(call_soon_threadsafe pipe)")
-
-        while self._process_threadsafe_handles(False) != 0:
-            pass
-
-        posix_close(self._threadsafe_reader)
-        posix_close(self._threadsafe_writer)
-        self._threadsafe_reader = -1
-        self._threadsafe_writer = -1
-        return NoResult.OK
 
     cdef inline NoResult _check_closed(self) except NoResult.EXC:
         if self._closed:
@@ -734,54 +758,30 @@ cdef class LoopBase:
         return NoResult.OK
 
     def call_soon(self, callback, *args, context=None):
-        cdef:
-            Handle handle
-            aiofn_loop_status status
+        cdef Handle handle
 
         self._check_closed()
         if self._debug:
             self._check_thread()
             self._check_callback(callback, "call_soon")
         handle = create_handle(callback, args, self, context)
-        status = self._backend.call_soon(self._backend.state, &handle._action)
-        if status != AIOFN_LOOP_OK:
-            raise self._backend_error("call_soon")
+        self._check_status(self._backend.call_soon(self._backend.state, &handle._action))
         self._link_handle(handle)
         return handle
 
     def call_soon_threadsafe(self, callback, *args, context=None):
-        cdef:
-            Handle handle
-            void *handle_ptr
-            Py_ssize_t bytes_written
-            int last_error
+        cdef Handle handle
 
-        self._acquire_lifecycle_lock()
+        self._self_pipe.acquire()
         try:
             self._check_closed()
             if self._debug:
                 self._check_callback(callback, "call_soon_threadsafe")
             handle = create_handle(callback, args, self, context)
-            handle_ptr = <void *>handle
-            Py_INCREF(handle)
-            while True:
-                with nogil:
-                    bytes_written = posix_write(self._threadsafe_writer, &handle_ptr, sizeof(handle_ptr))
-                if bytes_written >= 0:
-                    break
-                last_error = errno
-                if last_error == EINTR:
-                    continue
-                Py_DECREF(handle)
-                if last_error == EAGAIN:
-                    raise RuntimeError("call_soon_threadsafe failed: callback pipe is full")
-                raise OSError(last_error, os.strerror(last_error))
-            if bytes_written != sizeof(handle_ptr):
-                Py_DECREF(handle)
-                raise RuntimeError("call_soon_threadsafe failed: partial pointer write")
+            self._self_pipe.submit(handle)
             return handle
         finally:
-            self._release_lifecycle_lock()
+            self._self_pipe.release()
 
     def call_later(self, delay, callback, *args, context=None):
         if delay is None:
@@ -792,7 +792,6 @@ cdef class LoopBase:
         cdef:
             Handle handle
             uint64_t deadline_ns
-            aiofn_loop_status status
 
         self._check_closed()
         if self._debug:
@@ -800,9 +799,7 @@ cdef class LoopBase:
             self._check_callback(callback, "call_at")
         handle = create_timer_handle(callback, args, self, when, context)
         deadline_ns = max(0, int(when * 1_000_000_000))
-        status = self._backend.call_at(self._backend.state, &handle._action, deadline_ns)
-        if status != AIOFN_LOOP_OK:
-            raise self._backend_error("call_at")
+        self._check_status(self._backend.call_at(self._backend.state, &handle._action, deadline_ns))
         self._link_handle(handle)
         return handle
 
@@ -835,15 +832,14 @@ cdef class LoopBase:
             self._thread_id = 0
         if self._backend_fatal_error is not None:
             raise self._backend_fatal_error
-        if status != AIOFN_LOOP_OK:
-            raise self._backend_error("run")
+        self._check_status(status)
 
     cpdef close(self):
         cdef:
             _FDCallbacks fd_callback
             _SignalCallback signal_callback
 
-        self._acquire_lifecycle_lock()
+        self._self_pipe.acquire()
         try:
             if self.is_running():
                 raise RuntimeError("Cannot close a running event loop")
@@ -852,17 +848,22 @@ cdef class LoopBase:
             # Prevent new thread-safe submissions before backend cleanup starts.
             self._closed = True
         finally:
-            self._release_lifecycle_lock()
+            self._self_pipe.release()
 
-        self._close_threadsafe_pipe()
+        self._self_pipe.close()
+
         for signal_callback in self._backend_signal_handlers.values():
             self._remove_signal_callback(signal_callback)
         self._backend_signal_handlers = None
+
         for fd_callback in self._backend_fd_callbacks.values():
             self._remove_fd(fd_callback)
         self._backend_fd_callbacks = None
+
         self._cancel_pending_handles()
+
         self._backend.close(self._backend.state)
+
         self._executor_shutdown_called = True
         executor = self._default_executor
         if executor is not None:
@@ -891,12 +892,12 @@ cdef class LoopBase:
         if self._debug:
             self._check_thread()
             self._check_callback(callback, "add_reader" if reader else "add_writer")
-        fd = fileobj_to_fd(fileobj)
-        callbacks = self._backend_fd_callbacks.get(fd)
+        fileno_obj = _fileobj_to_fileno_obj(fileobj)
+        callbacks = self._backend_fd_callbacks.get(fileno_obj)
         created = callbacks is None
         if callbacks is None:
-            callbacks = _FDCallbacks(self, fd)
-            self._backend_fd_callbacks[fd] = callbacks
+            callbacks = _FDCallbacks(self, fileno_obj)
+            self._backend_fd_callbacks[fileno_obj] = callbacks
         handle = create_handle(callback, args, self)
         if reader:
             if callbacks.reader is not None:
@@ -926,7 +927,7 @@ cdef class LoopBase:
                 callbacks.writer = None
                 callbacks.writer_fileobj = None
             if created:
-                self._backend_fd_callbacks.pop(fd, None)
+                self._backend_fd_callbacks.pop(fileno_obj, None)
             raise
         return NoResult.OK
 
@@ -937,7 +938,7 @@ cdef class LoopBase:
 
         if self.is_closed():
             return False
-        fd = fileobj_to_fd(fileobj)
+        fd = _fileobj_to_fileno_obj(fileobj)
         callbacks = self._backend_fd_callbacks.get(fd)
         if callbacks is None:
             return False
