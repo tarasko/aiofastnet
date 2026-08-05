@@ -158,6 +158,9 @@ cdef class Handle:
             double started = 0.0
             bint debug = loop._debug
 
+        if self._is_cancelled:
+            return NoResult.OK
+
         loop._current_handle = self
         try:
             if unlikely(debug):
@@ -421,7 +424,7 @@ cdef class _SelfPipe:
         for idx in range(handle_count):
             handle = <Handle>handles[idx]
             try:
-                if execute and not handle._is_cancelled:
+                if execute:
                     handle._run()
             finally:
                 Py_DECREF(handle)
@@ -462,7 +465,7 @@ cdef void _fd_ready_callback(void *callback_data, uint32_t events) noexcept with
 cdef void _signal_callback(void *callback_data, int signum) noexcept with gil:
     cdef _SignalCallback callback = <_SignalCallback>callback_data
     try:
-        if signum == callback.signum and not callback.handle._is_cancelled:
+        if signum == callback.signum:
             callback.handle._run()
     except BaseException as exc:
         callback.loop._backend_failed(exc)
@@ -615,8 +618,7 @@ cdef class LoopBase:
 
     cdef inline NoResult _complete_action(self, Handle handle) except NoResult.EXC:
         self._unlink_handle(handle)
-        if not handle._is_cancelled:
-            handle._run()
+        handle._run()
         return NoResult.OK
 
     cdef inline NoResult _cancel_pending_handles(self) except NoResult.EXC:
