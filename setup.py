@@ -90,7 +90,7 @@ if os.name == 'posix':
         Extension(
             "aiofastnet.libevent_loop",
             ["aiofastnet/libevent_loop.pyx", "aiofastnet/libevent_backend.c"],
-            libraries=[*libs, "event", "pthread"],
+            libraries=[*libs, "event"],
             define_macros=macros,
             extra_compile_args=extra_compile_args,
             extra_link_args=extra_link_args,

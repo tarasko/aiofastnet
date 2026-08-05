@@ -1,6 +1,7 @@
 import asyncio
 import contextvars
 import os
+import signal
 import socket
 import sys
 import threading
@@ -128,6 +129,68 @@ def test_call_soon_threadsafe_wakes_loop(libevent_loop):
     assert called == ["thread"]
 
 
+def test_call_soon_pipe_capacity_is_reported(libevent_loop):
+    for submitted in range(100_000):
+        try:
+            libevent_loop.call_soon_threadsafe(lambda: None)
+        except RuntimeError as exc:
+            assert str(exc) == "call_soon_threadsafe failed: callback pipe is full"
+            break
+    else:
+        pytest.fail("the callback pipe did not reach its finite capacity")
+
+    assert submitted > 0
+
+
+def test_call_soon_preserves_order(libevent_loop):
+    called = []
+    for value in range(1_000):
+        libevent_loop.call_soon(called.append, value)
+    libevent_loop.call_soon(libevent_loop.stop)
+
+    libevent_loop.run_forever()
+    assert called == list(range(1_000))
+
+
+def test_cancel_removes_scheduled_action(libevent_loop):
+    called = []
+    handle = libevent_loop.call_soon(called.append, True)
+    handle.cancel()
+    libevent_loop.call_soon(libevent_loop.stop)
+
+    libevent_loop.run_forever()
+    assert called == []
+
+
+def test_call_soon_threadsafe_preserves_order_across_pipe_batches(libevent_loop):
+    called = []
+    for value in range(1_000):
+        libevent_loop.call_soon_threadsafe(called.append, value)
+    libevent_loop.call_soon_threadsafe(libevent_loop.stop)
+
+    libevent_loop.run_forever()
+    assert called == list(range(1_000))
+
+
+def test_close_cancels_calls_still_in_pipe(libevent_loop):
+    called = []
+    libevent_loop.call_soon_threadsafe(called.append, True)
+    libevent_loop.close()
+    assert called == []
+
+
+def test_close_cancels_pending_backend_actions(libevent_loop):
+    called = []
+    soon = libevent_loop.call_soon(called.append, "soon")
+    timer = libevent_loop.call_later(3600, called.append, "timer")
+
+    libevent_loop.close()
+
+    assert called == []
+    assert soon.cancelled()
+    assert timer.cancelled()
+
+
 def test_fd_readiness_calls_reader_directly(libevent_loop):
     reader, writer = socket.socketpair()
     try:
@@ -152,6 +215,39 @@ def test_fd_readiness_calls_reader_directly(libevent_loop):
     finally:
         reader.close()
         writer.close()
+
+
+def test_native_signal_handler_runs_directly_and_can_remove_itself(libevent_loop):
+    called = []
+
+    def on_signal():
+        called.append("signal")
+        assert libevent_loop.remove_signal_handler(signal.SIGUSR1)
+        libevent_loop.call_soon(called.append, "deferred")
+        libevent_loop._stop_backend()
+
+    libevent_loop.add_signal_handler(signal.SIGUSR1, on_signal)
+    os.kill(os.getpid(), signal.SIGUSR1)
+    libevent_loop.run_forever()
+
+    assert called == ["signal"]
+    assert not libevent_loop.remove_signal_handler(signal.SIGUSR1)
+
+    libevent_loop.call_soon(libevent_loop.stop)
+    libevent_loop.run_forever()
+    assert called == ["signal", "deferred"]
+
+
+def test_native_signal_handler_can_be_replaced(libevent_loop):
+    called = []
+    libevent_loop.add_signal_handler(signal.SIGUSR1, called.append, "old")
+    libevent_loop.add_signal_handler(signal.SIGUSR1, called.append, "new")
+    os.kill(os.getpid(), signal.SIGUSR1)
+    libevent_loop.call_later(1, libevent_loop.stop)
+    libevent_loop.run_forever()
+
+    assert called == ["new"]
+    assert libevent_loop.remove_signal_handler(signal.SIGUSR1)
 
 
 def test_reader_can_cancel_simultaneously_ready_writer(libevent_loop):

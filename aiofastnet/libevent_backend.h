@@ -3,7 +3,7 @@
 
 #include "loop_backend.h"
 
-aiofn_loop_backend *aiofn_libevent_backend_new(void);
-void aiofn_libevent_backend_free(aiofn_loop_backend *backend);
+aiofn_loop_backend_t *aiofn_libevent_backend_new(void);
+void aiofn_libevent_backend_free(aiofn_loop_backend_t *backend);
 
 #endif

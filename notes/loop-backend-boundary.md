@@ -7,22 +7,22 @@ This note proposes the C boundary between `SelectorLoopBase` and a native event 
 `SelectorLoopBase` owns all Python and asyncio behavior:
 
 - Python `Handle` and `TimerHandle` objects, cancellation, contexts, and exception handling;
-- stable callback data passed opaquely through the backend;
+- the pending-action list and lifetime of storage borrowed by the backend;
 - reader and writer callbacks associated with each file descriptor;
-- transports, protocols, streams, tasks, futures, signals, executors, and DNS fallback;
+- transports, protocols, streams, tasks, futures, executors, and DNS fallback;
 - conversion between asyncio's floating-point seconds and the boundary's integer nanoseconds.
 
 The native adapter owns only:
 
 - the native loop instance and its run/stop lifecycle;
-- scheduling and ordering of `call_soon()` and `call_soon_threadsafe()` callbacks;
+- scheduling and ordering of `call_soon()` callbacks;
 - the loop's monotonic clock and native timers;
 - persistent file-descriptor readiness watches;
-- the queue and wakeup mechanism needed for cross-thread scheduling.
+- persistent native signal watches;
 
-The interface contains no `PyObject *`, and the adapter never calls the Python C API. Callback data may refer to an aiofastnet-owned wrapper that retains Python state; the accompanying function pointer is responsible for entering the Python runtime and releasing that state when necessary.
+The interface contains no `PyObject *`, and the adapter never calls the Python C API. An `aiofn_loop_action_t` is embedded in an aiofastnet-owned handle. Its opaque `callback_data` may refer back to Python state; the `callback` function is responsible for entering the Python runtime.
 
-Subprocesses, native signal handling, asynchronous DNS, filesystem events, and native stream abstractions are not part of this boundary. Unix signals can initially use Python's wakeup fd registered as an ordinary readable fd.
+Subprocesses, asynchronous DNS, filesystem events, and native stream abstractions are not part of this boundary.
 
 ## Proposed C interface
 
@@ -30,17 +30,17 @@ The canonical draft declaration is in [`aiofastnet/loop_backend.h`](../aiofastne
 
 ## Required semantics
 
-Except for `call_soon_threadsafe()`, all operations are called from the thread currently running the Python event loop. Backend callbacks are serialized on that same thread. A backend callback must never escape an exception or long-jump through native loop frames.
+All operations are serialized by `SelectorLoopBase`; a foreign thread never invokes the backend, and an adapter needs no synchronization for access through this API. Operations called reentrantly from a backend callback are still on the same event-loop thread. While `run()` is active, operations and callbacks occur only on the thread that entered it. A backend callback must never escape an exception or long-jump through native loop frames. No backend operation is active or can begin after `close()` starts.
 
-There is no attach phase. The backend `state` is fully initialized before the `aiofn_loop_backend` struct is passed to `SelectorLoopBase`. Each scheduling or watch operation carries its own typed callback function and opaque context pointer, and `close()` performs final cleanup while leaving ownership of `state` with the adapter.
+There is no attach phase. The backend `state` is fully initialized before the `aiofn_loop_backend_t` struct is passed to `SelectorLoopBase`. Scheduling operations receive a complete frontend-owned action, watch operations carry their own typed callback and opaque context pointer, and `close()` performs final cleanup while leaving ownership of `state` with the adapter.
 
 `run()` gives control to the native backend until `stop()` is requested or an unrecoverable backend error occurs. The adapter must keep `run()` alive even when no user fd or timer is registered. There is no single-poll mode in the common ABI; an adapter uses its native long-running driver.
 
-`call_soon()` and `call_soon_threadsafe()` transfer an `aiofn_loop_completion_fn` and opaque `callback_data` to the backend. The backend owns the scheduling queue and later calls `callback(callback_data, AIOFN_LOOP_CALLBACK_SUCCESS)` on the loop thread. It must never call the completion inline. Calls submitted sequentially from one thread are delivered in FIFO order, but the backend is otherwise free to choose its native scheduling phase and queue implementation.
+`call_soon()` receives a pointer to a frontend-owned `aiofn_loop_action_t` embedded directly in a `Handle`. The backend stores its native cancellation token in `action->backend_token`, owns the scheduling queue, and later calls `action->callback(action)` on the loop thread. It must clear `backend_token` before invoking the callback and must never invoke it inline. Calls are delivered in FIFO order, but the backend is otherwise free to choose its native scheduling phase and queue implementation.
 
-On successful scheduling, the backend takes ownership of `callback_data` and must call the completion exactly once. `SUCCESS` requests normal execution, while `CANCELLED` releases the context without executing user code. Cancelling a `call_soon()` handle may be lazy: the backend can still complete it with `SUCCESS`, whose aiofastnet trampoline observes the cancelled Python handle and skips its callback. During `close()`, the adapter completes every item remaining in its scheduling queue and every outstanding timer with `CANCELLED`.
+On successful scheduling, the backend borrows the action until callback invocation or cancellation; `SelectorLoopBase` keeps its containing handle alive in an intrusive pending list. `action_cancel()` synchronously removes either a scheduled callback or timer and guarantees that the backend will never access the action again. It clears `backend_token` but does not invoke `callback`; the frontend then unlinks and releases the handle without executing user code.
 
-`call_soon_threadsafe()` makes the adapter responsible for both cross-thread queuing and waking the native loop. Implementations can use an eventfd or pipe plus a native queue, an async watcher, ASIO `post()`, a Tokio channel or task, or an equivalent facility. The adapter stores the function and context pointers but never interprets the context or manipulates Python objects.
+`SelectorLoopBase.call_soon_threadsafe()` writes an owned handle pointer to a private nonblocking pipe. The read end is registered as a persistent backend fd watch. Its readiness callback executes a bounded batch immediately on the loop thread, and closing the loop cancels every handle still in the pipe. The pipe is therefore both the cross-thread queue and wakeup mechanism; adapters implement no cross-thread operation.
 
 The fd adapter calls `callback(callback_data, events)` immediately when readiness is reported. The function executes the current Python reader and/or writer handle before returning to the native backend. It must not route the handle through `call_soon()` or add another native scheduling round trip. This keeps the transport read and write paths on the native readiness callback's critical path.
 
@@ -48,21 +48,25 @@ If READ and WRITE are reported together, `SelectorLoopBase` snapshots the regist
 
 An fd watch is persistent until updated or removed. `fd_watch()` returns an opaque backend-native token used by `fd_update()` and `fd_unwatch()`. On successful removal, the adapter guarantees that it will no longer access the callback or context, even if its native library completes cancellation asynchronously. The adapter must reproduce level-triggered behavior even if its native loop uses edge-triggered or one-shot readiness internally. Hangup and error notifications are reported as whichever of READ and WRITE are currently requested; the aiofastnet callback performs the socket operation and observes EOF or the concrete socket error.
 
-`call_at()` returns an opaque backend-native timer token used for cancellation. On expiry, the token becomes invalid before the adapter calls the completion with `SUCCESS`. On successful cancellation, the token becomes invalid immediately and the adapter calls the completion exactly once with `CANCELLED`. That completion may occur during `timer_cancel()` or later on the loop thread, matching native APIs such as ASIO whose cancelled timer handler is still delivered. `close()` must deliver any outstanding cancelled completion before returning.
+A signal watch is persistent until removed. `signal_watch()` returns an opaque backend-native token used by `signal_unwatch()`. The adapter must deliver the callback on the loop thread during normal event dispatch, never from the asynchronous OS signal handler. There is at most one watch for each signal number. On successful removal, the adapter guarantees that it will no longer access the callback or context. `SelectorLoopBase` owns signal-number validation, Python handles, handler replacement, and restoration of the Python-visible default disposition.
 
-Slow-callback measurement does not require an aiofastnet scheduling queue. Completion and fd-ready functions use the same aiofastnet handle-execution helper, so debug timing and exception handling wrap scheduled, timed, reader, and writer callbacks. Measurement must use an uncached monotonic clock because a backend's loop clock may be cached for an entire native iteration.
+`call_at()` uses the same action representation and cancellation operation as `call_soon()`. The only difference is its absolute deadline. An adapter for a library with asynchronous cancellation must detach the frontend action synchronously and may retain a separate native object until that library reports cancellation; it cannot retain or later complete the frontend action after `action_cancel()` succeeds.
 
-`struct_size` permits fields to be appended compatibly without a separate ABI version. An adapter sets it to `AIOFN_LOOP_BACKEND_CURRENT_SIZE` from the header it was built against. Aiofastnet checks it against the permanently stable `AIOFN_LOOP_BACKEND_MIN_SIZE`, then uses `AIOFN_LOOP_BACKEND_HAS_FIELD()` before reading any later field. Existing fields are never removed, reordered, given a new signature, or assigned incompatible semantics; replacements are appended under new names. The caller's `aiofn_loop_backend` struct itself need not have a long lifetime because aiofastnet copies the covered fields during construction. The adapter's `state`, function code, and backend name must remain valid through `close()`.
+Before calling backend `close()`, `SelectorLoopBase` removes all fd and signal watches and cancels every action in its pending list. The backend therefore needs no registry solely for close-time cleanup, and `close()` receives no live frontend callback pointers. A backend may still maintain native bookkeeping when its underlying library requires it for another reason.
+
+Slow-callback measurement does not require an aiofastnet scheduling queue. Action and fd-ready callbacks use the same aiofastnet handle-execution helper, so debug timing and exception handling wrap scheduled, timed, reader, and writer callbacks. Measurement must use an uncached monotonic clock because a backend's loop clock may be cached for an entire native iteration.
+
+`struct_size` permits fields to be appended compatibly without a separate ABI version. An adapter sets it to `AIOFN_LOOP_BACKEND_CURRENT_SIZE` from the header it was built against. Aiofastnet checks it against the permanently stable `AIOFN_LOOP_BACKEND_MIN_SIZE`, then uses `AIOFN_LOOP_BACKEND_HAS_FIELD()` before reading any later field. Existing fields are never removed, reordered, given a new signature, or assigned incompatible semantics; replacements are appended under new names. The caller's `aiofn_loop_backend_t` struct itself need not have a long lifetime because aiofastnet copies the covered fields during construction. The adapter's `state`, function code, and backend name must remain valid through `close()`.
 
 ## Deliberate choices and deferred questions
 
 - The native backend owns `call_soon()` scheduling. Aiofastnet has neither a ready queue nor an ID-to-handle registry.
-- Per-operation typed function pointers and opaque contexts replace a loop-wide callback table and attach phase.
-- Cancellation uses opaque backend-native tokens, matching the object or handle model of common native loops without forcing an integer lookup table.
-- `call_soon_threadsafe()` is a separate required operation because cross-thread queueing and wakeup belong to the native adapter under this ownership model.
+- An action embedded in each frontend handle combines completion state and the opaque backend-native token without forcing an integer lookup table or a second adapter wrapper.
+- FD and signal watches keep per-operation typed function pointers and opaque contexts; there is no loop-wide callback table or attach phase.
+- `call_soon_threadsafe()` is implemented entirely by `SelectorLoopBase` with a private pointer pipe, so adapters are never entered from foreign threads.
 - `run()` has no mode argument. Single-poll APIs are not uniform across native loops and are not required for `run_until_complete()`, signals, or slow-callback measurement.
 - Timers use absolute unsigned nanoseconds. This avoids floating-point and unit ambiguity at the ABI while leaving epoch selection to the backend.
-- The adapter owns all of its allocations. Passing Python allocators is unnecessary for correctness and can be added later as optional construction data without putting the Python C API in the adapter.
+- The adapter owns its native allocations; the embedded action storage remains frontend-owned. Passing Python allocators is unnecessary for correctness and can be added later as optional construction data without putting the Python C API in the adapter.
 - The draft has generic status values and an optional diagnostic string. Before freezing a public ABI, error propagation should be revisited to decide whether syscall error numbers need a separate, portable field.
 - Fork recovery is not included yet. If native backends need it, an optional `after_fork_child()` operation can be appended with a capability bit without changing the core scheduling interface.
 - Ownership of `state` stays with the adapter. The current construction API accepts a `PyCapsule` named by
