@@ -7,14 +7,6 @@
 
 #include <event2/event.h>
 
-typedef struct aiofn_libevent_watch {
-    struct event *read_event;
-    struct event *write_event;
-    uint32_t events;
-    aiofn_loop_fd_ready_fn callback;
-    void *callback_data;
-} aiofn_libevent_watch_t;
-
 typedef struct aiofn_libevent_signal {
     struct event *event;
     aiofn_loop_signal_fn callback;
@@ -39,7 +31,7 @@ static void aiofn_libevent_on_action(evutil_socket_t fd, short flags, void *data
 }
 
 static void aiofn_libevent_on_fd(evutil_socket_t fd, short flags, void *data) {
-    aiofn_libevent_watch_t *watch = data;
+    aiofn_loop_fd_watch_t *watch = data;
     uint32_t events = 0;
     (void)fd;
     if ((flags & EV_READ) != 0) {
@@ -90,7 +82,7 @@ static uint64_t aiofn_libevent_now_ns(void *data) {
     return (uint64_t)now.tv_sec * UINT64_C(1000000000) + (uint64_t)now.tv_nsec;
 }
 
-static aiofn_loop_status aiofn_libevent_schedule(void *data, aiofn_loop_action_t *action) {
+static aiofn_loop_status aiofn_libevent_call_soon(void *data, aiofn_loop_action_t *action) {
     aiofn_libevent_state_t *state = data;
     struct event *event;
 
@@ -156,95 +148,57 @@ static aiofn_loop_status aiofn_libevent_action_cancel(void *data, aiofn_loop_act
     return AIOFN_LOOP_OK;
 }
 
-static aiofn_loop_status aiofn_libevent_fd_watch(
+static aiofn_loop_status aiofn_libevent_fd_watch_direction(
     void *data,
-    int fd,
-    uint32_t events,
-    aiofn_loop_fd_ready_fn callback,
-    void *callback_data,
-    aiofn_loop_fd_watch_t **watch_out
+    short events,
+    aiofn_loop_fd_watch_t *watch,
+    void **backend_token
 ) {
     aiofn_libevent_state_t *state = data;
-    aiofn_libevent_watch_t *watch;
-    *watch_out = NULL;
-    watch = calloc(1, sizeof(*watch));
-    if (watch == NULL) {
+    struct event *event = event_new(state->base, watch->fd, events | EV_PERSIST, aiofn_libevent_on_fd, watch);
+
+    if (event == NULL) {
         return AIOFN_LOOP_NO_MEMORY;
     }
-    watch->events = events;
-    watch->callback = callback;
-    watch->callback_data = callback_data;
-    watch->read_event = event_new(state->base, fd, EV_READ | EV_PERSIST, aiofn_libevent_on_fd, watch);
-    watch->write_event = event_new(state->base, fd, EV_WRITE | EV_PERSIST, aiofn_libevent_on_fd, watch);
-    if (watch->read_event == NULL || watch->write_event == NULL) {
-        if (watch->read_event != NULL) {
-            event_free(watch->read_event);
-        }
-        if (watch->write_event != NULL) {
-            event_free(watch->write_event);
-        }
-        free(watch);
-        return AIOFN_LOOP_NO_MEMORY;
-    }
-    if (((events & AIOFN_LOOP_FD_READ) != 0 && event_add(watch->read_event, NULL) != 0) ||
-            ((events & AIOFN_LOOP_FD_WRITE) != 0 && event_add(watch->write_event, NULL) != 0)) {
-        event_del(watch->read_event);
-        event_del(watch->write_event);
-        event_free(watch->read_event);
-        event_free(watch->write_event);
-        free(watch);
+    if (event_add(event, NULL) != 0) {
+        event_free(event);
         snprintf(state->last_error, sizeof(state->last_error), "event_add(fd) failed");
         return AIOFN_LOOP_ERROR;
     }
-    *watch_out = (aiofn_loop_fd_watch_t *)watch;
+    *backend_token = event;
     return AIOFN_LOOP_OK;
 }
 
-static aiofn_loop_status aiofn_libevent_fd_update(void *data, aiofn_loop_fd_watch_t *opaque_watch, uint32_t events) {
+static aiofn_loop_status aiofn_libevent_add_reader(void *data, aiofn_loop_fd_watch_t *watch) {
+    return aiofn_libevent_fd_watch_direction(data, EV_READ, watch, &watch->backend_read_token);
+}
+
+static aiofn_loop_status aiofn_libevent_fd_unwatch_direction(void *data, void **backend_token) {
     aiofn_libevent_state_t *state = data;
-    aiofn_libevent_watch_t *watch = (aiofn_libevent_watch_t *)opaque_watch;
+    struct event *event = *backend_token;
 
-    /* Add new interests first so changing direction never removes the fd completely. */
-    if ((events & AIOFN_LOOP_FD_READ) != 0 && (watch->events & AIOFN_LOOP_FD_READ) == 0) {
-        if (event_add(watch->read_event, NULL) != 0) {
-            snprintf(state->last_error, sizeof(state->last_error), "event_add(read fd) failed");
-            return AIOFN_LOOP_ERROR;
-        }
-        watch->events |= AIOFN_LOOP_FD_READ;
+    if (event == NULL) {
+        return AIOFN_LOOP_INVALID_ARGUMENT;
     }
-    if ((events & AIOFN_LOOP_FD_WRITE) != 0 && (watch->events & AIOFN_LOOP_FD_WRITE) == 0) {
-        if (event_add(watch->write_event, NULL) != 0) {
-            snprintf(state->last_error, sizeof(state->last_error), "event_add(write fd) failed");
-            return AIOFN_LOOP_ERROR;
-        }
-        watch->events |= AIOFN_LOOP_FD_WRITE;
+    if (event_del(event) != 0) {
+        snprintf(state->last_error, sizeof(state->last_error), "event_del(fd) failed");
+        return AIOFN_LOOP_ERROR;
     }
-    if ((events & AIOFN_LOOP_FD_READ) == 0 && (watch->events & AIOFN_LOOP_FD_READ) != 0) {
-        if (event_del(watch->read_event) != 0) {
-            snprintf(state->last_error, sizeof(state->last_error), "event_del(read fd) failed");
-            return AIOFN_LOOP_ERROR;
-        }
-        watch->events &= ~AIOFN_LOOP_FD_READ;
-    }
-    if ((events & AIOFN_LOOP_FD_WRITE) == 0 && (watch->events & AIOFN_LOOP_FD_WRITE) != 0) {
-        if (event_del(watch->write_event) != 0) {
-            snprintf(state->last_error, sizeof(state->last_error), "event_del(write fd) failed");
-            return AIOFN_LOOP_ERROR;
-        }
-        watch->events &= ~AIOFN_LOOP_FD_WRITE;
-    }
+    *backend_token = NULL;
+    event_free(event);
     return AIOFN_LOOP_OK;
 }
 
-static aiofn_loop_status aiofn_libevent_fd_unwatch(void *data, aiofn_loop_fd_watch_t *opaque_watch) {
-    aiofn_libevent_watch_t *watch = (aiofn_libevent_watch_t *)opaque_watch;
-    (void)data;
-    event_del(watch->read_event);
-    event_del(watch->write_event);
-    event_free(watch->read_event);
-    event_free(watch->write_event);
-    free(watch);
-    return AIOFN_LOOP_OK;
+static aiofn_loop_status aiofn_libevent_remove_reader(void *data, aiofn_loop_fd_watch_t *watch) {
+    return aiofn_libevent_fd_unwatch_direction(data, &watch->backend_read_token);
+}
+
+static aiofn_loop_status aiofn_libevent_add_writer(void *data, aiofn_loop_fd_watch_t *watch) {
+    return aiofn_libevent_fd_watch_direction(data, EV_WRITE, watch, &watch->backend_write_token);
+}
+
+static aiofn_loop_status aiofn_libevent_remove_writer(void *data, aiofn_loop_fd_watch_t *watch) {
+    return aiofn_libevent_fd_unwatch_direction(data, &watch->backend_write_token);
 }
 
 static aiofn_loop_status aiofn_libevent_signal_watch(
@@ -296,15 +250,34 @@ static const char *aiofn_libevent_last_error(void *data) {
     return state->last_error[0] == '\0' ? NULL : state->last_error;
 }
 
+static aiofn_loop_status aiofn_libevent_after_fork(void *data) {
+    aiofn_libevent_state_t *state = data;
+    if (event_reinit(state->base) != 0) {
+        snprintf(state->last_error, sizeof(state->last_error), "event_reinit failed");
+        return AIOFN_LOOP_ERROR;
+    }
+    return AIOFN_LOOP_OK;
+}
+
 aiofn_loop_backend_t *aiofn_libevent_backend_new(void) {
     aiofn_libevent_state_t *state = calloc(1, sizeof(*state));
+    struct event_config *config = NULL;
     if (state == NULL) {
         return NULL;
     }
-    state->base = event_base_new();
+    config = event_config_new();
+    if (config == NULL) {
+        goto error;
+    }
+    if (event_config_set_flag(config, EVENT_BASE_FLAG_NOLOCK) != 0) {
+        goto error;
+    }
+    state->base = event_base_new_with_config(config);
     if (state->base == NULL) {
         goto error;
     }
+    event_config_free(config);
+    config = NULL;
 
     state->backend.struct_size = AIOFN_LOOP_BACKEND_CURRENT_SIZE;
     state->backend.state = state;
@@ -313,18 +286,23 @@ aiofn_loop_backend_t *aiofn_libevent_backend_new(void) {
     state->backend.stop = aiofn_libevent_stop;
     state->backend.close = aiofn_libevent_close;
     state->backend.now_ns = aiofn_libevent_now_ns;
-    state->backend.call_soon = aiofn_libevent_schedule;
+    state->backend.call_soon = aiofn_libevent_call_soon;
     state->backend.call_at = aiofn_libevent_call_at;
     state->backend.action_cancel = aiofn_libevent_action_cancel;
-    state->backend.fd_watch = aiofn_libevent_fd_watch;
-    state->backend.fd_update = aiofn_libevent_fd_update;
-    state->backend.fd_unwatch = aiofn_libevent_fd_unwatch;
+    state->backend.add_reader = aiofn_libevent_add_reader;
+    state->backend.remove_reader = aiofn_libevent_remove_reader;
+    state->backend.add_writer = aiofn_libevent_add_writer;
+    state->backend.remove_writer = aiofn_libevent_remove_writer;
     state->backend.last_error = aiofn_libevent_last_error;
     state->backend.signal_watch = aiofn_libevent_signal_watch;
     state->backend.signal_unwatch = aiofn_libevent_signal_unwatch;
+    state->backend.after_fork = aiofn_libevent_after_fork;
     return &state->backend;
 
 error:
+    if (config != NULL) {
+        event_config_free(config);
+    }
     if (state->base != NULL) {
         event_base_free(state->base);
     }

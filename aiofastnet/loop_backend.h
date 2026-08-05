@@ -27,7 +27,6 @@ enum {
     AIOFN_LOOP_FD_WRITE = 1u << 1
 };
 
-typedef struct aiofn_loop_fd_watch aiofn_loop_fd_watch_t;
 typedef struct aiofn_loop_signal_watch aiofn_loop_signal_watch_t;
 typedef struct aiofn_loop_action aiofn_loop_action_t;
 
@@ -49,6 +48,21 @@ typedef void (*aiofn_loop_fd_ready_fn)(
     void *callback_data,
     uint32_t events
 );
+
+/*
+ * Frontend-owned storage shared by the independent read and write watches for
+ * one fd. The frontend initializes fd, callback, and callback_data. The backend
+ * stores non-NULL native tokens for active directions and clears each token
+ * when that direction is removed. A backend with one combined registration
+ * may store the same native pointer in both token fields.
+ */
+typedef struct aiofn_loop_fd_watch {
+    int fd;
+    aiofn_loop_fd_ready_fn callback;
+    void *callback_data;
+    void *backend_read_token;
+    void *backend_write_token;
+} aiofn_loop_fd_watch_t;
 
 typedef void (*aiofn_loop_signal_fn)(
     void *callback_data,
@@ -130,42 +144,54 @@ typedef struct aiofn_loop_backend {
     );
 
     /*
-     * Cancel an action registered by call_soon() or call_at(). On success, the
-     * backend clears backend_token and synchronously guarantees that it will
-     * neither invoke callback nor access action later. It does not call callback;
-     * the frontend unlinks and releases the action after this returns.
+     * Notify the backend that an action registered by call_soon() or call_at()
+     * was cancelled. User-visible cancellation is owned by the frontend, which
+     * will never execute a cancelled action. On success, the backend clears
+     * backend_token and synchronously guarantees that it will neither invoke
+     * callback nor access action later, allowing the frontend to release it
+     * immediately. It does not call callback.
      */
     aiofn_loop_status (*action_cancel)(void *state, aiofn_loop_action_t *action);
 
     /*
-     * Add a persistent, level-triggered readiness watch and store a
-     * backend-owned cancellation token in watch_out. An fd has at most one
-     * watch; READ and WRITE interests may be combined. Aiofastnet retains
-     * ownership of callback_data. On failure, the adapter does not retain it
-     * and *watch_out is set to NULL.
+     * Add persistent, level-triggered read readiness to watch. The callback
+     * is not invoked inline. On success, store a non-NULL native token in
+     * backend_read_token. On failure, leave backend_read_token NULL.
      */
-    aiofn_loop_status (*fd_watch)(
+    aiofn_loop_status (*add_reader)(
         void *state,
-        int fd,
-        uint32_t events,
-        aiofn_loop_fd_ready_fn callback,
-        void *callback_data,
-        aiofn_loop_fd_watch_t **watch_out
-    );
-
-    /* Replace the complete interest mask of an existing watch. */
-    aiofn_loop_status (*fd_update)(
-        void *state,
-        aiofn_loop_fd_watch_t *watch,
-        uint32_t events
+        aiofn_loop_fd_watch_t *watch
     );
 
     /*
-     * Remove an existing watch. On success, its callback will not be called
-     * later, the adapter no longer accesses callback_data, and watch becomes
-     * invalid.
+     * Remove read readiness. On success, clear backend_read_token and do not
+     * report read readiness again unless add_reader() is called again.
      */
-    aiofn_loop_status (*fd_unwatch)(void *state, aiofn_loop_fd_watch_t *watch);
+    aiofn_loop_status (*remove_reader)(
+        void *state,
+        aiofn_loop_fd_watch_t *watch
+    );
+
+    /*
+     * Add persistent, level-triggered write readiness to watch. The callback
+     * is not invoked inline. On success, store a non-NULL native token in
+     * backend_write_token. On failure, leave backend_write_token NULL.
+     */
+    aiofn_loop_status (*add_writer)(
+        void *state,
+        aiofn_loop_fd_watch_t *watch
+    );
+
+    /*
+     * Remove write readiness. On success, clear backend_write_token and do not
+     * report write readiness again unless add_writer() is called again.
+     * After both directions are removed, the backend must no longer access
+     * watch, callback, or callback_data.
+     */
+    aiofn_loop_status (*remove_writer)(
+        void *state,
+        aiofn_loop_fd_watch_t *watch
+    );
 
     /*
      * Optional diagnostic for the most recent failed operation. The returned
@@ -199,6 +225,13 @@ typedef struct aiofn_loop_backend {
         void *state,
         aiofn_loop_signal_watch_t *watch
     );
+
+    /*
+     * Reinitialize backend state inherited by a child process after fork().
+     * The loop must be open and inactive, and this must be the first backend
+     * operation in the child. Existing actions and watches remain registered.
+     */
+    aiofn_loop_status (*after_fork)(void *state);
 } aiofn_loop_backend_t;
 
 #define AIOFN_LOOP_BACKEND_FIELD_END(field) \
@@ -208,7 +241,7 @@ typedef struct aiofn_loop_backend {
     ((backend)->struct_size >= AIOFN_LOOP_BACKEND_FIELD_END(field))
 
 #define AIOFN_LOOP_BACKEND_MIN_SIZE AIOFN_LOOP_BACKEND_FIELD_END(signal_unwatch)
-#define AIOFN_LOOP_BACKEND_CURRENT_SIZE AIOFN_LOOP_BACKEND_MIN_SIZE
+#define AIOFN_LOOP_BACKEND_CURRENT_SIZE AIOFN_LOOP_BACKEND_FIELD_END(after_fork)
 
 #ifdef __cplusplus
 }
