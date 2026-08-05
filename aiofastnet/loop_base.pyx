@@ -53,7 +53,7 @@ from cpython.pythread cimport (
 )
 from cpython.ref cimport Py_DECREF, Py_INCREF
 from libc.errno cimport EAGAIN, EINTR, errno
-from libc.stdint cimport uint32_t, uint64_t
+from libc.stdint cimport uint32_t, uint64_t, uint8_t
 from posix.unistd cimport close as posix_close, read as posix_read, write as posix_write
 
 cdef:
@@ -77,39 +77,44 @@ cdef class Handle:
 
     cdef:
         object __weakref__
+
         object _callback
         object _args
         object _context
         LoopBase _loop
-        object _source_traceback
-        object _repr
-        bint _cancelled
-        bint _is_c_callback
         double _when
+
         aiofn_loop_action_t _action
-        bint _action_pending
+        uint8_t _action_pending
+        uint8_t _is_c_callback
+        uint8_t _is_cancelled
+
+        object _repr
+        object _source_traceback
         Handle _pending_previous
         Handle _pending_next
 
     cdef inline NoResult _init(self, callback, args, LoopBase loop, context, double when) except NoResult.EXC:
         self._callback = callback
         self._args = args
+        self._context = context or PyContext_CopyCurrent()
+        self._loop = loop
+        self._when = when
+        self._action.callback = _action_callback
+        self._action.callback_data = <void *>self
+        self._action.backend_token = NULL
+
+        self._action_pending = False
+        self._is_cancelled = False
         self._is_c_callback = isinstance(callback, Callback)
         if self._is_c_callback:
             assert not args
-        self._context = context or PyContext_CopyCurrent()
-        self._loop = loop
-        self._cancelled = False
+
         self._repr = None
         if loop._debug:
             self._source_traceback = format_helpers.extract_stack(sys._getframe(1))
         else:
             self._source_traceback = None
-        self._when = when
-        self._action.callback = _action_callback
-        self._action.callback_data = <void *>self
-        self._action.backend_token = NULL
-        self._action_pending = False
         self._pending_previous = None
         self._pending_next = None
 
@@ -118,7 +123,7 @@ cdef class Handle:
         if self._repr is not None:
             return self._repr
         info = [self.__class__.__name__]
-        if self._cancelled:
+        if self._is_cancelled:
             info.append("cancelled")
         if self._when != 0:
             info.append(f"when={self._when}")
@@ -133,8 +138,8 @@ cdef class Handle:
         return self._context
 
     cpdef cancel(self):
-        if not self._cancelled:
-            self._cancelled = True
+        if not self._is_cancelled:
+            self._is_cancelled = True
             if self._loop._debug:
                 self._repr = repr(self)
             self._callback = None
@@ -144,33 +149,49 @@ cdef class Handle:
                 self._loop._unlink_handle(self)
 
     cpdef bint cancelled(self):
-        return self._cancelled
+        return self._is_cancelled
 
     cdef inline NoResult _run(self) except NoResult.EXC:
-        cdef object exc = None
+        cdef:
+            LoopBase loop = self._loop
+            object exc = None
+            double started = 0.0
+            bint debug = loop._debug
 
-        PyContext_Enter(self._context)
+        loop._current_handle = self
         try:
-            if self._is_c_callback:
-                (<Callback>self._callback).run()
-            else:
-                self._callback(*self._args)
-        except (SystemExit, KeyboardInterrupt):
-            raise
-        except BaseException as caught:
-            exc = caught
-        finally:
-            PyContext_Exit(self._context)
+            if unlikely(debug):
+                started = loop.time()
 
-        if unlikely(exc is not None):
-            context = {
-                "message": f"Exception in callback {self._format_callback_source()}",
-                "exception": exc,
-                "handle": self,
-            }
-            if self._source_traceback:
-                context["source_traceback"] = self._source_traceback
-            self._loop.call_exception_handler(context)
+            PyContext_Enter(self._context)
+            try:
+                if self._is_c_callback:
+                    (<Callback>self._callback).run()
+                else:
+                    self._callback(*self._args)
+            except (SystemExit, KeyboardInterrupt):
+                raise
+            except BaseException as caught:
+                exc = caught
+            finally:
+                PyContext_Exit(self._context)
+
+            if unlikely(exc is not None):
+                context = {
+                    "message": f"Exception in callback {self._format_callback_source()}",
+                    "exception": exc,
+                    "handle": self,
+                }
+                if self._source_traceback:
+                    context["source_traceback"] = self._source_traceback
+                loop.call_exception_handler(context)
+
+            if unlikely(debug):
+                duration = loop.time() - started
+                if duration >= loop.slow_callback_duration:
+                    _logger.warning("Executing %s took %.3f seconds", self, duration)
+        finally:
+            loop._current_handle = None
         return NoResult.OK
 
     cdef inline object _format_callback_source(self):
@@ -193,7 +214,7 @@ cdef class TimerHandle(Handle):
             return NotImplemented
         handle = other
         equal = (self._when == handle._when and self._callback == handle._callback and self._args == handle._args and
-                 self._cancelled == handle._cancelled)
+                 self._is_cancelled == handle._is_cancelled)
         if op == Py_LT:
             return self._when < handle._when
         if op == Py_LE:
@@ -400,8 +421,8 @@ cdef class _SelfPipe:
         for idx in range(handle_count):
             handle = <Handle>handles[idx]
             try:
-                if execute and not handle._cancelled:
-                    self.loop._run_handle(handle)
+                if execute and not handle._is_cancelled:
+                    handle._run()
             finally:
                 Py_DECREF(handle)
         return handle_count
@@ -441,8 +462,8 @@ cdef void _fd_ready_callback(void *callback_data, uint32_t events) noexcept with
 cdef void _signal_callback(void *callback_data, int signum) noexcept with gil:
     cdef _SignalCallback callback = <_SignalCallback>callback_data
     try:
-        if signum == callback.signum and not callback.handle._cancelled:
-            callback.loop._run_handle(callback.handle)
+        if signum == callback.signum and not callback.handle._is_cancelled:
+            callback.handle._run()
     except BaseException as exc:
         callback.loop._backend_failed(exc)
 
@@ -594,8 +615,8 @@ cdef class LoopBase:
 
     cdef inline NoResult _complete_action(self, Handle handle) except NoResult.EXC:
         self._unlink_handle(handle)
-        if not handle._cancelled:
-            self._run_handle(handle)
+        if not handle._is_cancelled:
+            handle._run()
         return NoResult.OK
 
     cdef inline NoResult _cancel_pending_handles(self) except NoResult.EXC:
@@ -733,23 +754,6 @@ cdef class LoopBase:
         if not future.done():
             raise RuntimeError("Event loop stopped before Future completed.")
         return future.result()
-
-    cdef inline NoResult _run_handle(self, Handle handle) except NoResult.EXC:
-        cdef double started
-
-        self._current_handle = handle
-        try:
-            if unlikely(self._debug):
-                started = self.time()
-                handle._run()
-                duration = self.time() - started
-                if duration >= self.slow_callback_duration:
-                    _logger.warning("Executing %s took %.3f seconds", handle, duration)
-            else:
-                handle._run()
-        finally:
-            self._current_handle = None
-        return NoResult.OK
 
     cdef inline NoResult _backend_failed(self, object exc) except NoResult.EXC:
         if self._backend_fatal_error is None:
@@ -972,9 +976,9 @@ cdef class LoopBase:
 
     cdef inline NoResult _fd_ready(self, _FDCallbacks callbacks, uint32_t events) except NoResult.EXC:
         if events & AIOFN_LOOP_FD_READ and callbacks.reader is not None:
-            self._run_handle(callbacks.reader)
+            callbacks.reader._run()
         if events & AIOFN_LOOP_FD_WRITE and callbacks.writer is not None:
-            self._run_handle(callbacks.writer)
+            callbacks.writer._run()
 
     async def sock_recv(self, sock, n):
         future = self.create_future()
