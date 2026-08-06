@@ -9,6 +9,7 @@
 
 typedef struct aiofn_libevent_state {
     aiofn_loop_backend_t backend;
+    aiofn_reactor_backend_t reactor;
     struct event_base *base;
     char last_error[256];
 } aiofn_libevent_state_t;
@@ -252,10 +253,12 @@ aiofn_loop_backend_t *aiofn_libevent_backend_new(void) {
     state->backend.call_soon = aiofn_libevent_call_soon;
     state->backend.call_at = aiofn_libevent_call_at;
     state->backend.action_cancel = aiofn_libevent_action_cancel;
-    state->backend.add_reader = aiofn_libevent_add_reader;
-    state->backend.remove_reader = aiofn_libevent_remove_reader;
-    state->backend.add_writer = aiofn_libevent_add_writer;
-    state->backend.remove_writer = aiofn_libevent_remove_writer;
+    state->reactor.struct_size = AIOFN_REACTOR_BACKEND_CURRENT_SIZE;
+    state->reactor.add_reader = aiofn_libevent_add_reader;
+    state->reactor.remove_reader = aiofn_libevent_remove_reader;
+    state->reactor.add_writer = aiofn_libevent_add_writer;
+    state->reactor.remove_writer = aiofn_libevent_remove_writer;
+    state->backend.reactor = &state->reactor;
     state->backend.last_error = aiofn_libevent_last_error;
     state->backend.signal_watch = aiofn_libevent_signal_watch;
     state->backend.signal_unwatch = aiofn_libevent_signal_unwatch;

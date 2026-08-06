@@ -79,6 +79,28 @@ typedef struct aiofn_loop_signal_watch {
 } aiofn_loop_signal_watch_t;
 
 /*
+ * Optional readiness-based socket operations. The frontend owns each watch;
+ * the reactor stores its native registration tokens in that same object.
+ * struct_size permits appending operations without changing the meaning of
+ * existing fields. The interface object must remain valid until backend close.
+ */
+typedef struct aiofn_reactor_backend {
+    size_t struct_size;
+
+    /* Add persistent, level-triggered read readiness; do not call inline. */
+    aiofn_loop_status (*add_reader)(void *state, aiofn_loop_fd_watch_t *watch);
+
+    /* Remove read readiness and clear watch->backend_read_token. */
+    aiofn_loop_status (*remove_reader)(void *state, aiofn_loop_fd_watch_t *watch);
+
+    /* Add persistent, level-triggered write readiness; do not call inline. */
+    aiofn_loop_status (*add_writer)(void *state, aiofn_loop_fd_watch_t *watch);
+
+    /* Remove write readiness and clear watch->backend_write_token. */
+    aiofn_loop_status (*remove_writer)(void *state, aiofn_loop_fd_watch_t *watch);
+} aiofn_reactor_backend_t;
+
+/*
 * Every backend operation is called from the event-loop thread. No backend
 * operation is invoked concurrently from another thread. Backends do not
 * need to protect their internal structures from multi-threaded access.
@@ -168,45 +190,8 @@ typedef struct aiofn_loop_backend {
      */
     aiofn_loop_status (*action_cancel)(void *state, aiofn_loop_action_t *action);
 
-    /*
-     * Add persistent, level-triggered read readiness to watch. The callback
-     * is not invoked inline. On success, store a non-NULL native token in
-     * backend_read_token. On failure, leave backend_read_token NULL.
-     */
-    aiofn_loop_status (*add_reader)(
-        void *state,
-        aiofn_loop_fd_watch_t *watch
-    );
-
-    /*
-     * Remove read readiness. On success, clear backend_read_token and do not
-     * report read readiness again unless add_reader() is called again.
-     */
-    aiofn_loop_status (*remove_reader)(
-        void *state,
-        aiofn_loop_fd_watch_t *watch
-    );
-
-    /*
-     * Add persistent, level-triggered write readiness to watch. The callback
-     * is not invoked inline. On success, store a non-NULL native token in
-     * backend_write_token. On failure, leave backend_write_token NULL.
-     */
-    aiofn_loop_status (*add_writer)(
-        void *state,
-        aiofn_loop_fd_watch_t *watch
-    );
-
-    /*
-     * Remove write readiness. On success, clear backend_write_token and do not
-     * report write readiness again unless add_writer() is called again.
-     * After both directions are removed, the backend must no longer access
-     * watch, callback, or callback_data.
-     */
-    aiofn_loop_status (*remove_writer)(
-        void *state,
-        aiofn_loop_fd_watch_t *watch
-    );
+    /* Optional readiness-based socket interface; NULL means unsupported. */
+    const aiofn_reactor_backend_t *reactor;
 
     /*
      * Optional diagnostic for the most recent failed operation. The returned
@@ -246,6 +231,15 @@ typedef struct aiofn_loop_backend {
 
 #define AIOFN_LOOP_BACKEND_HAS_FIELD(backend, field) \
     ((backend)->struct_size >= AIOFN_LOOP_BACKEND_FIELD_END(field))
+
+#define AIOFN_REACTOR_BACKEND_FIELD_END(field) \
+    (offsetof(aiofn_reactor_backend_t, field) + sizeof(((aiofn_reactor_backend_t *)0)->field))
+
+#define AIOFN_REACTOR_BACKEND_HAS_FIELD(reactor, field) \
+    ((reactor)->struct_size >= AIOFN_REACTOR_BACKEND_FIELD_END(field))
+
+#define AIOFN_REACTOR_BACKEND_MIN_SIZE AIOFN_REACTOR_BACKEND_FIELD_END(remove_writer)
+#define AIOFN_REACTOR_BACKEND_CURRENT_SIZE AIOFN_REACTOR_BACKEND_FIELD_END(remove_writer)
 
 #define AIOFN_LOOP_BACKEND_MIN_SIZE AIOFN_LOOP_BACKEND_FIELD_END(signal_unwatch)
 #define AIOFN_LOOP_BACKEND_CURRENT_SIZE AIOFN_LOOP_BACKEND_FIELD_END(signal_unwatch)

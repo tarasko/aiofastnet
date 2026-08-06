@@ -25,12 +25,14 @@ from .api_start_tls import start_tls
 from .loop_backend cimport (
     AIOFN_LOOP_BACKEND_CAPSULE_NAME,
     AIOFN_LOOP_BACKEND_MIN_SIZE,
+    AIOFN_REACTOR_BACKEND_MIN_SIZE,
     AIOFN_LOOP_FD_READ,
     AIOFN_LOOP_FD_WRITE,
     AIOFN_LOOP_NOT_SUPPORTED,
     AIOFN_LOOP_NO_MEMORY,
     AIOFN_LOOP_OK,
     aiofn_loop_backend_t,
+    aiofn_reactor_backend_t,
     aiofn_loop_action_t,
     aiofn_loop_fd_watch_t,
     aiofn_loop_signal_watch_t,
@@ -345,7 +347,7 @@ cdef class _SelfPipe:
             self.watch.fd = reader
             self.watch.callback = _threadsafe_ready_callback
             self.watch.callback_data = <void *>self
-            loop._check_status(loop._backend.add_reader(loop._backend.state, &self.watch))
+            loop._check_status(loop._reactor.add_reader(loop._backend.state, &self.watch))
         except:
             posix_close(self.reader)
             posix_close(self.writer)
@@ -444,7 +446,7 @@ cdef class _SelfPipe:
 
     cdef inline NoResult close(self) except NoResult.EXC:
         if self.watch.backend_read_token != NULL:
-            self.loop._check_status(self.loop._backend.remove_reader(self.loop._backend.state, &self.watch))
+            self.loop._check_status(self.loop._reactor.remove_reader(self.loop._backend.state, &self.watch))
 
         while self.process(False) != 0:
             pass
@@ -502,6 +504,7 @@ cdef class LoopBase:
         object __weakref__
 
         aiofn_loop_backend_t *_backend
+        const aiofn_reactor_backend_t *_reactor
         object _backend_owner
         str _backend_name
         object _backend_fatal_error
@@ -564,12 +567,18 @@ cdef class LoopBase:
 
         if (backend_ptr.state == NULL or backend_ptr.run == NULL or backend_ptr.stop == NULL or backend_ptr.close == NULL or
                 backend_ptr.now_ns == NULL or backend_ptr.call_soon == NULL or backend_ptr.call_at == NULL or
-                backend_ptr.action_cancel == NULL or backend_ptr.add_reader == NULL or backend_ptr.remove_reader == NULL or
-                backend_ptr.add_writer == NULL or backend_ptr.remove_writer == NULL or backend_ptr.signal_watch == NULL or
+                backend_ptr.action_cancel == NULL or backend_ptr.reactor == NULL or
+                backend_ptr.signal_watch == NULL or
                 backend_ptr.signal_unwatch == NULL):
             raise ValueError("loop backend is missing a required operation")
+        if backend_ptr.reactor.struct_size < AIOFN_REACTOR_BACKEND_MIN_SIZE:
+            raise ValueError("loop backend reactor structure is too small")
+        if (backend_ptr.reactor.add_reader == NULL or backend_ptr.reactor.remove_reader == NULL or
+                backend_ptr.reactor.add_writer == NULL or backend_ptr.reactor.remove_writer == NULL):
+            raise ValueError("loop backend reactor is missing a required operation")
 
         self._backend = backend_ptr
+        self._reactor = backend_ptr.reactor
         self._backend_owner = backend
         assert backend_ptr.name != NULL
         self._backend_name = backend_ptr.name.decode("utf-8", "replace")
@@ -882,7 +891,7 @@ cdef class LoopBase:
                 else:
                     callbacks.reader = handle
                     callbacks.reader_fileobj = fileobj
-                    self._check_status(self._backend.add_reader(self._backend.state, &callbacks.watch))
+                    self._check_status(self._reactor.add_reader(self._backend.state, &callbacks.watch))
             else:
                 if callbacks.writer is not None:
                     callbacks.writer.cancel()
@@ -891,7 +900,7 @@ cdef class LoopBase:
                 else:
                     callbacks.writer = handle
                     callbacks.writer_fileobj = fileobj
-                    self._check_status(self._backend.add_writer(self._backend.state, &callbacks.watch))
+                    self._check_status(self._reactor.add_writer(self._backend.state, &callbacks.watch))
         except BaseException:
             if reader:
                 callbacks.reader = None
@@ -919,13 +928,13 @@ cdef class LoopBase:
         if reader:
             if callbacks.reader is None:
                 return False
-            self._check_status(self._backend.remove_reader(self._backend.state, &callbacks.watch))
+            self._check_status(self._reactor.remove_reader(self._backend.state, &callbacks.watch))
             callbacks.reader = None
             callbacks.reader_fileobj = None
         else:
             if callbacks.writer is None:
                 return False
-            self._check_status(self._backend.remove_writer(self._backend.state, &callbacks.watch))
+            self._check_status(self._reactor.remove_writer(self._backend.state, &callbacks.watch))
             callbacks.writer = None
             callbacks.writer_fileobj = None
 
@@ -936,12 +945,12 @@ cdef class LoopBase:
 
     cdef inline NoResult _remove_fd(self, _FDCallbacks callbacks) except NoResult.EXC:
         if callbacks.reader is not None:
-            self._check_status(self._backend.remove_reader(self._backend.state, &callbacks.watch))
+            self._check_status(self._reactor.remove_reader(self._backend.state, &callbacks.watch))
             callbacks.reader = None
             callbacks.reader_fileobj = None
 
         if callbacks.writer is not None:
-            self._check_status(self._backend.remove_writer(self._backend.state, &callbacks.watch))
+            self._check_status(self._reactor.remove_writer(self._backend.state, &callbacks.watch))
             callbacks.writer = None
             callbacks.writer_fileobj = None
 
