@@ -496,14 +496,16 @@ cdef class LoopBase:
 
     cdef:
         object __weakref__
+
         aiofn_loop_backend_t *_backend
         object _backend_owner
         str _backend_name
         object _backend_fatal_error
-        dict _backend_fd_callbacks
-        dict _backend_signal_handlers
 
-        # We need _pending_handles because:
+        dict _fd_callbacks      # Dict[Fileno, _FDCallbacks]
+        dict _signal_handlers   # Dict[Signal, _SignalCallback]
+
+        # An intrusive list of callbacks registered in the backend with call_soon and call_at.
         # * it keeps each Handle alive while the backend retains a pointer to its embedded aiofn_loop_action_t.
         #   The caller may immediately discard the returned Python handle.
         # * it lets LoopBase.close() enumerate pending actions, call action_cancel(), and release backend-native
@@ -568,8 +570,8 @@ cdef class LoopBase:
         assert backend_ptr.name != NULL
         self._backend_name = backend_ptr.name.decode("utf-8", "replace")
         self._backend_fatal_error = None
-        self._backend_fd_callbacks = {}
-        self._backend_signal_handlers = {}
+        self._fd_callbacks = {}
+        self._signal_handlers = {}
         self._pending_handles = None
         self._current_handle_source_traceback = None
         self._closed = False
@@ -592,20 +594,22 @@ cdef class LoopBase:
         )
 
     cdef inline NoResult _check_status(self, aiofn_loop_status status) except NoResult.EXC:
-        cdef const char *detail = NULL
-
         if status == AIOFN_LOOP_OK:
             return NoResult.OK
+
         if self._backend.last_error != NULL:
-            detail = self._backend.last_error(self._backend.state)
-        message = detail.decode("utf-8", "replace") if detail != NULL else f"{self._backend_name} backend error {status}"
+            message = self._backend.last_error(self._backend.state).decode("utf-8", "replace")
+        else:
+            message = f"{self._backend_name} backend error {status}"
+
         if status == AIOFN_LOOP_NO_MEMORY:
             raise MemoryError(message)
-        if status == AIOFN_LOOP_INVALID_ARGUMENT:
+        elif status == AIOFN_LOOP_INVALID_ARGUMENT:
             raise ValueError(message)
-        if status == AIOFN_LOOP_NOT_SUPPORTED:
+        elif status == AIOFN_LOOP_NOT_SUPPORTED:
             raise NotImplementedError(message)
-        raise RuntimeError(message)
+        else:
+            raise RuntimeError(message)
 
     cdef inline void _link_handle(self, Handle handle) noexcept:
         handle._pending_next = self._pending_handles
@@ -631,22 +635,6 @@ cdef class LoopBase:
             self._check_status(self._backend.remove_reader(self._backend.state, watch))
         else:
             self._check_status(self._backend.remove_writer(self._backend.state, watch))
-        return NoResult.OK
-
-    cdef inline NoResult _backend_signal_watch(
-        self, int signum, aiofn_loop_signal_watch_t *watch, object callback_data
-    ) except NoResult.EXC:
-        Py_INCREF(callback_data)
-        try:
-            self._check_status(self._backend.signal_watch(self._backend.state, signum, watch))
-        except:
-            Py_DECREF(callback_data)
-            raise
-        return NoResult.OK
-
-    cdef inline NoResult _backend_signal_unwatch(self, aiofn_loop_signal_watch_t *watch, object callback_data) except NoResult.EXC:
-        self._check_status(self._backend.signal_unwatch(self._backend.state, watch))
-        Py_DECREF(callback_data)
         return NoResult.OK
 
     cdef inline aiofn_loop_status _backend_run(self) noexcept:
@@ -846,13 +834,13 @@ cdef class LoopBase:
 
         self._self_pipe.close()
 
-        for signal_callback in self._backend_signal_handlers.values():
+        for signal_callback in self._signal_handlers.values():
             self._remove_signal_callback(signal_callback)
-        self._backend_signal_handlers = None
+        self._signal_handlers = None
 
-        for fd_callback in self._backend_fd_callbacks.values():
+        for fd_callback in self._fd_callbacks.values():
             self._remove_fd(fd_callback)
-        self._backend_fd_callbacks = None
+        self._fd_callbacks = None
 
         while self._pending_handles is not None:
             # Handle.cancel unlinks handle from _pending_handles
@@ -886,12 +874,12 @@ cdef class LoopBase:
 
         cdef:
             fileno_obj = _fileobj_to_fileno_obj(fileobj)
-            _FDCallbacks callbacks = self._backend_fd_callbacks.get(fileno_obj)
+            _FDCallbacks callbacks = self._fd_callbacks.get(fileno_obj)
             bint created = False
 
         if callbacks is None:
             callbacks = _FDCallbacks(self, fileno_obj)
-            self._backend_fd_callbacks[fileno_obj] = callbacks
+            self._fd_callbacks[fileno_obj] = callbacks
             created = True
 
         cdef Handle handle = create_handle(callback, args, self)
@@ -923,7 +911,7 @@ cdef class LoopBase:
                 callbacks.writer_fileobj = None
 
             if created:
-                self._backend_fd_callbacks.pop(fileno_obj, None)
+                self._fd_callbacks.pop(fileno_obj, None)
             raise
         return NoResult.OK
 
@@ -935,7 +923,7 @@ cdef class LoopBase:
         if self.is_closed():
             return False
         fd = _fileobj_to_fileno_obj(fileobj)
-        callbacks = self._backend_fd_callbacks.get(fd)
+        callbacks = self._fd_callbacks.get(fd)
         if callbacks is None:
             return False
         handle = callbacks.reader if reader else callbacks.writer
@@ -950,7 +938,7 @@ cdef class LoopBase:
             callbacks.writer = None
             callbacks.writer_fileobj = None
         if callbacks.reader is None and callbacks.writer is None:
-            self._backend_fd_callbacks.pop(fd)
+            self._fd_callbacks.pop(fd)
         return True
 
     cdef inline NoResult _remove_fd(self, _FDCallbacks callbacks) except NoResult.EXC:
@@ -1239,49 +1227,46 @@ cdef class LoopBase:
                 })
 
     def add_signal_handler(self, sig, callback, *args):
-        cdef:
-            Handle handle
-            _SignalCallback signal_callback
-
+        self._check_signal(sig)
+        self._check_callback(callback, "add_signal_handler")
         if threading.current_thread() is not threading.main_thread():
             raise RuntimeError("add_signal_handler() can only be called from the main thread")
-
-        self._check_signal(sig)
+        self._check_thread()
         self._check_closed()
-        self._check_callback(callback, "add_signal_handler")
 
-        handle = create_handle(callback, args, self)
-        signal_callback = self._backend_signal_handlers.get(sig)
+        cdef:
+            Handle handle = create_handle(callback, args, self)
+            _SignalCallback signal_callback = self._signal_handlers.get(sig)
+
         if signal_callback is not None:
             signal_callback.handle.cancel()
             signal_callback.handle = handle
             return
 
         signal_callback = _SignalCallback(self, sig, handle)
-        self._backend_signal_watch(sig, &signal_callback.watch, signal_callback)
+        self._signal_handlers[sig] = signal_callback
+
         try:
-            self._backend_signal_handlers[sig] = signal_callback
+            self._check_status(self._backend.signal_watch(self._backend.state, sig, &signal_callback.watch))
         except:
-            self._backend_signal_unwatch(&signal_callback.watch, signal_callback)
+            self._signal_handlers.pop(sig, None)
             raise
 
     def remove_signal_handler(self, sig):
-        cdef _SignalCallback signal_callback
-
         self._check_signal(sig)
-        signal_callback = self._backend_signal_handlers.pop(sig, None)
+        self._check_thread()
+        self._check_closed()
+
+        cdef _SignalCallback signal_callback = self._signal_handlers.pop(sig, None)
         if signal_callback is None:
             return False
+
         self._remove_signal_callback(signal_callback)
         return True
 
     cdef inline NoResult _remove_signal_callback(self, _SignalCallback signal_callback) except NoResult.EXC:
-        self._backend_signal_unwatch(&signal_callback.watch, signal_callback)
         signal_callback.handle.cancel()
-        signal.signal(
-            signal_callback.signum,
-            signal.default_int_handler if signal_callback.signum == signal.SIGINT else signal.SIG_DFL,
-        )
+        self._check_status(self._backend.signal_unwatch(self._backend.state, &signal_callback.watch))
         return NoResult.OK
 
     cdef inline NoResult _check_signal(self, object sig) except NoResult.EXC:

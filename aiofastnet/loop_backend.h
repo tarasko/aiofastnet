@@ -225,8 +225,9 @@ typedef struct aiofn_loop_backend {
 
     /*
      * Remove a signal watch. On success, its callback will not be called
-     * later, the adapter no longer accesses callback_data, and watch becomes
-     * invalid.
+     * later, the adapter no longer accesses callback_data, watch becomes
+     * invalid, and the process-level disposition for signum is restored to
+     * what it was before signal_watch().
      */
     aiofn_loop_status (*signal_unwatch)(
         void *state,
