@@ -1091,8 +1091,10 @@ cdef class LoopBase:
         message = context.get("message") or "Unhandled exception in event loop"
         exception = context.get("exception")
         exc_info = (type(exception), exception, exception.__traceback__) if exception is not None else False
+
         if "source_traceback" not in context and self._current_handle_source_traceback:
             context["handle_traceback"] = self._current_handle_source_traceback
+
         lines = [message]
         for key in sorted(context):
             if key in {"message", "exception"}:

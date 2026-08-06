@@ -88,6 +88,12 @@ typedef struct aiofn_loop_signal_watch {
 * returns. The backend must therefore permit same-thread reentrancy.
 * A callback may remove and destroy the action or watch that invoked it.
 * The backend must not dereference that action or watch after the callback returns.
+*
+* LoopBase validates public arguments and enforces backend lifecycle rules before
+* making a call. Consequently, backend operations may assume that state and
+* pointer arguments are valid, calls are made in the permitted lifecycle state,
+* and add/remove operations have valid matching registrations. Backends still
+* must handle failures reported by the native loop library.
 */
 typedef struct aiofn_loop_backend {
     /*

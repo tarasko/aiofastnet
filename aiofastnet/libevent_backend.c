@@ -10,7 +10,6 @@
 typedef struct aiofn_libevent_state {
     aiofn_loop_backend_t backend;
     struct event_base *base;
-    int closed;
     char last_error[256];
 } aiofn_libevent_state_t;
 
@@ -63,10 +62,8 @@ static void aiofn_libevent_stop(void *data) {
 static void aiofn_libevent_close(void *data) {
     aiofn_libevent_state_t *state = data;
 
-    if (state->closed) {
-        return;
-    }
-    state->closed = 1;
+    event_base_free(state->base);
+    state->base = NULL;
 }
 
 static uint64_t aiofn_libevent_now_ns(void *data) {
@@ -82,10 +79,6 @@ static aiofn_loop_status aiofn_libevent_call_soon(void *data, aiofn_loop_action_
     aiofn_libevent_state_t *state = data;
     struct event *event;
 
-    if (state->closed) {
-        snprintf(state->last_error, sizeof(state->last_error), "backend is closed");
-        return AIOFN_LOOP_ERROR;
-    }
     event = event_new(state->base, -1, 0, aiofn_libevent_on_action, action);
     if (event == NULL) {
         return AIOFN_LOOP_NO_MEMORY;
@@ -106,10 +99,6 @@ static aiofn_loop_status aiofn_libevent_call_at(
     uint64_t now_ns;
     uint64_t delay_ns;
 
-    if (state->closed) {
-        snprintf(state->last_error, sizeof(state->last_error), "backend is closed");
-        return AIOFN_LOOP_ERROR;
-    }
     event = evtimer_new(state->base, aiofn_libevent_on_action, action);
     if (event == NULL) {
         return AIOFN_LOOP_NO_MEMORY;
@@ -132,9 +121,6 @@ static aiofn_loop_status aiofn_libevent_action_cancel(void *data, aiofn_loop_act
     aiofn_libevent_state_t *state = data;
     struct event *event = action->backend_token;
 
-    if (event == NULL) {
-        return AIOFN_LOOP_INVALID_ARGUMENT;
-    }
     if (event_del(event) != 0) {
         snprintf(state->last_error, sizeof(state->last_error), "event_del(action) failed");
         return AIOFN_LOOP_ERROR;
@@ -173,9 +159,6 @@ static aiofn_loop_status aiofn_libevent_fd_unwatch_direction(void *data, void **
     aiofn_libevent_state_t *state = data;
     struct event *event = *backend_token;
 
-    if (event == NULL) {
-        return AIOFN_LOOP_INVALID_ARGUMENT;
-    }
     if (event_del(event) != 0) {
         snprintf(state->last_error, sizeof(state->last_error), "event_del(fd) failed");
         return AIOFN_LOOP_ERROR;
@@ -205,9 +188,6 @@ static aiofn_loop_status aiofn_libevent_signal_watch(
     aiofn_libevent_state_t *state = data;
     struct event *event;
 
-    if (signum <= 0) {
-        return AIOFN_LOOP_INVALID_ARGUMENT;
-    }
     event = evsignal_new(state->base, signum, aiofn_libevent_on_signal, watch);
     if (event == NULL) {
         watch->backend_token = NULL;
@@ -224,9 +204,12 @@ static aiofn_loop_status aiofn_libevent_signal_watch(
 }
 
 static aiofn_loop_status aiofn_libevent_signal_unwatch(void *data, aiofn_loop_signal_watch_t *watch) {
+    aiofn_libevent_state_t *state = data;
     struct event *event = watch->backend_token;
-    (void)data;
-    event_del(event);
+    if (event_del(event) != 0) {
+        snprintf(state->last_error, sizeof(state->last_error), "event_del(signal) failed");
+        return AIOFN_LOOP_ERROR;
+    }
     event_free(event);
     watch->backend_token = NULL;
     return AIOFN_LOOP_OK;
@@ -247,8 +230,10 @@ static aiofn_loop_status aiofn_libevent_after_fork(void *data) {
 }
 
 aiofn_loop_backend_t *aiofn_libevent_backend_new(void) {
+    /* Use calloc because it also initializes memory to zero */
     aiofn_libevent_state_t *state = calloc(1, sizeof(*state));
     struct event_config *config = NULL;
+
     if (state == NULL) {
         return NULL;
     }
@@ -299,13 +284,10 @@ error:
 
 void aiofn_libevent_backend_free(aiofn_loop_backend_t *backend) {
     aiofn_libevent_state_t *state;
-    if (backend == NULL) {
-        return;
-    }
     state = backend->state;
-    if (!state->closed) {
-        aiofn_libevent_close(state);
+    /* EventLoop construction may fail before LoopBase.close() is reached. */
+    if (state->base != NULL) {
+        event_base_free(state->base);
     }
-    event_base_free(state->base);
     free(state);
 }
