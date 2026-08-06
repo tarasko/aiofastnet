@@ -37,7 +37,7 @@ from .loop_backend cimport (
     aiofn_loop_signal_watch_t,
     aiofn_loop_status,
 )
-from .utils cimport Callback, NoResult, unlikely
+from .utils cimport NoResult, unlikely
 
 from cpython.contextvars cimport PyContext_CopyCurrent, PyContext_Enter, PyContext_Exit
 from cpython.object cimport Py_EQ, Py_GE, Py_GT, Py_LE, Py_LT, Py_NE
@@ -85,9 +85,8 @@ cdef class Handle:
         double _when
 
         aiofn_loop_action_t _action
-        uint8_t _action_pending
-        uint8_t _is_c_callback
-        uint8_t _is_cancelled
+        bint _action_pending
+        bint _is_cancelled
 
         object _repr
         object _source_traceback
@@ -96,7 +95,7 @@ cdef class Handle:
 
     cdef inline NoResult _init(self, callback, args, LoopBase loop, context, double when) except NoResult.EXC:
         self._callback = callback
-        self._args = args
+        self._args = args if args else None
         self._context = PyContext_CopyCurrent() if context is None else context
         self._loop = loop
         self._when = when
@@ -106,9 +105,6 @@ cdef class Handle:
 
         self._action_pending = False
         self._is_cancelled = False
-        self._is_c_callback = isinstance(callback, Callback)
-        if self._is_c_callback:
-            assert not args
 
         self._repr = None
         if loop._debug:
@@ -169,8 +165,8 @@ cdef class Handle:
         try:
             PyContext_Enter(self._context)
             try:
-                if self._is_c_callback:
-                    (<Callback>self._callback).run()
+                if self._args is None:
+                    self._callback()
                 else:
                     self._callback(*self._args)
             finally:

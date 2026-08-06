@@ -15,14 +15,6 @@ cdef extern from "Python.h":
     int PyBytes_Check(PyObject *o)
 
 
-cdef class Callback:
-    cdef NoResult run(self) except NoResult.EXC:
-        raise NotImplementedError()
-
-    def __call__(self):
-        self.run()
-
-
 cpdef aiofn_set_socket_extra_info(object extra, object sock):
     try:
         extra['sockname'] = sock.getsockname()

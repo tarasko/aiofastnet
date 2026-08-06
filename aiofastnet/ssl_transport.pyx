@@ -17,7 +17,6 @@ from posix.types cimport off_t
 
 from . import constants
 from .utils cimport (
-    Callback,
     NoResult,
     SSLProtocolState,
     AppProtocolState,
@@ -1035,9 +1034,6 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         object _sock_fd_obj
         int _sock_fd
 
-        Callback _read_ready_callback
-        Callback _write_ready_callback
-
     def __init__(self, loop, app_protocol, sslcontext,
                  bint server_side,
                  double ssl_handshake_timeout,
@@ -1076,8 +1072,6 @@ cdef class SSLTransport_Socket(SSLTransportBase):
 
         self._write_ready_registered = False
         self._write_had_eagain = False
-        self._read_ready_callback = _SSLReadCallback(self)
-        self._write_ready_callback = _SSLWriteCallback(self)
 
         aiofn_set_nodelay(sock)
 
@@ -1091,7 +1085,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         self._sock = sock
         cdef bint reader_added = False
         try:
-            self._loop.add_reader(self._sock_fd_obj, self._read_ready_callback)
+            self._loop.add_reader(self._sock_fd_obj, self._read_ready)
             reader_added = True
             self._start_handshake()
             _ssl_socket_post_handshake_test_hook(self)
@@ -1135,14 +1129,14 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         self._read_paused = False
         if unlikely(self._is_debug):
             _logger.debug("%r: reading resumed by user", self)
-        self._loop.add_reader(self._sock_fd_obj, self._read_ready_callback)
+        self._loop.add_reader(self._sock_fd_obj, self._read_ready)
 
         # We need to also manually schedule _read_ready event because there
         # might be some leftover data in incoming BIO or openssl internal
         # read buffer. We can't rely only on _loop.add_reader, because if
         # socket has no data to read then we will get stuck.
         if self._state in (SSLProtocolState.WRAPPED, SSLProtocolState.FLUSHING, SSLProtocolState.SHUTDOWN):
-            self._loop.call_soon(self._read_ready_callback)
+            self._loop.call_soon(self._read_ready)
 
     cpdef tuple get_write_buffer_limits(self):
         self._check_thread("get_write_buffer_limits")
@@ -1215,7 +1209,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         if self._connection_lost_scheduled or self._write_ready_registered:
             return NoResult.OK
         self._write_ready_registered = True
-        self._loop.add_writer(self._sock_fd_obj, self._write_ready_callback)
+        self._loop.add_writer(self._sock_fd_obj, self._write_ready)
 
     cdef inline NoResult _drop_writer(self) except NoResult.EXC:
         if unlikely(self._is_debug):
@@ -1227,9 +1221,6 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         self._loop.remove_writer(self._sock_fd_obj)
 
     def _write_ready(self):
-        self._write_ready_c()
-
-    cdef NoResult _write_ready_c(self) except NoResult.EXC:
         if unlikely(self._is_debug):
             _logger.debug("%r: _write_ready event", self)
 
@@ -1261,7 +1252,6 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                 self._drop_writer()
         except:
             self._handle_error("Error occurred during write")
-        return NoResult.OK
 
     cdef bint _try_sendfile(self, SendFileRequest req) except -1:
         """
@@ -1295,9 +1285,6 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             raise RuntimeError(f"unexpected SSL_sendfile error: {ssl_error_name(ssl_error)}")
 
     def _read_ready(self):
-        self._read_ready_c()
-
-    cdef NoResult _read_ready_c(self) except NoResult.EXC:
         if unlikely(self._is_debug):
             _logger.debug("%r: _read_ready event", self)
 
@@ -1338,7 +1325,6 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                 self._incoming_bio_updated()
         except:
             self._handle_error("Error occurred during read")
-        return NoResult.OK
 
     cpdef _force_close(self, exc):
         if self._sock is None:
@@ -1371,35 +1357,11 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                     _logger.debug("%r: _sock.close() called", self)
             self._sock = None
             self._app_protocol = None
-            self._read_ready_callback = None
-            self._write_ready_callback = None
             self._loop = None
             server = self._server
             if server is not None:
                 server._detach(self)
                 self._server = None
-
-
-cdef class _SSLReadCallback(Callback):
-    cdef SSLTransport_Socket _transport
-
-    def __cinit__(self, SSLTransport_Socket transport):
-        self._transport = transport
-
-    cdef NoResult run(self) except NoResult.EXC:
-        self._transport._read_ready_c()
-        return NoResult.OK
-
-
-cdef class _SSLWriteCallback(Callback):
-    cdef SSLTransport_Socket _transport
-
-    def __cinit__(self, SSLTransport_Socket transport):
-        self._transport = transport
-
-    cdef NoResult run(self) except NoResult.EXC:
-        self._transport._write_ready_c()
-        return NoResult.OK
 
 
 cdef class SSLProtocol(Protocol):

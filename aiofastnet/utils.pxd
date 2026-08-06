@@ -10,10 +10,6 @@ cdef enum NoResult:
     OK = 0
 
 
-cdef class Callback:
-    cdef NoResult run(self) except NoResult.EXC
-
-
 cpdef enum SSLProtocolState:
     UNWRAPPED = 0
     DO_HANDSHAKE = 1
