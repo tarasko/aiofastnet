@@ -84,9 +84,13 @@ cdef class Handle:
         LoopBase _loop
         double _when
 
-        aiofn_loop_action_t _action
-        bint _action_pending
         bint _is_cancelled
+
+        # If True then this Handle has been registered through backend's call_soon, call_at
+        # Such handles are added to the loop._pending_handles linked list.
+        # They must be removed from the list upon completion or cancellation
+        bint _is_pending
+        aiofn_loop_action_t _action
 
         object _repr
         object _source_traceback
@@ -104,12 +108,13 @@ cdef class Handle:
         self._context = PyContext_CopyCurrent() if context is None else context
         self._loop = loop
         self._when = when
+
+        self._is_cancelled = False
+
+        self._is_pending = False
         self._action.callback = _action_callback
         self._action.callback_data = <void *>self
         self._action.backend_token = NULL
-
-        self._action_pending = False
-        self._is_cancelled = False
 
         self._repr = None
         if loop._debug:
@@ -145,7 +150,7 @@ cdef class Handle:
                 self._repr = repr(self)
             self._callback = None
             self._args = None
-            if self._action_pending:
+            if self._is_pending:
                 self._loop._check_status(self._loop._backend.action_cancel(self._loop._backend.state, &self._action))
                 self._loop._unlink_handle(self)
 
@@ -452,7 +457,8 @@ cdef void _action_callback(aiofn_loop_action_t *action) noexcept with gil:
         Handle handle = <Handle>action.callback_data
         LoopBase loop = handle._loop
     try:
-        loop._complete_action(handle)
+        loop._unlink_handle(handle)
+        handle._run()
     except BaseException as exc:
         loop._backend_failed(exc)
 
@@ -460,7 +466,10 @@ cdef void _action_callback(aiofn_loop_action_t *action) noexcept with gil:
 cdef void _fd_ready_callback(void *callback_data, uint32_t events) noexcept with gil:
     cdef _FDCallbacks callbacks = <_FDCallbacks>callback_data
     try:
-        callbacks.loop._fd_ready(callbacks, events)
+        if events & AIOFN_LOOP_FD_READ and callbacks.reader is not None:
+            callbacks.reader._run()
+        if events & AIOFN_LOOP_FD_WRITE and callbacks.writer is not None:
+            callbacks.writer._run()
     except BaseException as exc:
         callbacks.loop._backend_failed(exc)
 
@@ -505,12 +514,6 @@ cdef class LoopBase:
         # Lets exception reports raised indirectly during a callback include where that callback's handle was scheduled.
         object _current_handle_source_traceback
 
-        # Self-pipe is used to implement call_soon_threadsafe
-        # Another thread creates Handle object and push its pointer into the write side of the pipe
-        # Loop thread receives read ready event, read from pipe, immediately run received Handle and discard it.
-        # The Handle is not pushed through the usual call_soon machinery.
-        _SelfPipe _self_pipe
-
         bint _closed
         bint _debug
         uint64_t _thread_id
@@ -525,6 +528,12 @@ cdef class LoopBase:
         bint _asyncgens_shutdown_called
         bint _coroutine_origin_tracking_enabled
         int _coroutine_origin_tracking_saved_depth
+
+        # Self-pipe is used to implement call_soon_threadsafe
+        # Another thread creates Handle object and push its pointer into the write side of the pipe
+        # Loop thread receives read ready event, read from pipe, immediately run received Handle and discard it.
+        # The Handle is not pushed through the usual call_soon machinery.
+        _SelfPipe _self_pipe
 
     connect_accepted_socket = connect_accepted_socket
     connect_read_pipe = connect_read_pipe
@@ -562,6 +571,7 @@ cdef class LoopBase:
         self._backend_fd_callbacks = {}
         self._backend_signal_handlers = {}
         self._pending_handles = None
+        self._current_handle_source_traceback = None
         self._closed = False
         self._debug = bool(os.environ.get("PYTHONASYNCIODEBUG"))
         self._thread_id = 0
@@ -574,7 +584,6 @@ cdef class LoopBase:
         self._asyncgens_shutdown_called = False
         self._coroutine_origin_tracking_enabled = False
         self._coroutine_origin_tracking_saved_depth = 0
-        self._current_handle_source_traceback = None
         self._self_pipe = _SelfPipe(self)
 
     def __repr__(self):
@@ -598,16 +607,15 @@ cdef class LoopBase:
             raise NotImplementedError(message)
         raise RuntimeError(message)
 
-    cdef inline NoResult _link_handle(self, Handle handle) except NoResult.EXC:
+    cdef inline void _link_handle(self, Handle handle) noexcept:
         handle._pending_next = self._pending_handles
         if self._pending_handles is not None:
             self._pending_handles._pending_previous = handle
         self._pending_handles = handle
-        handle._action_pending = True
-        return NoResult.OK
+        handle._is_pending = True
 
-    cdef inline NoResult _unlink_handle(self, Handle handle) except NoResult.EXC:
-        if handle._action_pending:
+    cdef inline void _unlink_handle(self, Handle handle) noexcept:
+        if handle._is_pending:
             if handle._pending_previous is None:
                 self._pending_handles = handle._pending_next
             else:
@@ -616,27 +624,7 @@ cdef class LoopBase:
                 handle._pending_next._pending_previous = handle._pending_previous
             handle._pending_previous = None
             handle._pending_next = None
-            handle._action_pending = False
-        return NoResult.OK
-
-    cdef inline NoResult _complete_action(self, Handle handle) except NoResult.EXC:
-        self._unlink_handle(handle)
-        handle._run()
-        return NoResult.OK
-
-    cdef inline NoResult _cancel_pending_handles(self) except NoResult.EXC:
-        cdef Handle handle
-        while self._pending_handles is not None:
-            handle = self._pending_handles
-            handle.cancel()
-        return NoResult.OK
-
-    cdef inline NoResult _backend_watch_fd(self, aiofn_loop_fd_watch_t *watch, bint reader) except NoResult.EXC:
-        if reader:
-            self._check_status(self._backend.add_reader(self._backend.state, watch))
-        else:
-            self._check_status(self._backend.add_writer(self._backend.state, watch))
-        return NoResult.OK
+            handle._is_pending = False
 
     cdef inline NoResult _backend_unwatch_fd(self, aiofn_loop_fd_watch_t *watch, bint reader) except NoResult.EXC:
         if reader:
@@ -677,19 +665,16 @@ cdef class LoopBase:
             raise RuntimeError("This event loop is already running")
         if asyncio.events._get_running_loop() is not None:
             raise RuntimeError("Cannot run the event loop while another loop is running")
-        return NoResult.OK
 
     cdef inline NoResult _check_thread(self) except NoResult.EXC:
         if self._thread_id != 0 and self._thread_id != <uint64_t>PyThread_get_thread_ident():
             raise RuntimeError("Non-thread-safe operation invoked on an event loop other than the current one")
-        return NoResult.OK
 
     cdef inline NoResult _check_callback(self, object callback, object method) except NoResult.EXC:
         if asyncio.iscoroutine(callback) or inspect.iscoroutinefunction(callback):
             raise TypeError(f"coroutines cannot be used with {method}()")
         if not callable(callback):
             raise TypeError(f"a callable object was expected by {method}(), got {callback!r}")
-        return NoResult.OK
 
     cpdef is_running(self):
         return self._thread_id != 0
@@ -869,7 +854,9 @@ cdef class LoopBase:
             self._remove_fd(fd_callback)
         self._backend_fd_callbacks = None
 
-        self._cancel_pending_handles()
+        while self._pending_handles is not None:
+            # Handle.cancel unlinks handle from _pending_handles
+            self._pending_handles.cancel()
 
         self._backend.close(self._backend.state)
 
@@ -892,42 +879,41 @@ cdef class LoopBase:
         return self._clear_fd_callback(fileobj, False)
 
     cdef inline NoResult _set_fd_callback(self, object fileobj, object callback, tuple args, bint reader) except NoResult.EXC:
-        cdef:
-            Handle handle
-            _FDCallbacks callbacks
-            bint created
-
         self._check_closed()
         if self._debug:
             self._check_thread()
             self._check_callback(callback, "add_reader" if reader else "add_writer")
-        fileno_obj = _fileobj_to_fileno_obj(fileobj)
-        callbacks = self._backend_fd_callbacks.get(fileno_obj)
-        created = callbacks is None
+
+        cdef:
+            fileno_obj = _fileobj_to_fileno_obj(fileobj)
+            _FDCallbacks callbacks = self._backend_fd_callbacks.get(fileno_obj)
+            bint created = False
+
         if callbacks is None:
             callbacks = _FDCallbacks(self, fileno_obj)
             self._backend_fd_callbacks[fileno_obj] = callbacks
-        handle = create_handle(callback, args, self)
-        if reader:
-            if callbacks.reader is not None:
-                callbacks.reader.cancel()
-                callbacks.reader = handle
-                callbacks.reader_fileobj = fileobj
-                return NoResult.OK
-        else:
-            if callbacks.writer is not None:
-                callbacks.writer.cancel()
-                callbacks.writer = handle
-                callbacks.writer_fileobj = fileobj
-                return NoResult.OK
-        if reader:
-            callbacks.reader = handle
-            callbacks.reader_fileobj = fileobj
-        else:
-            callbacks.writer = handle
-            callbacks.writer_fileobj = fileobj
+            created = True
+
+        cdef Handle handle = create_handle(callback, args, self)
         try:
-            self._backend_watch_fd(&callbacks.watch, reader)
+            if reader:
+                if callbacks.reader is not None:
+                    callbacks.reader.cancel()
+                    callbacks.reader = handle
+                    callbacks.reader_fileobj = fileobj
+                else:
+                    callbacks.reader = handle
+                    callbacks.reader_fileobj = fileobj
+                    self._check_status(self._backend.add_reader(self._backend.state, &callbacks.watch))
+            else:
+                if callbacks.writer is not None:
+                    callbacks.writer.cancel()
+                    callbacks.writer = handle
+                    callbacks.writer_fileobj = fileobj
+                else:
+                    callbacks.writer = handle
+                    callbacks.writer_fileobj = fileobj
+                    self._check_status(self._backend.add_writer(self._backend.state, &callbacks.watch))
         except BaseException:
             if reader:
                 callbacks.reader = None
@@ -935,6 +921,7 @@ cdef class LoopBase:
             else:
                 callbacks.writer = None
                 callbacks.writer_fileobj = None
+
             if created:
                 self._backend_fd_callbacks.pop(fileno_obj, None)
             raise
@@ -978,12 +965,6 @@ cdef class LoopBase:
             callbacks.writer = None
             callbacks.writer_fileobj = None
         return NoResult.OK
-
-    cdef inline NoResult _fd_ready(self, _FDCallbacks callbacks, uint32_t events) except NoResult.EXC:
-        if events & AIOFN_LOOP_FD_READ and callbacks.reader is not None:
-            callbacks.reader._run()
-        if events & AIOFN_LOOP_FD_WRITE and callbacks.writer is not None:
-            callbacks.writer._run()
 
     async def sock_recv(self, sock, n):
         future = self.create_future()
