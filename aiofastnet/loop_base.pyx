@@ -835,7 +835,7 @@ cdef class LoopBase:
         self._self_pipe.close()
 
         for signal_callback in self._signal_handlers.values():
-            self._remove_signal_callback(signal_callback)
+            self._check_status(self._backend.signal_unwatch(self._backend.state, &signal_callback.watch))
         self._signal_handlers = None
 
         for fd_callback in self._fd_callbacks.values():
@@ -1257,17 +1257,13 @@ cdef class LoopBase:
         self._check_thread()
         self._check_closed()
 
-        cdef _SignalCallback signal_callback = self._signal_handlers.pop(sig, None)
+        cdef _SignalCallback signal_callback = self._signal_handlers.get(sig)
         if signal_callback is None:
             return False
 
-        self._remove_signal_callback(signal_callback)
-        return True
-
-    cdef inline NoResult _remove_signal_callback(self, _SignalCallback signal_callback) except NoResult.EXC:
-        signal_callback.handle.cancel()
         self._check_status(self._backend.signal_unwatch(self._backend.state, &signal_callback.watch))
-        return NoResult.OK
+        self._signal_handlers.pop(sig, None)
+        return True
 
     cdef inline NoResult _check_signal(self, object sig) except NoResult.EXC:
         if not isinstance(sig, int):
