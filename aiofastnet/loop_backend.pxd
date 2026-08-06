@@ -49,11 +49,41 @@ cdef extern from "loop_backend.h":
         aiofn_loop_status (*add_writer)(void *, aiofn_loop_fd_watch_t *) noexcept nogil
         aiofn_loop_status (*remove_writer)(void *, aiofn_loop_fd_watch_t *) noexcept nogil
 
+    ctypedef struct aiofn_loop_buffer_t:
+        void *base
+        size_t len
+
+    ctypedef struct aiofn_loop_proactor_socket_t:
+        int fd
+        void *backend_token
+
+    ctypedef struct aiofn_loop_proactor_op_t:
+        pass
+
+    ctypedef void (*aiofn_loop_proactor_callback_fn)(aiofn_loop_proactor_op_t *) noexcept nogil
+
+    ctypedef struct aiofn_loop_proactor_op_t:
+        aiofn_loop_proactor_callback_fn callback
+        void *callback_data
+        void *backend_token
+        aiofn_loop_status status
+        size_t transferred
+
+    ctypedef struct aiofn_proactor_backend_t:
+        size_t struct_size
+        aiofn_loop_status (*open_socket)(void *, aiofn_loop_proactor_socket_t *) noexcept nogil
+        aiofn_loop_status (*close_socket)(void *, aiofn_loop_proactor_socket_t *) noexcept nogil
+        aiofn_loop_status (*connect)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_proactor_op_t *, const void *, size_t) noexcept nogil
+        aiofn_loop_status (*read)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_proactor_op_t *, void *, size_t) noexcept nogil
+        aiofn_loop_status (*write)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_proactor_op_t *, const aiofn_loop_buffer_t *, size_t) noexcept nogil
+        aiofn_loop_status (*cancel)(void *, aiofn_loop_proactor_op_t *) noexcept nogil
+
     ctypedef struct aiofn_loop_backend_t:
         size_t struct_size
         void *state
         const char *name
         const aiofn_reactor_backend_t *reactor
+        const aiofn_proactor_backend_t *proactor
 
         aiofn_loop_status (*run)(void *) noexcept nogil
         void (*stop)(void *) noexcept nogil

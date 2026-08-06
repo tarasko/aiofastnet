@@ -100,6 +100,82 @@ typedef struct aiofn_reactor_backend {
     aiofn_loop_status (*remove_writer)(void *state, aiofn_loop_fd_watch_t *watch);
 } aiofn_reactor_backend_t;
 
+typedef struct aiofn_loop_proactor_socket aiofn_loop_proactor_socket_t;
+typedef struct aiofn_loop_proactor_op aiofn_loop_proactor_op_t;
+
+typedef struct aiofn_loop_buffer {
+    void *base;
+    size_t len;
+} aiofn_loop_buffer_t;
+
+typedef void (*aiofn_loop_proactor_callback_fn)(aiofn_loop_proactor_op_t *op);
+
+/* Frontend-owned native socket wrapper used by proactor operations. */
+struct aiofn_loop_proactor_socket {
+    int fd;
+    void *backend_token;
+};
+
+/*
+ * Frontend-owned one-shot operation. The backend fills status and transferred
+ * before invoking callback, clears backend_token before the callback, and must
+ * not access this object after the callback returns.
+ */
+struct aiofn_loop_proactor_op {
+    aiofn_loop_proactor_callback_fn callback;
+    void *callback_data;
+    void *backend_token;
+    aiofn_loop_status status;
+    size_t transferred;
+};
+
+/*
+ * Proactor interface prototype. This is intentionally not consumed by the
+ * current SelectorLoopBase. Each operation is called from the loop thread,
+ * just like the common backend interface. A socket may have at most one
+ * pending read and one pending write; a read and write may overlap. Buffer
+ * memory remains owned by the frontend and must stay valid until completion.
+ */
+typedef struct aiofn_proactor_backend {
+    size_t struct_size;
+
+    /* Adopt an existing nonblocking socket into a native proactor handle. */
+    aiofn_loop_status (*open_socket)(void *state, aiofn_loop_proactor_socket_t *socket);
+
+    /* Stop using the native socket handle and release backend resources. */
+    aiofn_loop_status (*close_socket)(void *state, aiofn_loop_proactor_socket_t *socket);
+
+    /* Start an asynchronous connect operation. */
+    aiofn_loop_status (*connect)(
+        void *state,
+        aiofn_loop_proactor_socket_t *socket,
+        aiofn_loop_proactor_op_t *op,
+        const void *address,
+        size_t address_len
+    );
+
+    /* Start the socket's one pending asynchronous read. */
+    aiofn_loop_status (*read)(
+        void *state,
+        aiofn_loop_proactor_socket_t *socket,
+        aiofn_loop_proactor_op_t *op,
+        void *buffer,
+        size_t buffer_len
+    );
+
+    /* Start the socket's one pending asynchronous scatter-gather write. */
+    aiofn_loop_status (*write)(
+        void *state,
+        aiofn_loop_proactor_socket_t *socket,
+        aiofn_loop_proactor_op_t *op,
+        const aiofn_loop_buffer_t *buffers,
+        size_t buffer_count
+    );
+
+    /* Cancel one pending connect, read, or write operation. */
+    aiofn_loop_status (*cancel)(void *state, aiofn_loop_proactor_op_t *op);
+} aiofn_proactor_backend_t;
+
 /*
 * Every backend operation is called from the event-loop thread. No backend
 * operation is invoked concurrently from another thread. Backends do not
@@ -193,6 +269,9 @@ typedef struct aiofn_loop_backend {
     /* Optional readiness-based socket interface; NULL means unsupported. */
     const aiofn_reactor_backend_t *reactor;
 
+    /* Optional completion-based socket interface; NULL means unsupported. */
+    const aiofn_proactor_backend_t *proactor;
+
     /*
      * Optional diagnostic for the most recent failed operation. The returned
      * UTF-8 string remains valid until the next backend operation. It may be
@@ -240,6 +319,15 @@ typedef struct aiofn_loop_backend {
 
 #define AIOFN_REACTOR_BACKEND_MIN_SIZE AIOFN_REACTOR_BACKEND_FIELD_END(remove_writer)
 #define AIOFN_REACTOR_BACKEND_CURRENT_SIZE AIOFN_REACTOR_BACKEND_FIELD_END(remove_writer)
+
+#define AIOFN_PROACTOR_BACKEND_FIELD_END(field) \
+    (offsetof(aiofn_proactor_backend_t, field) + sizeof(((aiofn_proactor_backend_t *)0)->field))
+
+#define AIOFN_PROACTOR_BACKEND_HAS_FIELD(proactor, field) \
+    ((proactor)->struct_size >= AIOFN_PROACTOR_BACKEND_FIELD_END(field))
+
+#define AIOFN_PROACTOR_BACKEND_MIN_SIZE AIOFN_PROACTOR_BACKEND_FIELD_END(cancel)
+#define AIOFN_PROACTOR_BACKEND_CURRENT_SIZE AIOFN_PROACTOR_BACKEND_FIELD_END(cancel)
 
 #define AIOFN_LOOP_BACKEND_MIN_SIZE AIOFN_LOOP_BACKEND_FIELD_END(signal_unwatch)
 #define AIOFN_LOOP_BACKEND_CURRENT_SIZE AIOFN_LOOP_BACKEND_FIELD_END(signal_unwatch)
