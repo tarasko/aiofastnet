@@ -90,6 +90,11 @@ cdef class Handle:
 
         object _repr
         object _source_traceback
+
+        # Handles created by call_soon and call_at are chained via linked list.
+        # This is done in order to keep track of them and properly destroy them when loop.close() is called
+        # Loop doesn't use a regular container for like list because inserting and deleting is more expensive
+        # with list then just assigning a reference.
         Handle _pending_previous
         Handle _pending_next
 
