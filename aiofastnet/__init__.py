@@ -1,6 +1,6 @@
 import socket
 
-from . import libevent_loop
+from . import libevent_loop, libuv_loop
 from .api_connect_accepted_socket import connect_accepted_socket
 from .api_create_connection import create_connection
 from .api_create_datagram_endpoint import create_datagram_endpoint
@@ -33,6 +33,7 @@ __all__ = [
     'create_unix_server',
     'install_policy',
     'libevent_loop',
+    'libuv_loop',
     'loop_factory',
     'open_connection',
     'patch_loop',

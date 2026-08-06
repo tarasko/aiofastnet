@@ -95,6 +95,14 @@ if os.name == 'posix':
             extra_compile_args=extra_compile_args,
             extra_link_args=extra_link_args,
         ),
+        Extension(
+            "aiofastnet.libuv_loop",
+            ["aiofastnet/libuv_loop.pyx", "aiofastnet/libuv_backend.c"],
+            libraries=[*libs, "uv"],
+            define_macros=macros,
+            extra_compile_args=extra_compile_args,
+            extra_link_args=extra_link_args,
+        ),
     ))
 elif os.name == 'nt':
     extensions.append(

@@ -39,6 +39,7 @@ class _EventLoopPolicy(TypingProtocol):
 
 OPENSSL_DYN_LIBS: OpenSSLDynLibs | None
 libevent_loop: Any
+libuv_loop: Any
 __version__: str
 __author__: str
 

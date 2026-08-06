@@ -16,5 +16,6 @@ playground.py
 !certdecode.c
 !aiofastnet/openssl_compat.c
 !aiofastnet/libevent_backend.c
+!aiofastnet/libuv_backend.c
 .coverage
 uv.lock
