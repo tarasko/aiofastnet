@@ -34,6 +34,7 @@ from .loop_backend cimport (
     AIOFN_LOOP_OK,
     aiofn_loop_backend_t,
     aiofn_loop_buffer_t,
+    aiofn_loop_buffer_init,
     aiofn_loop_proactor_op_t,
     aiofn_loop_proactor_socket_t,
     aiofn_proactor_backend_t,
@@ -1060,7 +1061,7 @@ cdef class LoopBase:
             callbacks.writer = None
             callbacks.writer_fileobj = None
 
-    cdef inline _ProactorSocket _proactor_socket(self, object sock) except *:
+    cdef inline _ProactorSocket _proactor_socket(self, object sock):
         cdef:
             int fd = _fileobj_to_fileno_obj(sock)
             _ProactorSocket result = self._proactor_sockets.get(fd)
@@ -1141,8 +1142,8 @@ cdef class LoopBase:
             _ProactorOperation operation = _ProactorOperation(self, future, view, 3)
             aiofn_loop_buffer_t buffer
 
-        buffer.base = <void *>&view[0] if len(view) else NULL
-        buffer.len = len(view)
+        buffer.iov_base = <void *>&view[0] if len(view) else NULL
+        buffer.iov_len = len(view)
 
         operation.proactor_socket = proactor_socket
         proactor_socket.write_operation = operation

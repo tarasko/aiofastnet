@@ -51,8 +51,10 @@ cdef extern from "loop_backend.h":
         aiofn_loop_status (*remove_writer)(void *, aiofn_loop_fd_watch_t *) noexcept nogil
 
     ctypedef struct aiofn_loop_buffer_t:
-        void *base
-        size_t len
+        void *iov_base
+        size_t iov_len
+
+    void aiofn_loop_buffer_init(aiofn_loop_buffer_t *, void *, size_t) noexcept nogil
 
     ctypedef struct aiofn_loop_proactor_socket_t:
         int fd

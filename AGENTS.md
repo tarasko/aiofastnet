@@ -31,6 +31,15 @@ Read README.md for project description.
   runtime, or implementation behavior being handled, especially when using
   `getattr`, feature detection, or seemingly redundant conditions. Do not add
   speculative fallbacks for unsupported or hypothetical environments.
+* When an ABI contract says that the frontend validates arguments, lifecycle
+  state, or operation exclusivity, backend code must trust those guarantees and
+  must not duplicate the checks. Keep checks for native-library failures,
+  allocation failures, and operating-system errors.
+* If an internal invariant is unclear while implementing code, use the
+  language's assertion mechanism (`assert()` in C or `assert` in Python) to
+  document and verify it rather than silently recovering or returning a
+  generic runtime error. Do not use assertions for external input, allocation
+  failures, or native-library and operating-system errors.
 * Optimize code layout for human readability, not just compactness. Use blank
   lines to separate logically distinct groups of declarations and statements;
   for example, visually separate read, write, and connect state in native

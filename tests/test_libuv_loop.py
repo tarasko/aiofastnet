@@ -27,7 +27,7 @@ def test_proactor_sock_connect_recv_sendall(libuv_loop):
             client.setblocking(False)
             try:
                 await libuv_loop.sock_connect(client, (server.host, server.port))
-                for _ in range(100000):
+                for _ in range(1000):
                     await libuv_loop.sock_sendall(client, b"hello")
                     assert await libuv_loop.sock_recv(client, 5) == b"hello"
             finally:

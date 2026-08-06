@@ -4,6 +4,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if defined(_WIN32)
+#include <winsock2.h>
+#else
+#include <sys/uio.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -103,10 +109,20 @@ typedef struct aiofn_reactor_backend {
 typedef struct aiofn_loop_proactor_socket aiofn_loop_proactor_socket_t;
 typedef struct aiofn_loop_proactor_op aiofn_loop_proactor_op_t;
 
-typedef struct aiofn_loop_buffer {
-    void *base;
-    size_t len;
+/*
+ * Platform-native scatter-gather buffer. Keeping this representation
+ * identical to iovec/WSABUF lets proactor backends pass frontend-owned arrays
+ * directly to native APIs without allocating and copying descriptors.
+ */
+#if defined(_WIN32)
+typedef struct
+{
+    ULONG iov_len;
+    CHAR* iov_base;
 } aiofn_loop_buffer_t;
+#else
+typedef struct iovec aiofn_loop_buffer_t;
+#endif
 
 typedef void (*aiofn_loop_proactor_callback_fn)(aiofn_loop_proactor_op_t *op);
 
