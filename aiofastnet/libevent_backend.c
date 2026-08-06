@@ -220,15 +220,6 @@ static const char *aiofn_libevent_last_error(void *data) {
     return state->last_error[0] == '\0' ? NULL : state->last_error;
 }
 
-static aiofn_loop_status aiofn_libevent_after_fork(void *data) {
-    aiofn_libevent_state_t *state = data;
-    if (event_reinit(state->base) != 0) {
-        snprintf(state->last_error, sizeof(state->last_error), "event_reinit failed");
-        return AIOFN_LOOP_ERROR;
-    }
-    return AIOFN_LOOP_OK;
-}
-
 aiofn_loop_backend_t *aiofn_libevent_backend_new(void) {
     /* Use calloc because it also initializes memory to zero */
     aiofn_libevent_state_t *state = calloc(1, sizeof(*state));
@@ -268,7 +259,6 @@ aiofn_loop_backend_t *aiofn_libevent_backend_new(void) {
     state->backend.last_error = aiofn_libevent_last_error;
     state->backend.signal_watch = aiofn_libevent_signal_watch;
     state->backend.signal_unwatch = aiofn_libevent_signal_unwatch;
-    state->backend.after_fork = aiofn_libevent_after_fork;
     return &state->backend;
 
 error:

@@ -239,12 +239,6 @@ typedef struct aiofn_loop_backend {
         aiofn_loop_signal_watch_t *watch
     );
 
-    /*
-     * Reinitialize backend state inherited by a child process after fork().
-     * The loop must be open and inactive, and this must be the first backend
-     * operation in the child. Existing actions and watches remain registered.
-     */
-    aiofn_loop_status (*after_fork)(void *state);
 } aiofn_loop_backend_t;
 
 #define AIOFN_LOOP_BACKEND_FIELD_END(field) \
@@ -254,7 +248,7 @@ typedef struct aiofn_loop_backend {
     ((backend)->struct_size >= AIOFN_LOOP_BACKEND_FIELD_END(field))
 
 #define AIOFN_LOOP_BACKEND_MIN_SIZE AIOFN_LOOP_BACKEND_FIELD_END(signal_unwatch)
-#define AIOFN_LOOP_BACKEND_CURRENT_SIZE AIOFN_LOOP_BACKEND_FIELD_END(after_fork)
+#define AIOFN_LOOP_BACKEND_CURRENT_SIZE AIOFN_LOOP_BACKEND_FIELD_END(signal_unwatch)
 
 #ifdef __cplusplus
 }

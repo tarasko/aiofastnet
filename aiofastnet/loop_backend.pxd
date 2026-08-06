@@ -59,4 +59,3 @@ cdef extern from "loop_backend.h":
         const char *(*last_error)(void *) noexcept nogil
         aiofn_loop_status (*signal_watch)(void *, int, aiofn_loop_signal_watch_t *) noexcept nogil
         aiofn_loop_status (*signal_unwatch)(void *, aiofn_loop_signal_watch_t *) noexcept nogil
-        aiofn_loop_status (*after_fork)(void *) noexcept nogil
