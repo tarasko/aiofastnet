@@ -25,7 +25,6 @@ from .api_start_tls import start_tls
 from .loop_backend cimport (
     AIOFN_LOOP_BACKEND_CAPSULE_NAME,
     AIOFN_LOOP_BACKEND_MIN_SIZE,
-    AIOFN_LOOP_INVALID_ARGUMENT,
     AIOFN_LOOP_FD_READ,
     AIOFN_LOOP_FD_WRITE,
     AIOFN_LOOP_NOT_SUPPORTED,
@@ -604,8 +603,6 @@ cdef class LoopBase:
 
         if status == AIOFN_LOOP_NO_MEMORY:
             raise MemoryError(message)
-        elif status == AIOFN_LOOP_INVALID_ARGUMENT:
-            raise ValueError(message)
         elif status == AIOFN_LOOP_NOT_SUPPORTED:
             raise NotImplementedError(message)
         else:

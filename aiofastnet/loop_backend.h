@@ -17,8 +17,7 @@ enum {
     AIOFN_LOOP_OK = 0,
     AIOFN_LOOP_ERROR = 1,
     AIOFN_LOOP_NO_MEMORY = 2,
-    AIOFN_LOOP_INVALID_ARGUMENT = 3,
-    AIOFN_LOOP_NOT_SUPPORTED = 4
+    AIOFN_LOOP_NOT_SUPPORTED = 3
 };
 
 typedef uint32_t aiofn_loop_fd_events;

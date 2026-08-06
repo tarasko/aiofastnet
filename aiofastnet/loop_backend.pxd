@@ -9,7 +9,6 @@ cdef extern from "loop_backend.h":
         AIOFN_LOOP_OK
         AIOFN_LOOP_ERROR
         AIOFN_LOOP_NO_MEMORY
-        AIOFN_LOOP_INVALID_ARGUMENT
         AIOFN_LOOP_NOT_SUPPORTED
         AIOFN_LOOP_FD_READ
         AIOFN_LOOP_FD_WRITE
