@@ -27,7 +27,6 @@ enum {
     AIOFN_LOOP_FD_WRITE = 1u << 1
 };
 
-typedef struct aiofn_loop_signal_watch aiofn_loop_signal_watch_t;
 typedef struct aiofn_loop_action aiofn_loop_action_t;
 
 typedef void (*aiofn_loop_callback_fn)(aiofn_loop_action_t *action);
@@ -68,6 +67,17 @@ typedef void (*aiofn_loop_signal_fn)(
     void *callback_data,
     int signum
 );
+
+/*
+ * Frontend-owned storage for one persistent signal watch. The frontend
+ * initializes callback and callback_data. The backend stores its native
+ * registration token in backend_token while the watch is active.
+ */
+typedef struct aiofn_loop_signal_watch {
+    aiofn_loop_signal_fn callback;
+    void *callback_data;
+    void *backend_token;
+} aiofn_loop_signal_watch_t;
 
 /*
 * Every backend operation is called from the event-loop thread. No backend
@@ -201,19 +211,16 @@ typedef struct aiofn_loop_backend {
     const char *(*last_error)(void *state);
 
     /*
-     * Add a persistent watch for signum and store a backend-owned token in
-     * watch_out. The callback runs during normal event dispatch, never directly
-     * from an OS signal handler and never inline from signal_watch(). There is
-     * at most one watch for each signal number. Aiofastnet retains ownership of
-     * callback_data. On failure, the adapter does not retain it and *watch_out
-     * is set to NULL.
+     * Add a persistent watch for signum. The frontend owns watch and keeps it
+     * alive until signal_unwatch() succeeds. The callback runs during normal
+     * event dispatch, never directly from an OS signal handler and never inline
+     * from signal_watch(). There is at most one watch for each signal number.
+     * Aiofastnet retains ownership of callback_data.
      */
     aiofn_loop_status (*signal_watch)(
         void *state,
         int signum,
-        aiofn_loop_signal_fn callback,
-        void *callback_data,
-        aiofn_loop_signal_watch_t **watch_out
+        aiofn_loop_signal_watch_t *watch
     );
 
     /*

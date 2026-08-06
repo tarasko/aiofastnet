@@ -35,10 +35,12 @@ cdef extern from "loop_backend.h":
         void *backend_read_token
         void *backend_write_token
 
-    ctypedef struct aiofn_loop_signal_watch_t:
-        pass
-
     ctypedef void (*aiofn_loop_signal_fn)(void *, int) noexcept nogil
+
+    ctypedef struct aiofn_loop_signal_watch_t:
+        aiofn_loop_signal_fn callback
+        void *callback_data
+        void *backend_token
 
     ctypedef struct aiofn_loop_backend_t:
         size_t struct_size
@@ -56,6 +58,6 @@ cdef extern from "loop_backend.h":
         aiofn_loop_status (*add_writer)(void *, aiofn_loop_fd_watch_t *) noexcept nogil
         aiofn_loop_status (*remove_writer)(void *, aiofn_loop_fd_watch_t *) noexcept nogil
         const char *(*last_error)(void *) noexcept nogil
-        aiofn_loop_status (*signal_watch)(void *, int, aiofn_loop_signal_fn, void *, aiofn_loop_signal_watch_t **) noexcept nogil
+        aiofn_loop_status (*signal_watch)(void *, int, aiofn_loop_signal_watch_t *) noexcept nogil
         aiofn_loop_status (*signal_unwatch)(void *, aiofn_loop_signal_watch_t *) noexcept nogil
         aiofn_loop_status (*after_fork)(void *) noexcept nogil

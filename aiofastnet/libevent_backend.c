@@ -7,12 +7,6 @@
 
 #include <event2/event.h>
 
-typedef struct aiofn_libevent_signal {
-    struct event *event;
-    aiofn_loop_signal_fn callback;
-    void *callback_data;
-} aiofn_libevent_signal_t;
-
 typedef struct aiofn_libevent_state {
     aiofn_loop_backend_t backend;
     struct event_base *base;
@@ -21,19 +15,21 @@ typedef struct aiofn_libevent_state {
 } aiofn_libevent_state_t;
 
 static void aiofn_libevent_on_action(evutil_socket_t fd, short flags, void *data) {
-    aiofn_loop_action_t *action = data;
-    struct event *event = action->backend_token;
     (void)fd;
     (void)flags;
+
+    aiofn_loop_action_t *action = data;
+    struct event *event = action->backend_token;
     action->backend_token = NULL;
     event_free(event);
     action->callback(action);
 }
 
 static void aiofn_libevent_on_fd(evutil_socket_t fd, short flags, void *data) {
+    (void)fd;
+
     aiofn_loop_fd_watch_t *watch = data;
     uint32_t events = 0;
-    (void)fd;
     if ((flags & EV_READ) != 0) {
         events |= AIOFN_LOOP_FD_READ;
     }
@@ -44,7 +40,7 @@ static void aiofn_libevent_on_fd(evutil_socket_t fd, short flags, void *data) {
 }
 
 static void aiofn_libevent_on_signal(evutil_socket_t signum, short flags, void *data) {
-    aiofn_libevent_signal_t *signal_watch = data;
+    aiofn_loop_signal_watch_t *signal_watch = data;
     (void)flags;
     signal_watch->callback(signal_watch->callback_data, (int)signum);
 }
@@ -204,44 +200,35 @@ static aiofn_loop_status aiofn_libevent_remove_writer(void *data, aiofn_loop_fd_
 static aiofn_loop_status aiofn_libevent_signal_watch(
     void *data,
     int signum,
-    aiofn_loop_signal_fn callback,
-    void *callback_data,
-    aiofn_loop_signal_watch_t **watch_out
+    aiofn_loop_signal_watch_t *watch
 ) {
     aiofn_libevent_state_t *state = data;
-    aiofn_libevent_signal_t *signal_watch;
+    struct event *event;
 
-    *watch_out = NULL;
     if (signum <= 0) {
         return AIOFN_LOOP_INVALID_ARGUMENT;
     }
-    signal_watch = calloc(1, sizeof(*signal_watch));
-    if (signal_watch == NULL) {
+    event = evsignal_new(state->base, signum, aiofn_libevent_on_signal, watch);
+    if (event == NULL) {
+        watch->backend_token = NULL;
         return AIOFN_LOOP_NO_MEMORY;
     }
-    signal_watch->callback = callback;
-    signal_watch->callback_data = callback_data;
-    signal_watch->event = evsignal_new(state->base, signum, aiofn_libevent_on_signal, signal_watch);
-    if (signal_watch->event == NULL) {
-        free(signal_watch);
-        return AIOFN_LOOP_NO_MEMORY;
-    }
-    if (event_add(signal_watch->event, NULL) != 0) {
-        event_free(signal_watch->event);
-        free(signal_watch);
+    if (event_add(event, NULL) != 0) {
+        event_free(event);
+        watch->backend_token = NULL;
         snprintf(state->last_error, sizeof(state->last_error), "event_add(signal) failed");
         return AIOFN_LOOP_ERROR;
     }
-    *watch_out = (aiofn_loop_signal_watch_t *)signal_watch;
+    watch->backend_token = event;
     return AIOFN_LOOP_OK;
 }
 
-static aiofn_loop_status aiofn_libevent_signal_unwatch(void *data, aiofn_loop_signal_watch_t *opaque_watch) {
-    aiofn_libevent_signal_t *signal_watch = (aiofn_libevent_signal_t *)opaque_watch;
+static aiofn_loop_status aiofn_libevent_signal_unwatch(void *data, aiofn_loop_signal_watch_t *watch) {
+    struct event *event = watch->backend_token;
     (void)data;
-    event_del(signal_watch->event);
-    event_free(signal_watch->event);
-    free(signal_watch);
+    event_del(event);
+    event_free(event);
+    watch->backend_token = NULL;
     return AIOFN_LOOP_OK;
 }
 

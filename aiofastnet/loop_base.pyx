@@ -97,7 +97,7 @@ cdef class Handle:
     cdef inline NoResult _init(self, callback, args, LoopBase loop, context, double when) except NoResult.EXC:
         self._callback = callback
         self._args = args
-        self._context = context or PyContext_CopyCurrent()
+        self._context = PyContext_CopyCurrent() if context is None else context
         self._loop = loop
         self._when = when
         self._action.callback = _action_callback
@@ -152,33 +152,37 @@ cdef class Handle:
         return self._is_cancelled
 
     cdef inline NoResult _run(self) except NoResult.EXC:
-        cdef:
-            LoopBase loop = self._loop
-            object exc = None
-            double started = 0.0
-            bint debug = loop._debug
-
-        if self._is_cancelled:
+        if unlikely(self._is_cancelled):
             return NoResult.OK
 
-        loop._current_handle = self
-        try:
-            if unlikely(debug):
-                started = loop.time()
+        cdef:
+            bint debug = self._loop._debug
+            double started = self._loop.time() if debug else 0.0
 
+        # In some scenarios user callback can cause removal of the last reference to this particular Handle
+        # For example: remove_reader, remove_writer set corresponding Handle reference in _FDCallbacks to None
+        # When calling _fd_callback.writer._run() cython does not increase refcnt of writer.
+        # So we do it manually here before calling user callback
+        cdef Handle life_extender = self
+
+        self._loop._current_handle_source_traceback = self._source_traceback
+        try:
             PyContext_Enter(self._context)
             try:
                 if self._is_c_callback:
                     (<Callback>self._callback).run()
                 else:
                     self._callback(*self._args)
-            except (SystemExit, KeyboardInterrupt):
-                raise
-            except BaseException as caught:
-                exc = caught
             finally:
                 PyContext_Exit(self._context)
 
+            if unlikely(debug):
+                duration = self._loop.time() - started
+                if duration >= self._loop.slow_callback_duration:
+                    _logger.warning("Executing %s took %.3f seconds", self, duration)
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except BaseException as exc:
             if unlikely(exc is not None):
                 context = {
                     "message": f"Exception in callback {self._format_callback_source()}",
@@ -187,14 +191,10 @@ cdef class Handle:
                 }
                 if self._source_traceback:
                     context["source_traceback"] = self._source_traceback
-                loop.call_exception_handler(context)
-
-            if unlikely(debug):
-                duration = loop.time() - started
-                if duration >= loop.slow_callback_duration:
-                    _logger.warning("Executing %s took %.3f seconds", self, duration)
+                self._loop.call_exception_handler(context)
         finally:
-            loop._current_handle = None
+            self._loop._current_handle_source_traceback = None
+
         return NoResult.OK
 
     cdef inline object _format_callback_source(self):
@@ -289,13 +289,15 @@ cdef class _SignalCallback:
     cdef:
         LoopBase loop
         Handle handle
-        aiofn_loop_signal_watch_t *watch
+        aiofn_loop_signal_watch_t watch
         int signum
 
     def __init__(self, LoopBase loop, int signum, Handle handle):
         self.loop = loop
         self.handle = handle
-        self.watch = NULL
+        self.watch.callback = _signal_callback
+        self.watch.callback_data = <void *>self
+        self.watch.backend_token = NULL
         self.signum = signum
 
 
@@ -500,7 +502,7 @@ cdef class LoopBase:
         Handle _pending_handles
 
         # Lets exception reports raised indirectly during a callback include where that callback's handle was scheduled.
-        Handle _current_handle
+        object _current_handle_source_traceback
 
         # Self-pipe is used to implement call_soon_threadsafe
         # Another thread creates Handle object and push its pointer into the write side of the pipe
@@ -571,7 +573,7 @@ cdef class LoopBase:
         self._asyncgens_shutdown_called = False
         self._coroutine_origin_tracking_enabled = False
         self._coroutine_origin_tracking_saved_depth = 0
-        self._current_handle = None
+        self._current_handle_source_traceback = None
         self._self_pipe = _SelfPipe(self)
 
     def __repr__(self):
@@ -642,16 +644,16 @@ cdef class LoopBase:
             self._check_status(self._backend.remove_writer(self._backend.state, watch))
         return NoResult.OK
 
-    cdef inline aiofn_loop_signal_watch_t *_backend_signal_watch(self, int signum, object callback_data) except NULL:
-        cdef:
-            aiofn_loop_signal_watch_t *watch = NULL
+    cdef inline NoResult _backend_signal_watch(
+        self, int signum, aiofn_loop_signal_watch_t *watch, object callback_data
+    ) except NoResult.EXC:
         Py_INCREF(callback_data)
         try:
-            self._check_status(self._backend.signal_watch(self._backend.state, signum, _signal_callback, <void *>callback_data, &watch))
+            self._check_status(self._backend.signal_watch(self._backend.state, signum, watch))
         except:
             Py_DECREF(callback_data)
             raise
-        return watch
+        return NoResult.OK
 
     cdef inline NoResult _backend_signal_unwatch(self, aiofn_loop_signal_watch_t *watch, object callback_data) except NoResult.EXC:
         self._check_status(self._backend.signal_unwatch(self._backend.state, watch))
@@ -1130,8 +1132,8 @@ cdef class LoopBase:
         message = context.get("message") or "Unhandled exception in event loop"
         exception = context.get("exception")
         exc_info = (type(exception), exception, exception.__traceback__) if exception is not None else False
-        if "source_traceback" not in context and self._current_handle is not None and self._current_handle._source_traceback:
-            context["handle_traceback"] = self._current_handle._source_traceback
+        if "source_traceback" not in context and self._current_handle_source_traceback:
+            context["handle_traceback"] = self._current_handle_source_traceback
         lines = [message]
         for key in sorted(context):
             if key in {"message", "exception"}:
@@ -1274,12 +1276,11 @@ cdef class LoopBase:
             return
 
         signal_callback = _SignalCallback(self, sig, handle)
-        signal_callback.watch = self._backend_signal_watch(sig, signal_callback)
+        self._backend_signal_watch(sig, &signal_callback.watch, signal_callback)
         try:
             self._backend_signal_handlers[sig] = signal_callback
         except:
-            self._backend_signal_unwatch(signal_callback.watch, signal_callback)
-            signal_callback.watch = NULL
+            self._backend_signal_unwatch(&signal_callback.watch, signal_callback)
             raise
 
     def remove_signal_handler(self, sig):
@@ -1293,8 +1294,7 @@ cdef class LoopBase:
         return True
 
     cdef inline NoResult _remove_signal_callback(self, _SignalCallback signal_callback) except NoResult.EXC:
-        self._backend_signal_unwatch(signal_callback.watch, signal_callback)
-        signal_callback.watch = NULL
+        self._backend_signal_unwatch(&signal_callback.watch, signal_callback)
         signal_callback.handle.cancel()
         signal.signal(
             signal_callback.signum,
