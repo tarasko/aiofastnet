@@ -2,13 +2,39 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <uv.h>
+
+typedef struct aiofn_libuv_socket aiofn_libuv_socket_t;
+
+struct aiofn_libuv_socket {
+    uv_tcp_t handle;
+    aiofn_loop_proactor_socket_t *frontend;
+
+    aiofn_loop_proactor_op_t *read_op;
+    void *read_buffer;
+    size_t read_buffer_len;
+
+    uv_write_t write_request;
+    aiofn_loop_proactor_op_t *write_op;
+    uv_buf_t *write_buffers;
+    size_t write_buffer_count;
+    size_t write_transferred;
+
+    uv_connect_t connect_request;
+    aiofn_loop_proactor_op_t *connect_op;
+    struct sockaddr_storage connect_address;
+};
 
 typedef struct aiofn_libuv_state {
     aiofn_loop_backend_t backend;
     aiofn_reactor_backend_t reactor;
+    aiofn_proactor_backend_t proactor;
+
     uv_loop_t loop;
     int closed;
     char last_error[256];
@@ -18,9 +44,22 @@ static void aiofn_libuv_set_error(aiofn_libuv_state_t *state, const char *operat
     snprintf(state->last_error, sizeof(state->last_error), "%s: %s", operation, uv_strerror(error));
 }
 
+
 static void aiofn_libuv_free_handle(uv_handle_t *handle) {
     free(handle);
 }
+
+static void aiofn_libuv_complete(
+    aiofn_loop_proactor_op_t *op,
+    aiofn_loop_status status,
+    size_t transferred
+) {
+    op->backend_token = NULL;
+    op->status = status;
+    op->transferred = transferred;
+    op->callback(op);
+}
+
 
 static void aiofn_libuv_on_action(uv_timer_t *timer) {
     aiofn_loop_action_t *action = timer->data;
@@ -30,6 +69,7 @@ static void aiofn_libuv_on_action(uv_timer_t *timer) {
     uv_close((uv_handle_t *)timer, aiofn_libuv_free_handle);
     action->callback(action);
 }
+
 
 static void aiofn_libuv_on_fd(uv_poll_t *poll, int status, int events) {
     aiofn_loop_fd_watch_t *watch = poll->data;
@@ -53,10 +93,12 @@ static void aiofn_libuv_on_fd(uv_poll_t *poll, int status, int events) {
     }
 }
 
+
 static void aiofn_libuv_on_signal(uv_signal_t *signal, int signum) {
     aiofn_loop_signal_watch_t *watch = signal->data;
     watch->callback(watch->callback_data, signum);
 }
+
 
 static aiofn_loop_status aiofn_libuv_run(void *data) {
     aiofn_libuv_state_t *state = data;
@@ -64,10 +106,12 @@ static aiofn_loop_status aiofn_libuv_run(void *data) {
     return AIOFN_LOOP_OK;
 }
 
+
 static void aiofn_libuv_stop(void *data) {
     aiofn_libuv_state_t *state = data;
     uv_stop(&state->loop);
 }
+
 
 static void aiofn_libuv_close(void *data) {
     aiofn_libuv_state_t *state = data;
@@ -81,10 +125,12 @@ static void aiofn_libuv_close(void *data) {
     }
 }
 
+
 static uint64_t aiofn_libuv_now_ns(void *data) {
     (void)data;
     return uv_hrtime();
 }
+
 
 static aiofn_loop_status aiofn_libuv_schedule(
     aiofn_libuv_state_t *state,
@@ -96,14 +142,17 @@ static aiofn_loop_status aiofn_libuv_schedule(
     if (timer == NULL) {
         return AIOFN_LOOP_NO_MEMORY;
     }
+
     result = uv_timer_init(&state->loop, timer);
     if (result != 0) {
         aiofn_libuv_set_error(state, "uv_timer_init", result);
         free(timer);
         return AIOFN_LOOP_ERROR;
     }
+
     timer->data = action;
     action->backend_token = timer;
+
     result = uv_timer_start(timer, aiofn_libuv_on_action, (uint64_t)((delay_ns + 999999) / 1000000), 0);
     if (result != 0) {
         aiofn_libuv_set_error(state, "uv_timer_start", result);
@@ -114,14 +163,17 @@ static aiofn_loop_status aiofn_libuv_schedule(
     return AIOFN_LOOP_OK;
 }
 
+
 static aiofn_loop_status aiofn_libuv_call_soon(void *data, aiofn_loop_action_t *action) {
     return aiofn_libuv_schedule(data, action, 0);
 }
+
 
 static aiofn_loop_status aiofn_libuv_call_at(void *data, aiofn_loop_action_t *action, uint64_t deadline_ns) {
     uint64_t now = aiofn_libuv_now_ns(data);
     return aiofn_libuv_schedule(data, action, deadline_ns > now ? deadline_ns - now : 0);
 }
+
 
 static aiofn_loop_status aiofn_libuv_action_cancel(void *data, aiofn_loop_action_t *action) {
     aiofn_libuv_state_t *state = data;
@@ -137,6 +189,251 @@ static aiofn_loop_status aiofn_libuv_action_cancel(void *data, aiofn_loop_action
     return AIOFN_LOOP_OK;
 }
 
+
+/* Proactor socket wrapping and operation callbacks. */
+static aiofn_loop_status aiofn_libuv_wrap_socket(void *data, aiofn_loop_proactor_socket_t *frontend) {
+    aiofn_libuv_state_t *state = data;
+    aiofn_libuv_socket_t *socket = calloc(1, sizeof(*socket));
+    int native_fd;
+    int result;
+    if (socket == NULL) {
+        return AIOFN_LOOP_NO_MEMORY;
+    }
+
+    native_fd = dup(frontend->fd);
+    if (native_fd < 0) {
+        free(socket);
+        return AIOFN_LOOP_ERROR;
+    }
+
+    result = uv_tcp_init(&state->loop, &socket->handle);
+    if (result == 0) {
+        result = uv_tcp_open(&socket->handle, native_fd);
+    } else {
+        close(native_fd);
+    }
+    if (result != 0) {
+        aiofn_libuv_set_error(state, "uv_tcp_open", result);
+        if (socket->handle.loop != NULL) {
+            uv_close((uv_handle_t *)&socket->handle, aiofn_libuv_free_handle);
+        } else {
+            free(socket);
+        }
+        return AIOFN_LOOP_ERROR;
+    }
+
+    socket->frontend = frontend;
+    socket->handle.data = socket;
+    frontend->backend_token = socket;
+    return AIOFN_LOOP_OK;
+}
+
+
+static aiofn_loop_status aiofn_libuv_unwrap_socket(void *data, aiofn_loop_proactor_socket_t *frontend) {
+    aiofn_libuv_socket_t *socket = frontend->backend_token;
+    (void)data;
+    frontend->backend_token = NULL;
+    socket->frontend = NULL;
+    uv_close((uv_handle_t *)&socket->handle, aiofn_libuv_free_handle);
+    return AIOFN_LOOP_OK;
+}
+
+
+static void aiofn_libuv_alloc_read(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buffer) {
+    aiofn_libuv_socket_t *socket = handle->data;
+    (void)suggested_size;
+    if (socket->read_op == NULL) {
+        buffer->base = NULL;
+        buffer->len = 0;
+    } else {
+        buffer->base = socket->read_buffer;
+        buffer->len = socket->read_buffer_len;
+    }
+}
+
+
+static void aiofn_libuv_on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buffer) {
+    aiofn_libuv_socket_t *socket = stream->data;
+    aiofn_loop_proactor_op_t *op = socket->read_op;
+    (void)buffer;
+    if (op == NULL) {
+        return;
+    }
+    if (nread == 0) {
+        return;
+    }
+    uv_read_stop(stream);
+    socket->read_op = NULL;
+    if (nread >= 0 || nread == UV_EOF) {
+        aiofn_libuv_complete(op, AIOFN_LOOP_OK, nread > 0 ? (size_t)nread : 0);
+    } else {
+        aiofn_libuv_set_error((aiofn_libuv_state_t *)stream->loop->data, "uv_read", (int)nread);
+        aiofn_libuv_complete(op, AIOFN_LOOP_ERROR, 0);
+    }
+}
+
+
+static aiofn_loop_status aiofn_libuv_read(void *data, aiofn_loop_proactor_socket_t *frontend,
+                                          aiofn_loop_proactor_op_t *op, void *buffer, size_t buffer_len) {
+    aiofn_libuv_socket_t *socket = frontend->backend_token;
+    int result;
+    if (socket->read_op != NULL) {
+        return AIOFN_LOOP_ERROR;
+    }
+
+    socket->read_op = op;
+    socket->read_buffer = buffer;
+    socket->read_buffer_len = buffer_len;
+    op->backend_token = socket;
+
+    result = uv_read_start((uv_stream_t *)&socket->handle, aiofn_libuv_alloc_read, aiofn_libuv_on_read);
+    if (result != 0) {
+        socket->read_op = NULL;
+        op->backend_token = NULL;
+        aiofn_libuv_set_error((aiofn_libuv_state_t *)data, "uv_read_start", result);
+        return AIOFN_LOOP_ERROR;
+    }
+    return AIOFN_LOOP_OK;
+}
+
+
+static void aiofn_libuv_on_write(uv_write_t *request, int status) {
+    aiofn_libuv_socket_t *socket = request->data;
+    aiofn_loop_proactor_op_t *op = socket->write_op;
+    socket->write_op = NULL;
+    if (status == 0) {
+        aiofn_libuv_complete(op, AIOFN_LOOP_OK, socket->write_transferred);
+    } else {
+        aiofn_libuv_set_error((aiofn_libuv_state_t *)socket->handle.loop->data, "uv_write", status);
+        aiofn_libuv_complete(op, AIOFN_LOOP_ERROR, 0);
+    }
+    free(socket->write_buffers);
+    socket->write_buffers = NULL;
+}
+
+
+static aiofn_loop_status aiofn_libuv_write(void *data, aiofn_loop_proactor_socket_t *frontend,
+                                           aiofn_loop_proactor_op_t *op,
+                                           const aiofn_loop_buffer_t *buffers, size_t buffer_count) {
+    aiofn_libuv_socket_t *socket = frontend->backend_token;
+    size_t index;
+    int result;
+    if (socket->write_op != NULL) {
+        return AIOFN_LOOP_ERROR;
+    }
+
+    socket->write_buffers = calloc(buffer_count, sizeof(*socket->write_buffers));
+    if (socket->write_buffers == NULL) {
+        return AIOFN_LOOP_NO_MEMORY;
+    }
+
+    socket->write_buffer_count = buffer_count;
+    socket->write_transferred = 0;
+    for (index = 0; index < buffer_count; index++) {
+        socket->write_buffers[index] = uv_buf_init(buffers[index].base, (unsigned)buffers[index].len);
+        socket->write_transferred += buffers[index].len;
+    }
+
+    socket->write_op = op;
+    op->backend_token = socket;
+    socket->write_request.data = socket;
+
+    result = uv_write(&socket->write_request, (uv_stream_t *)&socket->handle, socket->write_buffers,
+                      (unsigned)buffer_count, aiofn_libuv_on_write);
+    if (result != 0) {
+        socket->write_op = NULL;
+        op->backend_token = NULL;
+        aiofn_libuv_set_error((aiofn_libuv_state_t *)data, "uv_write", result);
+        free(socket->write_buffers);
+        socket->write_buffers = NULL;
+        return AIOFN_LOOP_ERROR;
+    }
+    return AIOFN_LOOP_OK;
+}
+
+
+static void aiofn_libuv_on_connect(uv_connect_t *request, int status) {
+    aiofn_libuv_socket_t *socket = request->data;
+    aiofn_loop_proactor_op_t *op = socket->connect_op;
+    socket->connect_op = NULL;
+    if (status == 0) {
+        aiofn_libuv_complete(op, AIOFN_LOOP_OK, 0);
+    } else {
+        aiofn_libuv_set_error((aiofn_libuv_state_t *)socket->handle.loop->data, "uv_connect", status);
+        aiofn_libuv_complete(op, AIOFN_LOOP_ERROR, 0);
+    }
+}
+
+
+static aiofn_loop_status aiofn_libuv_connect(
+    void *data,
+    aiofn_loop_proactor_socket_t *frontend,
+    aiofn_loop_proactor_op_t *op,
+    const void *address,
+    size_t address_len
+) {
+    aiofn_libuv_socket_t *socket = frontend->backend_token;
+    int result;
+    if (address_len > sizeof(struct sockaddr_storage)) {
+        return AIOFN_LOOP_ERROR;
+    }
+    if (socket->connect_op != NULL) {
+        return AIOFN_LOOP_ERROR;
+    }
+
+    memcpy(&socket->connect_address, address, address_len);
+    socket->connect_op = op;
+    op->backend_token = socket;
+    socket->connect_request.data = socket;
+
+    result = uv_tcp_connect(&socket->connect_request, &socket->handle,
+                            (const struct sockaddr *)&socket->connect_address, aiofn_libuv_on_connect);
+    if (result != 0) {
+        socket->connect_op = NULL;
+        op->backend_token = NULL;
+        aiofn_libuv_set_error((aiofn_libuv_state_t *)data, "uv_tcp_connect", result);
+        return AIOFN_LOOP_ERROR;
+    }
+    return AIOFN_LOOP_OK;
+}
+
+
+static aiofn_loop_status aiofn_libuv_cancel_proactor(void *data, aiofn_loop_proactor_op_t *op) {
+    aiofn_libuv_state_t *state = data;
+    aiofn_libuv_socket_t *socket;
+    int result;
+    if (op->backend_token == NULL) {
+        return AIOFN_LOOP_OK;
+    }
+    socket = op->backend_token;
+    if (socket->read_op == op) {
+        uv_read_stop((uv_stream_t *)&socket->handle);
+        socket->read_op = NULL;
+        aiofn_libuv_set_error(state, "uv_read", UV_ECANCELED);
+        aiofn_libuv_complete(op, AIOFN_LOOP_ERROR, 0);
+        return AIOFN_LOOP_OK;
+    }
+    if (socket->write_op == op) {
+        result = uv_cancel((uv_req_t *)&socket->write_request);
+        if (result != 0) {
+            aiofn_libuv_set_error(state, "uv_cancel(write)", result);
+            return AIOFN_LOOP_ERROR;
+        }
+        return AIOFN_LOOP_OK;
+    }
+    if (socket->connect_op == op) {
+        result = uv_cancel((uv_req_t *)&socket->connect_request);
+        if (result != 0) {
+            aiofn_libuv_set_error(state, "uv_cancel(connect)", result);
+            return AIOFN_LOOP_ERROR;
+        }
+        return AIOFN_LOOP_OK;
+    }
+    return AIOFN_LOOP_ERROR;
+}
+
+
+/* Reactor fd readiness operations. */
 static aiofn_loop_status aiofn_libuv_add_poll(
     void *data,
     aiofn_loop_fd_watch_t *watch,
@@ -151,6 +448,7 @@ static aiofn_loop_status aiofn_libuv_add_poll(
     if (poll == NULL) {
         poll = watch->backend_read_token != NULL ? watch->backend_read_token : watch->backend_write_token;
     }
+
     if (poll != NULL) {
         result = uv_poll_start(poll, UV_READABLE | UV_WRITABLE, aiofn_libuv_on_fd);
         if (result != 0) {
@@ -165,6 +463,7 @@ static aiofn_loop_status aiofn_libuv_add_poll(
     if (poll == NULL) {
         return AIOFN_LOOP_NO_MEMORY;
     }
+
     result = uv_poll_init(&state->loop, poll, watch->fd);
     if (result == 0) {
         poll->data = watch;
@@ -183,13 +482,16 @@ static aiofn_loop_status aiofn_libuv_add_poll(
     return AIOFN_LOOP_OK;
 }
 
+
 static aiofn_loop_status aiofn_libuv_add_reader(void *data, aiofn_loop_fd_watch_t *watch) {
     return aiofn_libuv_add_poll(data, watch, &watch->backend_read_token, UV_READABLE, "uv_poll_start(reader)");
 }
 
+
 static aiofn_loop_status aiofn_libuv_add_writer(void *data, aiofn_loop_fd_watch_t *watch) {
     return aiofn_libuv_add_poll(data, watch, &watch->backend_write_token, UV_WRITABLE, "uv_poll_start(writer)");
 }
+
 
 static aiofn_loop_status aiofn_libuv_remove_poll(void *data, void **token, int remaining_events) {
     aiofn_libuv_state_t *state = data;
@@ -199,6 +501,7 @@ static aiofn_loop_status aiofn_libuv_remove_poll(void *data, void **token, int r
         aiofn_libuv_set_error(state, "uv_poll_stop", result);
         return AIOFN_LOOP_ERROR;
     }
+
     *token = NULL;
     if (remaining_events != 0) {
         result = uv_poll_start(poll, remaining_events, aiofn_libuv_on_fd);
@@ -213,6 +516,7 @@ static aiofn_loop_status aiofn_libuv_remove_poll(void *data, void **token, int r
     return AIOFN_LOOP_OK;
 }
 
+
 static aiofn_loop_status aiofn_libuv_remove_reader(void *data, aiofn_loop_fd_watch_t *watch) {
     return aiofn_libuv_remove_poll(
         data,
@@ -220,6 +524,7 @@ static aiofn_loop_status aiofn_libuv_remove_reader(void *data, aiofn_loop_fd_wat
         watch->backend_write_token != NULL ? UV_WRITABLE : 0
     );
 }
+
 
 static aiofn_loop_status aiofn_libuv_remove_writer(void *data, aiofn_loop_fd_watch_t *watch) {
     return aiofn_libuv_remove_poll(
@@ -229,6 +534,8 @@ static aiofn_loop_status aiofn_libuv_remove_writer(void *data, aiofn_loop_fd_wat
     );
 }
 
+
+/* Signal operations. */
 static aiofn_loop_status aiofn_libuv_signal_watch(
     void *data,
     int signum,
@@ -240,6 +547,7 @@ static aiofn_loop_status aiofn_libuv_signal_watch(
     if (signal == NULL) {
         return AIOFN_LOOP_NO_MEMORY;
     }
+
     result = uv_signal_init(&state->loop, signal);
     if (result == 0) {
         signal->data = watch;
@@ -258,6 +566,7 @@ static aiofn_loop_status aiofn_libuv_signal_watch(
     return AIOFN_LOOP_OK;
 }
 
+
 static aiofn_loop_status aiofn_libuv_signal_unwatch(void *data, aiofn_loop_signal_watch_t *watch) {
     aiofn_libuv_state_t *state = data;
     uv_signal_t *signal = watch->backend_token;
@@ -272,22 +581,29 @@ static aiofn_loop_status aiofn_libuv_signal_unwatch(void *data, aiofn_loop_signa
     return AIOFN_LOOP_OK;
 }
 
+
 static const char *aiofn_libuv_last_error(void *data) {
     aiofn_libuv_state_t *state = data;
     return state->last_error[0] == '\0' ? NULL : state->last_error;
 }
 
+
+/* Backend construction and destruction. */
 aiofn_loop_backend_t *aiofn_libuv_backend_new(void) {
     aiofn_libuv_state_t *state = calloc(1, sizeof(*state));
     int result;
     if (state == NULL) {
         return NULL;
     }
+
     result = uv_loop_init(&state->loop);
     if (result != 0) {
         free(state);
         return NULL;
     }
+
+    state->loop.data = state;
+
     state->backend.struct_size = AIOFN_LOOP_BACKEND_CURRENT_SIZE;
     state->backend.state = state;
     state->backend.name = "libuv";
@@ -298,17 +614,29 @@ aiofn_loop_backend_t *aiofn_libuv_backend_new(void) {
     state->backend.call_soon = aiofn_libuv_call_soon;
     state->backend.call_at = aiofn_libuv_call_at;
     state->backend.action_cancel = aiofn_libuv_action_cancel;
+
     state->reactor.struct_size = AIOFN_REACTOR_BACKEND_CURRENT_SIZE;
     state->reactor.add_reader = aiofn_libuv_add_reader;
     state->reactor.remove_reader = aiofn_libuv_remove_reader;
     state->reactor.add_writer = aiofn_libuv_add_writer;
     state->reactor.remove_writer = aiofn_libuv_remove_writer;
     state->backend.reactor = &state->reactor;
+
+    state->proactor.struct_size = AIOFN_PROACTOR_BACKEND_CURRENT_SIZE;
+    state->proactor.wrap_socket = aiofn_libuv_wrap_socket;
+    state->proactor.unwrap_socket = aiofn_libuv_unwrap_socket;
+    state->proactor.connect = aiofn_libuv_connect;
+    state->proactor.read = aiofn_libuv_read;
+    state->proactor.write = aiofn_libuv_write;
+    state->proactor.cancel = aiofn_libuv_cancel_proactor;
+    state->backend.proactor = &state->proactor;
+
     state->backend.last_error = aiofn_libuv_last_error;
     state->backend.signal_watch = aiofn_libuv_signal_watch;
     state->backend.signal_unwatch = aiofn_libuv_signal_unwatch;
     return &state->backend;
 }
+
 
 void aiofn_libuv_backend_free(aiofn_loop_backend_t *backend) {
     aiofn_libuv_state_t *state = backend->state;

@@ -26,12 +26,17 @@ from .loop_backend cimport (
     AIOFN_LOOP_BACKEND_CAPSULE_NAME,
     AIOFN_LOOP_BACKEND_MIN_SIZE,
     AIOFN_REACTOR_BACKEND_MIN_SIZE,
+    AIOFN_PROACTOR_BACKEND_MIN_SIZE,
     AIOFN_LOOP_FD_READ,
     AIOFN_LOOP_FD_WRITE,
     AIOFN_LOOP_NOT_SUPPORTED,
     AIOFN_LOOP_NO_MEMORY,
     AIOFN_LOOP_OK,
     aiofn_loop_backend_t,
+    aiofn_loop_buffer_t,
+    aiofn_loop_proactor_op_t,
+    aiofn_loop_proactor_socket_t,
+    aiofn_proactor_backend_t,
     aiofn_reactor_backend_t,
     aiofn_loop_action_t,
     aiofn_loop_fd_watch_t,
@@ -43,6 +48,7 @@ from .utils cimport NoResult, unlikely
 from cpython.contextvars cimport PyContext_CopyCurrent, PyContext_Enter, PyContext_Exit
 from cpython.object cimport Py_EQ, Py_GE, Py_GT, Py_LE, Py_LT, Py_NE
 from cpython.pycapsule cimport PyCapsule_CheckExact, PyCapsule_GetPointer
+from cpython.ref cimport Py_DECREF, Py_INCREF
 from cpython.pythread cimport (
     WAIT_LOCK,
     PyThread_acquire_lock,
@@ -469,6 +475,88 @@ cdef void _action_callback(aiofn_loop_action_t *action) noexcept with gil:
         loop._backend_failed(exc)
 
 
+cdef class _ProactorOperation
+
+
+cdef class _ProactorSocket:
+    cdef:
+        object owner
+        object read_operation
+        object write_operation
+        aiofn_loop_proactor_socket_t socket
+
+    def __cinit__(self):
+        self.socket.fd = -1
+        self.socket.backend_token = NULL
+        self.read_operation = None
+        self.write_operation = None
+
+    def __init__(self, object owner, int fd):
+        self.owner = owner
+        self.socket.fd = fd
+
+
+cdef class _ProactorOperation:
+    cdef:
+        LoopBase loop
+        _ProactorSocket proactor_socket
+        object future
+        object buffer
+        int result_kind
+        aiofn_loop_proactor_op_t op
+
+    def __cinit__(self):
+        self.op.callback = _proactor_callback
+        self.op.callback_data = <void *>self
+        self.op.backend_token = NULL
+        self.op.status = AIOFN_LOOP_OK
+        self.op.transferred = 0
+
+    def __init__(self, LoopBase loop, object future, object buffer, int result_kind):
+        self.loop = loop
+        self.future = future
+        self.buffer = buffer
+        self.result_kind = result_kind
+
+
+cdef void _proactor_callback(aiofn_loop_proactor_op_t *op) noexcept with gil:
+    cdef:
+        _ProactorOperation operation = <_ProactorOperation>op.callback_data
+        LoopBase loop = operation.loop
+        object future = operation.future
+        object result
+        object message
+
+    try:
+        if operation.result_kind in (1, 2):
+            operation.proactor_socket.read_operation = None
+        elif operation.result_kind == 3:
+            operation.proactor_socket.write_operation = None
+
+        if future.done():
+            return
+
+        if op.status == AIOFN_LOOP_OK:
+            if operation.result_kind == 1:
+                result = bytes(operation.buffer[:op.transferred])
+            elif operation.result_kind == 2:
+                result = op.transferred
+            else:
+                result = None
+            future.set_result(result)
+        else:
+            if loop._backend.last_error != NULL:
+                message = loop._backend.last_error(loop._backend.state).decode("utf-8", "replace")
+            else:
+                message = f"{loop._backend_name} proactor operation failed"
+            future.set_exception(RuntimeError(message))
+    except BaseException as exc:
+        loop._backend_failed(exc)
+    finally:
+        loop._proactor_release_socket(operation.proactor_socket)
+        Py_DECREF(operation)
+
+
 cdef void _fd_ready_callback(void *callback_data, uint32_t events) noexcept with gil:
     cdef _FDCallbacks callbacks = <_FDCallbacks>callback_data
     try:
@@ -505,12 +593,14 @@ cdef class LoopBase:
 
         aiofn_loop_backend_t *_backend
         const aiofn_reactor_backend_t *_reactor
+        const aiofn_proactor_backend_t *_proactor
         object _backend_owner
         str _backend_name
         object _backend_fatal_error
 
         dict _fd_callbacks      # Dict[Fileno, _FDCallbacks]
         dict _signal_handlers   # Dict[Signal, _SignalCallback]
+        dict _proactor_sockets  # Dict[Fileno, _ProactorSocket]
 
         # An intrusive list of callbacks registered in the backend with call_soon and call_at.
         # * it keeps each Handle alive while the backend retains a pointer to its embedded aiofn_loop_action_t.
@@ -579,12 +669,21 @@ cdef class LoopBase:
 
         self._backend = backend_ptr
         self._reactor = backend_ptr.reactor
+        self._proactor = backend_ptr.proactor
+        if self._proactor != NULL:
+            if self._proactor.struct_size < AIOFN_PROACTOR_BACKEND_MIN_SIZE:
+                raise ValueError("loop backend proactor structure is too small")
+            if (self._proactor.wrap_socket == NULL or self._proactor.unwrap_socket == NULL or
+                    self._proactor.connect == NULL or self._proactor.read == NULL or
+                    self._proactor.write == NULL or self._proactor.cancel == NULL):
+                raise ValueError("loop backend proactor is missing a required operation")
         self._backend_owner = backend
         assert backend_ptr.name != NULL
         self._backend_name = backend_ptr.name.decode("utf-8", "replace")
         self._backend_fatal_error = None
         self._fd_callbacks = {}
         self._signal_handlers = {}
+        self._proactor_sockets = {} if self._proactor != NULL else None
         self._pending_handles = None
         self._current_handle_source_traceback = None
         self._closed = False
@@ -819,6 +918,7 @@ cdef class LoopBase:
         cdef:
             _FDCallbacks fd_callback
             _SignalCallback signal_callback
+            _ProactorSocket proactor_socket
 
         self._self_pipe.acquire()
         try:
@@ -840,6 +940,12 @@ cdef class LoopBase:
         for fd_callback in self._fd_callbacks.values():
             self._remove_fd(fd_callback)
         self._fd_callbacks = None
+
+        if self._proactor_sockets is not None:
+            for proactor_socket_obj in tuple(self._proactor_sockets.values()):
+                proactor_socket = <_ProactorSocket>proactor_socket_obj
+                self._check_status(self._proactor.unwrap_socket(self._backend.state, &proactor_socket.socket))
+            self._proactor_sockets = None
 
         while self._pending_handles is not None:
             # Handle.cancel unlinks handle from _pending_handles
@@ -954,7 +1060,130 @@ cdef class LoopBase:
             callbacks.writer = None
             callbacks.writer_fileobj = None
 
+    cdef inline _ProactorSocket _proactor_socket(self, object sock) except *:
+        cdef:
+            int fd = _fileobj_to_fileno_obj(sock)
+            _ProactorSocket result = self._proactor_sockets.get(fd)
+
+        if result is None:
+            result = _ProactorSocket(sock, fd)
+            self._check_status(self._proactor.wrap_socket(self._backend.state, &result.socket))
+            self._proactor_sockets[fd] = result
+
+        return result
+
+    cdef inline NoResult _proactor_release_socket(self, _ProactorSocket proactor_socket) except NoResult.EXC:
+        if (proactor_socket.read_operation is None and proactor_socket.write_operation is None and
+                proactor_socket.socket.backend_token != NULL):
+            self._check_status(self._proactor.unwrap_socket(self._backend.state, &proactor_socket.socket))
+            self._proactor_sockets.pop(proactor_socket.socket.fd, None)
+        return NoResult.OK
+
+    async def _proactor_recv(self, sock, n):
+        if n == 0:
+            return b""
+
+        cdef:
+            _ProactorSocket proactor_socket = self._proactor_socket(sock)
+            bytearray buffer = bytearray(n)
+            unsigned char[:] view = buffer
+            void *buffer_ptr = <void *>&view[0]
+            object future = self.create_future()
+            _ProactorOperation operation = _ProactorOperation(self, future, memoryview(buffer), 1)
+
+        operation.proactor_socket = proactor_socket
+        proactor_socket.read_operation = operation
+        Py_INCREF(operation)
+        cdef aiofn_loop_status status = self._proactor.read(self._backend.state, &proactor_socket.socket, &operation.op, buffer_ptr, n)
+        if status != AIOFN_LOOP_OK:
+            Py_DECREF(operation)
+            self._check_status(status)
+
+        try:
+            return await future
+        except BaseException:
+            if operation.op.backend_token != NULL:
+                self._check_status(self._proactor.cancel(self._backend.state, &operation.op))
+            raise
+
+    async def _proactor_recv_into(self, sock, buf):
+        if len(buf) == 0:
+            return 0
+        cdef:
+            _ProactorSocket proactor_socket = self._proactor_socket(sock)
+            object buffer = memoryview(buf).cast("B")
+            unsigned char[:] view = buffer
+            object future = self.create_future()
+            _ProactorOperation operation = _ProactorOperation(self, future, buffer, 2)
+            aiofn_loop_status status
+            void *buffer_ptr = NULL
+        if len(view):
+            buffer_ptr = <void *>&view[0]
+        operation.proactor_socket = proactor_socket
+        proactor_socket.read_operation = operation
+        Py_INCREF(operation)
+        status = self._proactor.read(self._backend.state, &proactor_socket.socket, &operation.op, buffer_ptr, len(view))
+        if status != AIOFN_LOOP_OK:
+            Py_DECREF(operation)
+            self._check_status(status)
+        try:
+            return await future
+        except BaseException:
+            if operation.op.backend_token != NULL:
+                self._check_status(self._proactor.cancel(self._backend.state, &operation.op))
+            raise
+
+    async def _proactor_sendall(self, sock, data):
+        cdef:
+            _ProactorSocket proactor_socket = self._proactor_socket(sock)
+            const unsigned char[:] view = memoryview(data).cast("B")
+            object future = self.create_future()
+            _ProactorOperation operation = _ProactorOperation(self, future, view, 3)
+            aiofn_loop_buffer_t buffer
+
+        buffer.base = <void *>&view[0] if len(view) else NULL
+        buffer.len = len(view)
+
+        operation.proactor_socket = proactor_socket
+        proactor_socket.write_operation = operation
+        Py_INCREF(operation)
+
+        cdef aiofn_loop_status status = self._proactor.write(self._backend.state, &proactor_socket.socket, &operation.op, &buffer, 1)
+        if status != AIOFN_LOOP_OK:
+            Py_DECREF(operation)
+            self._check_status(status)
+        try:
+            await future
+        except BaseException:
+            if operation.op.backend_token != NULL:
+                self._check_status(self._proactor.cancel(self._backend.state, &operation.op))
+            raise
+
+    async def _proactor_connect(self, sock, address):
+        # uv_tcp_open adopts an existing fd, while uv_tcp_connect creates a
+        # connection on a libuv-owned socket. Connect the Python socket first;
+        # the proactor then adopts it for subsequent read/write operations.
+        try:
+            sock.connect(address)
+            return
+        except (BlockingIOError, InterruptedError):
+            pass
+
+        future = self.create_future()
+        def ready():
+            error = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+            self.remove_writer(sock)
+            if error:
+                future.set_exception(OSError(error, f"Connect call failed {address}"))
+            else:
+                future.set_result(None)
+        self.add_writer(sock, ready)
+        await future
+
     async def sock_recv(self, sock, n):
+        if self._proactor != NULL:
+            return await self._proactor_recv(sock, n)
+
         future = self.create_future()
         def ready():
             try:
@@ -971,6 +1200,8 @@ cdef class LoopBase:
         return await future
 
     async def sock_recv_into(self, sock, buf):
+        if self._proactor != NULL:
+            return await self._proactor_recv_into(sock, buf)
         future = self.create_future()
         def ready():
             try:
@@ -987,6 +1218,10 @@ cdef class LoopBase:
         return await future
 
     async def sock_sendall(self, sock, data):
+        if self._proactor != NULL:
+            await self._proactor_sendall(sock, data)
+            return
+
         view = memoryview(data).cast("B")
         future = self.create_future()
         sent = 0
@@ -1024,6 +1259,9 @@ cdef class LoopBase:
         return await future
 
     async def sock_connect(self, sock, address):
+        if self._proactor != NULL:
+            await self._proactor_connect(sock, address)
+            return
         try:
             sock.connect(address)
             return

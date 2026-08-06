@@ -31,6 +31,10 @@ Read README.md for project description.
   runtime, or implementation behavior being handled, especially when using
   `getattr`, feature detection, or seemingly redundant conditions. Do not add
   speculative fallbacks for unsupported or hypothetical environments.
+* Optimize code layout for human readability, not just compactness. Use blank
+  lines to separate logically distinct groups of declarations and statements;
+  for example, visually separate read, write, and connect state in native
+  structures and separate setup, validation, operation, and cleanup blocks.
 
 # Test style
 

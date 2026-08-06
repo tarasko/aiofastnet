@@ -139,11 +139,16 @@ struct aiofn_loop_proactor_op {
 typedef struct aiofn_proactor_backend {
     size_t struct_size;
 
-    /* Adopt an existing nonblocking socket into a native proactor handle. */
-    aiofn_loop_status (*open_socket)(void *state, aiofn_loop_proactor_socket_t *socket);
+    /* Wrap an existing nonblocking socket into a native proactor handle.
+       All async operations require already wrapped proactor handle and not a native socket.
+    */
+    aiofn_loop_status (*wrap_socket)(void *state, aiofn_loop_proactor_socket_t *socket);
 
-    /* Stop using the native socket handle and release backend resources. */
-    aiofn_loop_status (*close_socket)(void *state, aiofn_loop_proactor_socket_t *socket);
+    /*
+     * Stop using the native socket handle and release backend resources.
+     * This does not close the frontend-owned socket or its fd.
+     */
+    aiofn_loop_status (*unwrap_socket)(void *state, aiofn_loop_proactor_socket_t *socket);
 
     /* Start an asynchronous connect operation. */
     aiofn_loop_status (*connect)(

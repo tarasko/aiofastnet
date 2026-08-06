@@ -14,6 +14,7 @@ cdef extern from "loop_backend.h":
         AIOFN_LOOP_FD_WRITE
         AIOFN_LOOP_BACKEND_MIN_SIZE
         AIOFN_REACTOR_BACKEND_MIN_SIZE
+        AIOFN_PROACTOR_BACKEND_MIN_SIZE
 
     const char *AIOFN_LOOP_BACKEND_CAPSULE_NAME
 
@@ -57,8 +58,7 @@ cdef extern from "loop_backend.h":
         int fd
         void *backend_token
 
-    ctypedef struct aiofn_loop_proactor_op_t:
-        pass
+    ctypedef struct aiofn_loop_proactor_op_t
 
     ctypedef void (*aiofn_loop_proactor_callback_fn)(aiofn_loop_proactor_op_t *) noexcept nogil
 
@@ -71,8 +71,8 @@ cdef extern from "loop_backend.h":
 
     ctypedef struct aiofn_proactor_backend_t:
         size_t struct_size
-        aiofn_loop_status (*open_socket)(void *, aiofn_loop_proactor_socket_t *) noexcept nogil
-        aiofn_loop_status (*close_socket)(void *, aiofn_loop_proactor_socket_t *) noexcept nogil
+        aiofn_loop_status (*wrap_socket)(void *, aiofn_loop_proactor_socket_t *) noexcept nogil
+        aiofn_loop_status (*unwrap_socket)(void *, aiofn_loop_proactor_socket_t *) noexcept nogil
         aiofn_loop_status (*connect)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_proactor_op_t *, const void *, size_t) noexcept nogil
         aiofn_loop_status (*read)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_proactor_op_t *, void *, size_t) noexcept nogil
         aiofn_loop_status (*write)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_proactor_op_t *, const aiofn_loop_buffer_t *, size_t) noexcept nogil
