@@ -630,19 +630,6 @@ cdef class LoopBase:
             handle._pending_next = None
             handle._is_pending = False
 
-    cdef inline NoResult _backend_unwatch_fd(self, aiofn_loop_fd_watch_t *watch, bint reader) except NoResult.EXC:
-        if reader:
-            self._check_status(self._backend.remove_reader(self._backend.state, watch))
-        else:
-            self._check_status(self._backend.remove_writer(self._backend.state, watch))
-        return NoResult.OK
-
-    cdef inline aiofn_loop_status _backend_run(self) noexcept:
-        cdef aiofn_loop_status status
-        with nogil:
-            status = self._backend.run(self._backend.state)
-        return status
-
     cdef inline NoResult _check_closed(self) except NoResult.EXC:
         if self._closed:
             raise RuntimeError("Event loop is closed")
@@ -806,7 +793,8 @@ cdef class LoopBase:
         asyncio.events._set_running_loop(self)
         sys.set_asyncgen_hooks(firstiter=self._asyncgen_firstiter_hook, finalizer=self._asyncgen_finalizer_hook)
         try:
-            status = self._backend_run()
+            with nogil:
+                status = self._backend.run(self._backend.state)
         finally:
             sys.set_asyncgen_hooks(*old_hooks)
             asyncio.events._set_running_loop(None)
@@ -921,20 +909,21 @@ cdef class LoopBase:
 
         cdef:
             fd = _fileobj_to_fileno_obj(fileobj)
-            _FDCallbacks callbacks = self._fd_callbacks.get(fd)
+            _FDCallbacks callbacks = <_FDCallbacks>self._fd_callbacks.get(fd)
 
         if callbacks is None:
             return False
 
-        cdef Handle handle = callbacks.reader if reader else callbacks.writer
-        if handle is None:
-            return False
-
-        self._backend_unwatch_fd(&callbacks.watch, reader)
         if reader:
+            if callbacks.reader is None:
+                return False
+            self._check_status(self._backend.remove_reader(self._backend.state, &callbacks.watch))
             callbacks.reader = None
             callbacks.reader_fileobj = None
         else:
+            if callbacks.writer is None:
+                return False
+            self._check_status(self._backend.remove_writer(self._backend.state, &callbacks.watch))
             callbacks.writer = None
             callbacks.writer_fileobj = None
 
@@ -945,14 +934,14 @@ cdef class LoopBase:
 
     cdef inline NoResult _remove_fd(self, _FDCallbacks callbacks) except NoResult.EXC:
         if callbacks.reader is not None:
-            self._backend_unwatch_fd(&callbacks.watch, True)
+            self._check_status(self._backend.remove_reader(self._backend.state, &callbacks.watch))
             callbacks.reader = None
             callbacks.reader_fileobj = None
+
         if callbacks.writer is not None:
-            self._backend_unwatch_fd(&callbacks.watch, False)
+            self._check_status(self._backend.remove_writer(self._backend.state, &callbacks.watch))
             callbacks.writer = None
             callbacks.writer_fileobj = None
-        return NoResult.OK
 
     async def sock_recv(self, sock, n):
         future = self.create_future()
