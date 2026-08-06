@@ -789,7 +789,7 @@ cdef class LoopBase:
         return self._backend.now_ns(self._backend.state) / 1_000_000_000
 
     cpdef stop(self):
-        if self.is_closed():
+        if self._closed:
             return
         self.call_soon(self._stop_backend)
 
@@ -825,7 +825,7 @@ cdef class LoopBase:
         try:
             if self.is_running():
                 raise RuntimeError("Cannot close a running event loop")
-            if self.is_closed():
+            if self._closed:
                 return
             # Prevent new thread-safe submissions before backend cleanup starts.
             self._closed = True
@@ -916,40 +916,40 @@ cdef class LoopBase:
         return NoResult.OK
 
     cdef inline bint _clear_fd_callback(self, object fileobj, bint reader) except -1:
-        cdef:
-            Handle handle
-            _FDCallbacks callbacks
-
-        if self.is_closed():
+        if self._closed:
             return False
-        fd = _fileobj_to_fileno_obj(fileobj)
-        callbacks = self._fd_callbacks.get(fd)
+
+        cdef:
+            fd = _fileobj_to_fileno_obj(fileobj)
+            _FDCallbacks callbacks = self._fd_callbacks.get(fd)
+
         if callbacks is None:
             return False
-        handle = callbacks.reader if reader else callbacks.writer
+
+        cdef Handle handle = callbacks.reader if reader else callbacks.writer
         if handle is None:
             return False
+
         self._backend_unwatch_fd(&callbacks.watch, reader)
-        handle.cancel()
         if reader:
             callbacks.reader = None
             callbacks.reader_fileobj = None
         else:
             callbacks.writer = None
             callbacks.writer_fileobj = None
+
         if callbacks.reader is None and callbacks.writer is None:
-            self._fd_callbacks.pop(fd)
+            self._fd_callbacks.pop(fd, None)
+
         return True
 
     cdef inline NoResult _remove_fd(self, _FDCallbacks callbacks) except NoResult.EXC:
         if callbacks.reader is not None:
             self._backend_unwatch_fd(&callbacks.watch, True)
-            callbacks.reader.cancel()
             callbacks.reader = None
             callbacks.reader_fileobj = None
         if callbacks.writer is not None:
             self._backend_unwatch_fd(&callbacks.watch, False)
-            callbacks.writer.cancel()
             callbacks.writer = None
             callbacks.writer_fileobj = None
         return NoResult.OK
