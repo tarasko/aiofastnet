@@ -390,16 +390,21 @@ cdef class _SelfPipe:
                 bytes_written = posix_write(self.writer, &handle_ptr, sizeof(handle_ptr))
             if bytes_written >= 0:
                 break
+
             last_error = errno
             if last_error == EINTR:
                 continue
+
             Py_DECREF(handle)
             if last_error == EAGAIN:
                 raise RuntimeError("call_soon_threadsafe failed: callback pipe is full")
+
             raise OSError(last_error, os.strerror(last_error))
+
         if bytes_written != sizeof(handle_ptr):
             Py_DECREF(handle)
             raise RuntimeError("call_soon_threadsafe failed: partial pointer write")
+
         return NoResult.OK
 
     cdef inline Py_ssize_t process(self, bint execute) except -1:
