@@ -10,6 +10,7 @@ pytest-xdist
 mypy
 async_timeout
 aiohttp
+pytest-aiohttp
 uvloop; sys_platform != 'win32'
 winloop; sys_platform == 'win32'
 twine
