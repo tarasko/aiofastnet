@@ -16,6 +16,7 @@ import os
 import tempfile
 
 import pytest
+from aiohttp import web
 
 if os.name == "nt":
     pytest.skip("CodSpeed benchmarks are not run on Windows", allow_module_level=True)
@@ -213,3 +214,43 @@ def test_benchmark_sendfile(benchmark, sendfile_conn_type, msg_size, asyncio_deb
             return SendfileClientProtocol(file, payload_size, rounds)
 
         benchmark(run_in_loop, client_factory, payload_size, sendfile_conn_type, True, asyncio_debug)
+
+
+def test_aiohttp_ten_streamed_responses_iter_chunked_1mb(
+    benchmark,
+    aiohttp_client,
+    asyncio_debug
+) -> None:
+    """Benchmark 10 streamed responses using iter_chunked 1 MiB."""
+    message_count = 10
+    MB = 2**20
+    data = b"x" * 6 * MB
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        resp = web.StreamResponse()
+        await resp.prepare(request)
+        for _ in range(10):
+            await resp.write(data)
+        return resp
+
+    async def run_client_benchmark() -> None:
+        aiofastnet.patch_loop()
+
+        app = web.Application()
+        app.router.add_route("GET", "/", handler)
+
+        client = await aiohttp_client(app)
+        for _ in range(message_count):
+            resp = await client.get("/")
+            async for x in resp.content.iter_chunked(MB):
+                pass
+        await client.close()
+
+    def run_on_asyncio_loop():
+        asyncio.run(
+            run_client_benchmark(),
+            # loop_factory=uvloop.new_event_loop,
+            debug=asyncio_debug,
+        )
+
+    benchmark(run_on_asyncio_loop)

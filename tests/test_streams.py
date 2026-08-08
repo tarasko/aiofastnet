@@ -1,92 +1,20 @@
 import asyncio
 import os
 import socket
-import tempfile
-from contextlib import asynccontextmanager
 
 import pytest
 from async_timeout import timeout
 
 from aiofastnet import (
     open_connection,
-    start_server,
 )
 
 if hasattr(socket, 'AF_UNIX'):
     from aiofastnet import (
         open_unix_connection,
-        start_unix_server,
     )
 
-from tests.utils import EchoServerHandle, _logger
-
-
-@asynccontextmanager
-async def StreamEchoServer(host="127.0.0.1", port=0, ssl_context=None):
-    loop = asyncio.get_running_loop()
-
-    async def client_connection_cb(reader: asyncio.StreamReader,
-                                   writer: asyncio.StreamWriter):
-        _logger.debug("SERVER: connected")
-        while True:
-            data = await reader.read(1024)
-            _logger.debug("SERVER: got %d bytes", len(data))
-            if not data:
-                break
-            writer.write(data)
-
-        writer.close()
-        await writer.wait_closed()
-        _logger.debug("SERVER: client connection closed")
-
-    server = await start_server(
-        loop,
-        client_connection_cb,
-        host=host,
-        port=port,
-        ssl=ssl_context,
-    )
-
-    try:
-        resolved_port = server.sockets[0].getsockname()[1]
-        yield EchoServerHandle(server=server, port=resolved_port, host=host,
-                               clients=None, client_waiters=None)
-    finally:
-        if hasattr(server, "abort_clients"):
-            server.abort_clients()
-        server.close()
-        await server.wait_closed()
-
-
-@asynccontextmanager
-async def UnixStreamEchoServer():
-    loop = asyncio.get_running_loop()
-
-    async def client_connection_cb(reader: asyncio.StreamReader,
-                                   writer: asyncio.StreamWriter):
-        _logger.debug("SERVER: connected")
-        while True:
-            data = await reader.read(1024)
-            _logger.debug("SERVER: got %d bytes", len(data))
-            if not data:
-                break
-            writer.write(data)
-
-        writer.close()
-        await writer.wait_closed()
-        _logger.debug("SERVER: client connection closed")
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        path = os.path.join(tmpdir, "aiofastnet.sock")
-        server = await start_unix_server(
-            loop, client_connection_cb, path=path)
-        try:
-            yield path
-        finally:
-            if hasattr(server, "abort_clients"):
-                server.abort_clients()
-            server.close()
-            await server.wait_closed()
+from tests.utils import StreamEchoServer, UnixStreamEchoServer
 
 
 @pytest.mark.parametrize("msg_size", [1, 64, 256 * 1024, 6 * 1024 * 1024])

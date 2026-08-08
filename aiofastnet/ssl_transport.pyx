@@ -49,7 +49,7 @@ cdef:
     object _logger = getLogger('aiofastnet')
     size_t _log_threshold_for_connlost_writes = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
     Py_ssize_t _data_received_max_size = constants.DATA_RECEIVED_MAX_SIZE
-    Py_ssize_t _max_reads_per_socket_per_cycle = constants.MAX_READS_PER_SOCKET_PER_CYCLE
+    Py_ssize_t _max_read_bytes_per_cycle_hint = constants.MAX_READ_BYTES_PER_CYCLE_HINT
 
 
 def _ssl_socket_post_handshake_test_hook(transport):
@@ -1295,11 +1295,11 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             char* buf_ptr
             Py_ssize_t buf_len
             Py_ssize_t bytes_read
-            Py_ssize_t idx
+            Py_ssize_t total_bytes_read = 0
 
         try:
             if self._ssl_engine.ssl_incoming_use_membio():
-                for idx in range(_max_reads_per_socket_per_cycle):
+                while total_bytes_read < _max_read_bytes_per_cycle_hint:
                     if unlikely(self._read_paused):
                         return
 
@@ -1315,6 +1315,8 @@ cdef class SSLTransport_Socket(SSLTransportBase):
 
                     if unlikely(bytes_read == -1):  # without exception this means EGAIN
                         return
+
+                    total_bytes_read += bytes_read
 
                     self._ssl_engine.incoming_bio_produce(bytes_read)
                     self._incoming_bio_updated()
