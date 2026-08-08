@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+1.0.4
+------------------
+
+* Fix #62: Greedy reads cause significant performance regression in aiohttp
+
 1.0.3
 ------------------
 

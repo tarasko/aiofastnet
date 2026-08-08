@@ -51,7 +51,7 @@ cdef:
     object _os_sendfile = getattr(os, "sendfile", None)
     Py_ssize_t _data_received_max_size = constants.DATA_RECEIVED_MAX_SIZE
     Py_ssize_t _datagram_received_max_size = constants.DATAGRAM_RECEIVED_MAX_SIZE
-    Py_ssize_t _max_reads_per_socket_per_cycle = constants.MAX_READS_PER_SOCKET_PER_CYCLE
+    Py_ssize_t _max_read_bytes_per_cycle_hint = constants.MAX_READ_BYTES_PER_CYCLE_HINT
     size_t _log_threshold_for_connlost_writes = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
 
 
@@ -933,9 +933,9 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
             char* buf_ptr
             Py_ssize_t buf_len
             Py_ssize_t bytes_read
-            Py_ssize_t idx
+            Py_ssize_t total_bytes_read = 0
 
-        for idx in range(_max_reads_per_socket_per_cycle):
+        while total_bytes_read < _max_read_bytes_per_cycle_hint:
             if self._connection_lost_scheduled:
                 return NoResult.OK
 
@@ -955,6 +955,8 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
                 self._read_ready__on_eof()
                 return NoResult.OK
 
+            total_bytes_read += bytes_read
+
             self._call_protocol_buffer_updated(bytes_read)
 
             if bytes_read < buf_len:
@@ -969,10 +971,10 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
     cdef inline NoResult _read_ready__data_received(self) except NoResult.EXC:
         cdef:
             Py_ssize_t bytes_read
+            Py_ssize_t total_bytes_read = 0
             bytes data
-            Py_ssize_t idx
 
-        for idx in range(_max_reads_per_socket_per_cycle):
+        while total_bytes_read < _max_read_bytes_per_cycle_hint:
             if self._connection_lost_scheduled:
                 return NoResult.OK
 
@@ -990,6 +992,8 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
             if bytes_read == 0:
                 self._read_ready__on_eof()
                 return NoResult.OK
+
+            total_bytes_read += bytes_read
 
             self._call_protocol_data_received(data)
 

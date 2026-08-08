@@ -48,8 +48,6 @@ else:
 cdef:
     object _logger = getLogger('aiofastnet')
     size_t _log_threshold_for_connlost_writes = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
-    Py_ssize_t _data_received_max_size = constants.DATA_RECEIVED_MAX_SIZE
-    Py_ssize_t _max_reads_per_socket_per_cycle = constants.MAX_READS_PER_SOCKET_PER_CYCLE
 
 
 def _ssl_socket_post_handshake_test_hook(transport):
@@ -126,6 +124,11 @@ cdef class SSLTransportBase(Transport):
         public bint _sendfile_compatible
         bint _server_side
         str _server_hostname
+
+        # We keep these as part of the transport object to simplify testing.
+        # Test can override constants to recreate various conditions per transport.
+        Py_ssize_t _data_received_max_size
+        Py_ssize_t _max_read_bytes_per_cycle_hint
 
     # Implement the following in the derived class
 
@@ -232,6 +235,8 @@ cdef class SSLTransportBase(Transport):
         self._server_hostname = None if server_side else server_hostname
         self._state = SSLProtocolState.UNWRAPPED
         self._app_state = AppProtocolState.STATE_INIT
+        self._data_received_max_size = constants.DATA_RECEIVED_MAX_SIZE
+        self._max_read_bytes_per_cycle_hint = constants.MAX_READ_BYTES_PER_CYCLE_HINT
 
         self._set_protocol(app_protocol)
 
@@ -504,17 +509,19 @@ cdef class SSLTransportBase(Transport):
             Py_ssize_t last_bytes_read = 0
             Py_ssize_t total_bytes_read = 0
             SSLError last_error = SSLError.SSL_ERROR_NONE
+            bint mbio_used = self._ssl_engine.ssl_incoming_use_membio()
 
-        while True:
+        # For memory BIO, the outer socket-read loop in _read_ready() owns the budget.
+        while mbio_used or total_bytes_read < self._max_read_bytes_per_cycle_hint:
             app_buffer = self._call_protocol_get_buffer(&buf_ptr, &buf_len)
 
             last_error = self._ssl_engine.read(self, buf_ptr, buf_len, &last_bytes_read)
             buf_len -= last_bytes_read
             total_bytes_read += last_bytes_read
 
-            if total_bytes_read > 0:
-                self._call_protocol_buffer_updated(total_bytes_read)
-                total_bytes_read = 0
+            if last_bytes_read > 0:
+                self._call_protocol_buffer_updated(last_bytes_read)
+                last_bytes_read = 0
 
             if buf_len == 0:
                 if not self._read_paused:
@@ -531,27 +538,28 @@ cdef class SSLTransportBase(Transport):
             char* bytes_buffer_ptr = NULL
             PyObject* bytes_obj = NULL
             SSLError last_error = SSLError.SSL_ERROR_NONE
-            Py_ssize_t total_bytes_read
+            Py_ssize_t total_bytes_read = 0
+            bint mbio_used = self._ssl_engine.ssl_incoming_use_membio()
 
-        while True:
-            bytes_obj = aiofn_allocate_bytes(_data_received_max_size, &bytes_buffer_ptr)
-            total_bytes_read = 0
+        # For memory BIO, the outer socket-read loop in _read_ready() owns the budget.
+        while mbio_used or total_bytes_read < self._max_read_bytes_per_cycle_hint:
+            bytes_obj = aiofn_allocate_bytes(self._data_received_max_size, &bytes_buffer_ptr)
 
             try:
-                last_error = self._ssl_engine.read(self, bytes_buffer_ptr, _data_received_max_size, &bytes_read)
+                last_error = self._ssl_engine.read(self, bytes_buffer_ptr, self._data_received_max_size, &bytes_read)
                 total_bytes_read += bytes_read
             except:
                 Py_XDECREF(bytes_obj)
                 raise
 
-            data = aiofn_finalize_bytes(bytes_obj, total_bytes_read)
+            data = aiofn_finalize_bytes(bytes_obj, bytes_read)
             bytes_obj = NULL # Just to mark that it doesn't have any valid object anymore
             self._call_protocol_data_received(data)
 
             if self._read_paused:
                 return NoResult.OK
 
-            if total_bytes_read < _data_received_max_size and not self._should_retry_read(last_error):
+            if bytes_read < self._data_received_max_size and not self._should_retry_read(last_error):
                 return NoResult.OK
 
     cdef inline bint _should_retry_read(self, SSLError last_error) except -1:
@@ -1295,11 +1303,11 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             char* buf_ptr
             Py_ssize_t buf_len
             Py_ssize_t bytes_read
-            Py_ssize_t idx
+            Py_ssize_t total_bytes_read = 0
 
         try:
             if self._ssl_engine.ssl_incoming_use_membio():
-                for idx in range(_max_reads_per_socket_per_cycle):
+                while total_bytes_read < self._max_read_bytes_per_cycle_hint:
                     if unlikely(self._read_paused):
                         return
 
@@ -1315,6 +1323,8 @@ cdef class SSLTransport_Socket(SSLTransportBase):
 
                     if unlikely(bytes_read == -1):  # without exception this means EGAIN
                         return
+
+                    total_bytes_read += bytes_read
 
                     self._ssl_engine.incoming_bio_produce(bytes_read)
                     self._incoming_bio_updated()
