@@ -28,6 +28,22 @@ async def check_public_api(
     assert_type(connection_transport, asyncio.Transport)
     assert_type(connection_protocol, ClientProtocol)
 
+    read_pipe_transport, read_pipe_protocol = await aiofastnet.connect_read_pipe(
+        loop,
+        ClientProtocol,
+        file,
+    )
+    assert_type(read_pipe_transport, asyncio.ReadTransport)
+    assert_type(read_pipe_protocol, ClientProtocol)
+
+    write_pipe_transport, write_pipe_protocol = await aiofastnet.connect_write_pipe(
+        loop,
+        ClientProtocol,
+        file,
+    )
+    assert_type(write_pipe_transport, asyncio.WriteTransport)
+    assert_type(write_pipe_protocol, ClientProtocol)
+
     server = await aiofastnet.create_server(
         loop,
         ClientProtocol,

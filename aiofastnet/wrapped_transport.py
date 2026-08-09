@@ -3,7 +3,6 @@ import asyncio
 from .transport import Transport, aiofn_is_buffered_protocol
 from .utils import aiofn_validate_and_maybe_copy_buffer
 
-
 _AIOFASTNET_PATCHED_ATTR = "_aiofastnet_patched_methods"
 _AIOFASTNET_ORIGINAL_ATTR = "_aiofastnet_original_methods"
 
@@ -24,7 +23,7 @@ class _WrappedTransport(Transport):
     __slots__ = ('_transport',)
 
     def __init__(self, transport: asyncio.Transport):
-        super().__init__()
+        super().__init__(asyncio.get_running_loop())
         self._transport = transport
 
     def get_extra_info(self, name, default=None):
@@ -81,14 +80,28 @@ class _WrappedTransport(Transport):
                for data in list_of_data if data]
         self._transport.writelines(lst)
 
+    def sendto(self, data, addr=None):
+        return self._transport.sendto(
+            aiofn_validate_and_maybe_copy_buffer(data), addr)
+
     def write_eof(self):
-        return self._transport.write_eof()
+        result = self._transport.write_eof()
+        # Winloop uses generic stream semantics for write pipes: write_eof()
+        # shuts down writing but does not close the transport. asyncio write
+        # pipes treat write_eof() as close().
+        if self._transport.get_extra_info("pipe") is not None:
+            self._transport.close()
+        return result
 
     def can_write_eof(self):
         return self._transport.can_write_eof()
 
     def abort(self):
-        return self._transport.abort()
+        # asyncio read-pipe transports do not provide abort().
+        abort = getattr(self._transport, "abort", None)
+        if abort is None:
+            return self._transport.close()
+        return abort()
 
     def sendfile(self, file, offset, count, *, fallback=True):
         if not getattr(self, "_sendfile_compatible", True):
@@ -134,3 +147,11 @@ class _WrappedBufferedProtocol(_WrappedProtocolBase, asyncio.BufferedProtocol):
 
     def buffer_updated(self, nbytes):
         return self._protocol.buffer_updated(nbytes)
+
+
+class _WrappedDatagramProtocol(_WrappedProtocolBase, asyncio.DatagramProtocol):
+    def datagram_received(self, data, addr):
+        return self._protocol.datagram_received(data, addr)
+
+    def error_received(self, exc):
+        return self._protocol.error_received(exc)

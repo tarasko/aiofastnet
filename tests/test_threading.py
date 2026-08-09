@@ -2,7 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from tests.utils import TestServer, TestClient
+from tests.utils import TestClient, TestServer
 
 
 async def test_wrong_thread_assert(selector_loop, conn_type):

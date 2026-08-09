@@ -9,20 +9,22 @@ fixed duration and report round-trips/sec), these run a fixed, deterministic
 number of round-trips so they can be measured with CodSpeed's CPU simulation
 instrument.
 """
+from __future__ import annotations
 
 import asyncio
 import os
 import tempfile
-from typing import Union, List
 
 import pytest
+from aiohttp import web
 
 if os.name == "nt":
     pytest.skip("CodSpeed benchmarks are not run on Windows", allow_module_level=True)
 
-import aiofastnet
 import uvloop
-from tests.utils import ConnectionType, TestServer, TestClient, _set_socket_sndbuf
+
+import aiofastnet
+from tests.utils import ConnectionType, TestClient, TestServer, _set_socket_sndbuf
 
 # Message payload sizes (bytes) + num of rounds exercised by the benchmarks.
 MSG_SIZES = [(256, 300), (1024*1024, 15)]
@@ -80,7 +82,7 @@ class ServerProtocol(asyncio.Protocol):
 
 
 class ClientProtocol(asyncio.BufferedProtocol):
-    def __init__(self, payload: Union[bytes, List[bytes]], rounds: int):
+    def __init__(self, payload: bytes | list[bytes], rounds: int):
         self._payload = payload
         self._remaining = rounds + 1
         self._transport = None
@@ -91,20 +93,6 @@ class ClientProtocol(asyncio.BufferedProtocol):
         self._transport = transport
         _set_socket_sndbuf(self._transport, 128*1024)
         self._done = asyncio.get_running_loop().create_future()
-
-    def write(self):
-        self._remaining -= 1
-        if self._remaining <= 0:
-            self._transport.close()
-            return
-
-        self.write_impl()
-
-    def write_impl(self):
-        if isinstance(self._payload, list):
-            self._transport.writelines(self._payload)
-        else:
-            self._transport.write(self._payload)
 
     def connection_lost(self, exc):
         if self._done is not None and not self._done.done():
@@ -119,6 +107,24 @@ class ClientProtocol(asyncio.BufferedProtocol):
     def buffer_updated(self, bytes_read):
         pass
 
+    def write(self):
+        self._remaining -= 1
+        if self._remaining <= 0:
+            self._transport.close()
+            return
+
+        try:
+            self.write_impl()
+        except Exception as exc:
+            if not self._done.done():
+                self._done.set_exception(exc)
+            self._transport.abort()
+
+    def write_impl(self):
+        if isinstance(self._payload, list):
+            self._transport.writelines(self._payload)
+        else:
+            self._transport.write(self._payload)
 
     async def start_tls(self, ssl_context, server_hostname="127.0.0.1",
                         ssl_handshake_timeout=None, ssl_shutdown_timeout=None):
@@ -176,7 +182,7 @@ def test_benchmark_write(benchmark, benchmark_conn_type, buffered_protocol,
     payload_size, rounds = msg_size
     payload = b"x" * payload_size
 
-    def client_factory(is_buffered: bool):
+    def client_factory():
         return ClientProtocol(payload, rounds)
 
     benchmark(run_in_loop, client_factory, payload_size, benchmark_conn_type,
@@ -189,7 +195,7 @@ def test_benchmark_writelines(benchmark, benchmark_conn_type, msg_size,
     payload_size, rounds = msg_size
     payload = [b"x" * int(payload_size/256)] * 256
 
-    def client_factory(is_buffered: bool):
+    def client_factory():
         return ClientProtocol(payload, rounds)
 
     benchmark(run_in_loop, client_factory, payload_size, benchmark_conn_type,
@@ -204,7 +210,47 @@ def test_benchmark_sendfile(benchmark, sendfile_conn_type, msg_size, asyncio_deb
         file.write(b"x" * payload_size)
         file.flush()
 
-        def client_factory(is_buffered: bool):
+        def client_factory():
             return SendfileClientProtocol(file, payload_size, rounds)
 
         benchmark(run_in_loop, client_factory, payload_size, sendfile_conn_type, True, asyncio_debug)
+
+
+def test_aiohttp_ten_streamed_responses_iter_chunked_1mb(
+    benchmark,
+    aiohttp_client,
+    asyncio_debug
+) -> None:
+    """Benchmark 10 streamed responses using iter_chunked 1 MiB."""
+    message_count = 10
+    MB = 2**20
+    data = b"x" * 6 * MB
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        resp = web.StreamResponse()
+        await resp.prepare(request)
+        for _ in range(10):
+            await resp.write(data)
+        return resp
+
+    async def run_client_benchmark() -> None:
+        aiofastnet.patch_loop()
+
+        app = web.Application()
+        app.router.add_route("GET", "/", handler)
+
+        client = await aiohttp_client(app)
+        for _ in range(message_count):
+            resp = await client.get("/")
+            async for x in resp.content.iter_chunked(MB):
+                pass
+        await client.close()
+
+    def run_on_asyncio_loop():
+        asyncio.run(
+            run_client_benchmark(),
+            # loop_factory=uvloop.new_event_loop,
+            debug=asyncio_debug,
+        )
+
+    benchmark(run_on_asyncio_loop)

@@ -1,4 +1,5 @@
 import asyncio
+
 import cython
 
 if cython.compiled:
@@ -42,11 +43,15 @@ class ServerProtocol(Protocol, asyncio.BufferedProtocol):
             else:
                 self._transport.write(data)
 
+    @cython.ccall
     def data_received(self, data):
         if self._aiofn_transport:
             cython.cast(Transport, self._transport).write_nocheck(data)
         else:
             self._transport.write(data)
+
+    def datagram_received(self, data, addr):
+        self._transport.sendto(data, addr)
 
 
 @cython.cclass
@@ -55,6 +60,9 @@ class ClientProtocol(Protocol, asyncio.BufferedProtocol):
     _duration: cython.float
     _loop: object
     _is_buffered: cython.bint
+    _is_datagram: cython.bint
+    _payload_lines: object
+    _writelines_seq: cython.bint
 
     _transport: object
     _read_buf: bytearray
@@ -68,11 +76,21 @@ class ClientProtocol(Protocol, asyncio.BufferedProtocol):
 
     def __init__(self, payload: bytes, duration: cython.float,
                  is_buffered: cython.bint = True,
-                 warmup_rounds: cython.int = 10):
+                 warmup_rounds: cython.int = 10,
+                 is_datagram: cython.bint = False,
+                 writelines: object = None,
+                 writelines_seq: cython.bint = False):
         self._payload = payload
         self._duration = duration
         self._loop = asyncio.get_running_loop()
         self._is_buffered = is_buffered
+        self._is_datagram = is_datagram
+        self._writelines_seq = writelines_seq
+        if writelines is None:
+            self._payload_lines = None
+        else:
+            chunk_size = len(payload) // writelines
+            self._payload_lines = [payload[offset:offset + chunk_size] for offset in range(0, len(payload), chunk_size)]
 
         self._transport = None
         self._read_buf = bytearray(262144)
@@ -108,6 +126,7 @@ class ClientProtocol(Protocol, asyncio.BufferedProtocol):
         self._received_for_reply -= len(self._payload)
         self._write()
 
+    @cython.ccall
     def data_received(self, data):
         self._received_for_reply += len(data)
         if self._received_for_reply < len(self._payload):
@@ -115,6 +134,13 @@ class ClientProtocol(Protocol, asyncio.BufferedProtocol):
 
         self._received_for_reply -= len(self._payload)
         self._write()
+
+    def datagram_received(self, data, addr):
+        self._write()
+
+    def error_received(self, exc):
+        if not self.closed.done():
+            self.closed.set_exception(exc)
 
     def connection_lost(self, exc):
         if not self.closed.done():
@@ -137,7 +163,23 @@ class ClientProtocol(Protocol, asyncio.BufferedProtocol):
                 self.requests = 0
                 self._deadline = self._loop.time() + self._duration
 
-        if isinstance(self._transport, Transport):
-            cython.cast(Transport, self._transport).write_nocheck(self._payload)
+        if self._is_datagram:
+            self._transport.sendto(self._payload)
+        elif isinstance(self._transport, Transport):
+            if self._payload_lines is not None:
+                if self._writelines_seq:
+                    for data in self._payload_lines:
+                        cython.cast(Transport, self._transport).write_nocheck(data)
+                else:
+                    cython.cast(Transport, self._transport).writelines_nocheck(self._payload_lines)
+            else:
+                cython.cast(Transport, self._transport).write_nocheck(self._payload)
         else:
-            self._transport.write(self._payload)
+            if self._payload_lines is not None:
+                if self._writelines_seq:
+                    for data in self._payload_lines:
+                        self._transport.write(data)
+                else:
+                    self._transport.writelines(self._payload_lines)
+            else:
+                self._transport.write(self._payload)

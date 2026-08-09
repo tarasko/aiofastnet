@@ -5,6 +5,57 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+1.0.4
+------------------
+
+* Fix #62: Greedy reads cause significant performance regression in aiohttp
+
+1.0.3
+------------------
+
+* Optimize syscall usage
+* Prevent possible starvation, limit number of consecutive reads per client per cycle
+
+1.0.2
+------------------
+
+* Optimize Transport.writelines performance
+* Various cleanups and micro-optimizations
+
+1.0.1
+------------------
+
+* Small performance tweaks
+
+1.0.0
+------------------
+
+First non-beta release. Loop's transport/protocol layer API is pretty much complete.
+Only subprocess transports do not exist, but they are not performance critical.
+
+* Added connect_read_pipe, connect_write_pipe
+
+0.22.0
+------------------
+
+* Harden logic against exceptions in SSLTransport constructor
+* Added create_datagram_endpoint
+* Added connect_accepted_socket
+* Fixed Protocol.connection_lost may not be called if failure and abort happens during start_tls
+
+0.21.0
+------------------
+
+* Various performance improvements in TCP and SSL transports
+* Change default ssl_outgoing_bio_size from 64Kb to 256Kb. This improves walltime benchmark results for bigger messages
+
+0.20.0
+------------------
+
+* Performance improvements from @river-walras in SSL fallback engine.
+* Fix potential hangups in SSLEngineFallback for some specific ssl MemoryBIO sizes.
+* Simplify logic by always using SSLTransport_Transport when ssl fallback engine is used.
+
 0.19.0
 ------------------
 

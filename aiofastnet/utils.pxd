@@ -1,5 +1,15 @@
 from cpython.object cimport PyObject
 
+
+cdef enum NoResult:
+    # Side-effect-only Cython helpers use EXC as their exception sentinel. The
+    # generated C caller checks the value, while the Cython caller ignores it.
+    # This helps to remove unnecessary incref/decref on Py_NONE objects when
+    # function doesn't return any value.
+    EXC = -1
+    OK = 0
+
+
 cpdef enum SSLProtocolState:
     UNWRAPPED = 0
     DO_HANDSHAKE = 1
@@ -24,17 +34,29 @@ cdef enum AppProtocolState:
     STATE_CON_LOST = 3
 
 
-cdef aiofn_set_result_unless_cancelled(fut, result)
-cdef aiofn_set_nodelay(sock)
+cpdef aiofn_set_result_unless_cancelled(fut, result)
+cdef NoResult aiofn_set_nodelay(sock) except NoResult.EXC
+cpdef aiofn_set_socket_extra_info(object extra, object sock)
+
 cpdef aiofn_validate_buffer(object buffer)
-cdef aiofn_unpack_simple_buffer(object buffer, char** ptr_out, Py_ssize_t* size_out, int flags)
+cdef NoResult aiofn_unpack_simple_buffer(object buffer, char** ptr_out, Py_ssize_t* size_out, int flags) except NoResult.EXC
 cpdef object aiofn_maybe_copy_buffer(object buffer)
 cpdef object aiofn_validate_and_maybe_copy_buffer(object buffer)
 cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz)
-cdef Py_ssize_t aiofn_recv(int sockfd, void* buf, Py_ssize_t len) except? -1
-cdef Py_ssize_t aiofn_send(int sockfd, void* buf, Py_ssize_t len) except? -1
-cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* iov, Py_ssize_t iovcnt) except? -1
-cdef aiofn_add_info_and_reraise(info)
+
+cdef object aiofn_sockaddr_to_pyaddr(void* addr, unsigned int addr_len)
+cdef bint aiofn_pyaddr_to_sockaddr(object addr, void* raw_addr, unsigned int* raw_addr_len) except -1
+
+cdef Py_ssize_t aiofn_read(int fd, void* buf, Py_ssize_t len, bint is_socket) except -2
+cdef Py_ssize_t aiofn_write(int fd, void* buf, Py_ssize_t len, bint is_socket) except -2
+cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* iov, Py_ssize_t iovcnt, bint is_socket) except -2
+
+cdef Py_ssize_t aiofn_recvfrom(int sockfd, void* buf, Py_ssize_t len, void* addr, unsigned int* addr_len) except -2
+cdef Py_ssize_t aiofn_sendto(int sockfd, void* buf, Py_ssize_t len, void* raw_addr, unsigned int raw_addr_len) except -2
+
+cdef bytes aiofn_simple_read(int fd, Py_ssize_t max_size, Py_ssize_t* bytes_read, bint is_socket)
+
+cdef NoResult aiofn_add_info_and_reraise(info) except NoResult.EXC
 
 
 cdef extern from "pythread.h":

@@ -1,6 +1,5 @@
 import os
 import sys
-from typing import List
 
 from Cython.Build import cythonize
 from setuptools import Extension, setup
@@ -49,7 +48,7 @@ else:
     extra_link_args = None
 
 
-def make_extension(name: str, sources: List[str]) -> Extension:
+def make_extension(name: str, sources: list[str]) -> Extension:
     return Extension(name, sources,
                      libraries=libs,
                      define_macros=macros,

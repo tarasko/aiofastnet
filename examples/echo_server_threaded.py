@@ -9,9 +9,9 @@ import argparse
 import asyncio
 import concurrent.futures
 import threading
-from logging import getLogger, basicConfig, INFO
-from examples.utils import EchoServer, build_ssl_contexts
+from logging import INFO, basicConfig, getLogger
 
+from examples.utils import EchoServer, build_ssl_contexts
 
 _logger = getLogger(__name__)
 

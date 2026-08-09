@@ -5,3 +5,88 @@ Read README.md for project description.
 # Code style
 
 * Max line width: 150
+* The oldest supported Python version is 3.9. Keep implementation and tests
+  compatible with Python 3.9 unless newer-version behavior is explicitly
+  guarded or skipped; for example, do not use APIs introduced in Python 3.10+
+  or 3.11+ such as `asyncio.timeout`.
+* Run `ruff check` after making changes. The configured line length is in
+  `pyproject.toml`. Do not use plain `flake8` for line-length validation unless
+  it is explicitly configured with the same 150-column limit.
+* Keep `api_<api_name>.py` files structurally close to the corresponding
+  `asyncio` implementation so upstream changes remain easy to merge.
+  Move genuinely common code to `api_utils.py` when useful, but keep changes
+  limited to what is necessary: no added typing, no broad refactoring, and no
+  function renaming. Minor local renames are fine when they adapt copied code to
+  aiofastnet conventions, such as `logger` -> `_logger` or `self` -> `loop`.
+  Fallback code for unsupported event loop implementations, such as proactor
+  loops, is acceptable.
+* In Cython, side-effect-only `cdef` helpers should return `NoResult` with
+  `except NoResult.EXC`. This avoids a `PyErr_Occurred()` call on the successful
+  path while making it clear that callers must ignore the return value. Use a
+  meaningful return type instead when callers consume the result. Helpers that
+  are passed to Python APIs as callbacks should instead be untyped `cpdef`
+  functions so Cython provides the normal Python-callable wrapper.
+* Add a concise comment for compatibility checks or defensive-looking logic
+  whose necessity is not apparent from the code. Explain the concrete platform,
+  runtime, or implementation behavior being handled, especially when using
+  `getattr`, feature detection, or seemingly redundant conditions. Do not add
+  speculative fallbacks for unsupported or hypothetical environments.
+
+# Test style
+
+* In tests and test helpers, do not pass optional API parameters just to be
+  explicit. Only specify them when the test depends on that behavior; otherwise
+  redundant arguments can falsely imply hidden requirements.
+* Before adding new test scaffolding, inspect nearby tests and `tests/utils.py`
+  for existing helpers. Prefer shared helpers such as `TestServer`,
+  `TestClient`, `AsyncClient`, `EchoServerProtocol`, connection-type fixtures,
+  and `exc_queue` over local protocol classes, manual endpoint setup, explicit
+  transport closing, or custom exception-handler plumbing.
+* Use `SocketPair` from `tests/utils.py` when a test needs two connected
+  transport endpoints instead of creating and cleaning up socket pairs
+  manually. Its `udp` mode uses `AF_UNIX/SOCK_DGRAM`, so use it for reliable
+  datagram delivery, readiness, and backpressure tests, not for IP addressing
+  or other UDP-specific semantics.
+* Keep tests focused on the behavior under test. Add local protocols, manual
+  `create_*` calls, and `try/finally` cleanup only when the shared helpers would
+  hide or prevent the behavior being asserted.
+* Do not add synthetic monkeypatch tests for platform fallback branches when CI
+  already runs the native platform/loop combination. For local comparison
+  against stdlib implementations, use `NO_AIOFN=1`.
+
+# Examples and benchmarks
+
+* Keep benchmark/example protocols minimal. Before adding a new protocol/helper
+  class, first check whether the existing protocol can be extended with the
+  small callback or branch needed for the new transport.
+* Prefer reusing the existing benchmark contract (`write_first_data`, `closed`,
+  `requests`, etc.) over duplicating lifecycle, warmup, timing, and cleanup
+  logic.
+* For transport variants in examples, keep endpoint creation differences in the
+  helper layer when possible. Do not duplicate protocol classes just because
+  asyncio uses different stream/datagram protocol callback names.
+* When adding a feature to an example or benchmark, inspect nearby example code
+  and recent test helper patterns first, then make the smallest change that
+  follows those patterns.
+
+# Troubleshooting
+
+* When investigating hangs, flaky async behavior, SSL issues, or failing tests,
+  run the focused pytest command with `--asyncio-debug --log-cli-level DEBUG`.
+  Example: `pytest -s -v -k 'test_name_or_param' --asyncio-debug --log-cli-level DEBUG`.
+  aiofastnet logs OpenSSL calls, socket syscalls, and important transport state
+  transitions at DEBUG level.
+
+# Test Connection Types
+
+Defined in `tests/utils.py`; keep this list in sync with the fixtures.
+
+* `tcp`: plain TCP transport.
+* `unix`: Unix-domain socket transport; skipped on Windows.
+* `udp`: UDP datagram transport.
+* `pipe`: connected read and write pipe transports; Windows selector loops are unsupported.
+* `ssl_mbio`: TLS over socket transport using memory BIO.
+* `ssl_mbio_fall`: same shape as `ssl_mbio`, but forces `SSLEngineFallback`.
+* `ssl_sbio`: TLS over socket transport using socket BIO where available.
+* `stls`: server uses TLS from `create_server(ssl=...)`; client starts plain TCP and then calls `start_tls()`.
+* `ktls`: Linux Kernel TLS path; requires supported Python/OpenSSL/kernel setup.

@@ -19,6 +19,21 @@ except ImportError:
     uvloop = None
 
 
+try:
+    import blazio
+except ImportError:
+    blazio = None
+
+
+UDP_MAX_PAYLOAD_SIZE = 65507
+SUPPORTED_TRANSPORTS = ["ssl", "tcp", "udp"]
+SUPPORTED_LOOPS = ["asyncio", "uvloop", "blazio"]
+
+
+def _round_msg_size(msg_size: int, chunks: int) -> int:
+    return max(chunks, ((msg_size + chunks // 2) // chunks) * chunks)
+
+
 async def run_benchmark(args, loop_kind: str, variant: str, transport_kind: str, msg_size: int):
     if args.asyncio_debug:
         asyncio.get_running_loop().set_debug(True)
@@ -44,6 +59,9 @@ async def run_benchmark(args, loop_kind: str, variant: str, transport_kind: str,
         client_ssl_ctx,
         None,
         args.sndbuf_size,
+        transport_kind,
+        args.writelines,
+        args.writelines_seq,
     )
     rps = requests/args.duration
     print(f"{transport_kind}-{loop_kind}-{variant}-{msg_size}: {rps:.2f}")
@@ -60,7 +78,8 @@ def _plot_results(
     uvloop_version: str,
     save_plot: bool,
 ) -> None:
-    transports = [transport for transport in ("ssl", "tcp") if transport in results]
+    transports = list(filter((lambda t: t in results), SUPPORTED_TRANSPORTS))
+
     if not transports:
         return
 
@@ -68,7 +87,7 @@ def _plot_results(
     if not variants:
         return
 
-    fig, axes = _plot_absolute_results(results, transports, msg_sizes, variants)
+    fig, _axes = _plot_absolute_results(results, transports, msg_sizes, variants)
     fig.suptitle(
         f"Echo Round-Trip Benchmark | Python {python_version}\naiofastnet-{aiofastnet_version} | "
         f"uvloop-{uvloop_version} | SO_SNDBUF={sndbuf_size}"
@@ -263,7 +282,7 @@ def main():
         default="native,aiofastnet",
         help="Comma-separated backend variants, any of (native,aiofastnet_fb,aiofastnet)",
     )
-    parser.add_argument("--transport", default="ssl,tcp", help="Comma-separated transport types (tcp,ssl)")
+    parser.add_argument("--transport", default="ssl,tcp", help="Comma-separated transport types (tcp,ssl,udp)")
     parser.add_argument("--duration", type=float, default=5.0, help="Benchmark duration in seconds" )
     parser.add_argument(
         "--sndbuf-size",
@@ -272,6 +291,12 @@ def main():
         help="Socket SO_SNDBUF value to request",
     )
     parser.add_argument("--simple", action="store_true", help="Use simple protocol instead of buffered")
+    parser.add_argument("--writelines", type=int, help="Divide each client message into this many chunks and send it with writelines()")
+    parser.add_argument(
+        "--writelines-seq",
+        action="store_true",
+        help="Send the --writelines chunks with individual write() calls instead of writelines()",
+    )
     parser.add_argument("--save-plot", action="store_true", help="Save plot to examples/benchmark.png")
     parser.add_argument("--no-plot", action="store_true", help="Disable plotting")
     parser.add_argument("--asyncio-debug", action="store_true", help="Enable loop debug")
@@ -281,7 +306,10 @@ def main():
         parser.error("--duration must be > 0")
     if args.sndbuf_size <= 0:
         parser.error("--sndbuf-size must be > 0")
-
+    if args.writelines is not None and args.writelines <= 0:
+        parser.error("--writelines must be > 0")
+    if args.writelines_seq and args.writelines is None:
+        parser.error("--writelines-seq requires --writelines")
 
     args.transports = [transport.strip() for transport in args.transport.split(",") if transport.strip()]
     args.loops = [loop_name.strip() for loop_name in args.loops.split(",") if loop_name.strip()]
@@ -289,11 +317,18 @@ def main():
     args.msg_sizes = [int(part.strip()) for part in args.msg_sizes.split(",") if part.strip()]
     if any(msg_size <= 0 for msg_size in args.msg_sizes):
         parser.error("--msg-sizes must contain integers > 0")
+    if args.writelines is not None:
+        args.msg_sizes = [_round_msg_size(msg_size, args.writelines) for msg_size in args.msg_sizes]
 
-    SUPPORTED_LOOPS = ["asyncio", "uvloop"]
     unknown_loops = [loop_name for loop_name in args.loops if loop_name not in SUPPORTED_LOOPS]
     if unknown_loops:
         parser.error(f"Unknown --loops values: {unknown_loops}. Valid: {SUPPORTED_LOOPS}")
+
+    unknown_transports = [transport for transport in args.transports if transport not in SUPPORTED_TRANSPORTS]
+    if unknown_transports:
+        parser.error(f"Unknown --transport values: {unknown_transports}. Valid: {SUPPORTED_TRANSPORTS}")
+    if args.writelines is not None and "udp" in args.transports:
+        parser.error("--writelines is not supported with udp")
 
     if any(loop_name == "uvloop" for loop_name in args.loops) and uvloop is None:
         parser.error("uvloop variant requested but uvloop is not installed")
@@ -307,6 +342,9 @@ def main():
     print(f"msg_sizes={','.join(str(x) for x in args.msg_sizes)}")
     print(f"loops={','.join(args.loops)}")
     print(f"duration={args.duration:.3f}s")
+    if args.writelines is not None:
+        print(f"writelines={args.writelines}")
+        print(f"writelines_seq={args.writelines_seq}")
     print(f"python={sys.version.split()[0]}")
     print(f"aiofastnet={aiofastnet_version}")
     print(f"uvloop={uvloop_version}")
@@ -316,9 +354,17 @@ def main():
         all_results[transport_kind] = {}
         for msg_size in args.msg_sizes:
             all_results[transport_kind][msg_size] = {}
+            if transport_kind == "udp" and msg_size > UDP_MAX_PAYLOAD_SIZE:
+                print(f"udp-{msg_size}: skipped, exceeds UDP payload limit {UDP_MAX_PAYLOAD_SIZE}")
+                continue
             for loop_kind in args.loops:
                 for variant in args.variants:
-                    loop_factory = uvloop.Loop if loop_kind == "uvloop" else asyncio.SelectorEventLoop
+                    if loop_kind == "uvloop":
+                        loop_factory = uvloop.Loop
+                    elif loop_kind == "blazio":
+                        loop_factory = blazio.new_event_loop
+                    else:
+                        loop_factory = asyncio.SelectorEventLoop
                     rps = asyncio.run(
                         run_benchmark(args, loop_kind, variant, transport_kind, msg_size),
                         loop_factory=loop_factory,

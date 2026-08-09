@@ -85,7 +85,7 @@ from .openssl cimport (
     openssl_compat_last_error,
 )
 from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
-from .utils cimport unlikely
+from .utils cimport NoResult, unlikely
 from .openssl_compat import OPENSSL_DYN_LIBS
 
 from cpython.object cimport PyObject
@@ -108,7 +108,7 @@ import tempfile
 import logging
 from pathlib import Path
 
-cdef object _logger = logging.getLogger('aiofastnet.ssl')
+cdef object _logger = logging.getLogger('aiofastnet')
 
 
 def _set_sslobject_init_test_hook():
@@ -153,7 +153,7 @@ def _ktls_prerequisites_available() -> bool:
     return True
 
 
-cdef _init_openssl():
+cdef NoResult _init_openssl() except NoResult.EXC:
     assert OPENSSL_DYN_LIBS is not None
 
     if init_openssl_compat(OPENSSL_DYN_LIBS.libssl_path, OPENSSL_DYN_LIBS.libcrypto_path) != 1:
@@ -199,7 +199,7 @@ cdef int _print_error_cb(const char* str, size_t len, void* u) noexcept:
     logger.error(err_str)
 
 
-cdef _log_error_queue():
+cdef NoResult _log_error_queue() except NoResult.EXC:
     cdef void* u = <PyObject*>_logger
     ERR_print_errors_cb(&_print_error_cb, u)
 
@@ -653,8 +653,9 @@ cdef class SSLEngineDirect(SSLEngine):
 
         return SSLError.SSL_ERROR_NONE
 
-    cdef int outgoing_bio_reset(self) except -1:
-        return BIO_reset(self.outgoing)
+    cdef NoResult outgoing_bio_reset(self) except NoResult.EXC:
+        if BIO_reset(self.outgoing) == -1:
+            raise RuntimeError("BIO_reset(outgoing) failed")
 
     cdef Py_ssize_t outgoing_bio_pending(self) except -1:
         return _bio_pending(self.outgoing)
@@ -662,11 +663,11 @@ cdef class SSLEngineDirect(SSLEngine):
     cdef Py_ssize_t outgoing_bio_get_data(self, char** pp) except -1:
         return <Py_ssize_t>BIO_get_mem_data(self.outgoing, pp)
 
-    cdef outgoing_bio_consume(self, Py_ssize_t nbytes):
+    cdef NoResult outgoing_bio_consume(self, Py_ssize_t nbytes) except NoResult.EXC:
         if BIO_static_mem_consume(self.outgoing, <size_t>nbytes) != 1:
             raise RuntimeError("BIO_static_mem_consume(outgoing) failed")
 
-    cdef incoming_bio_get_write_buf(self, char **pp, Py_ssize_t *space):
+    cdef NoResult incoming_bio_get_write_buf(self, char **pp, Py_ssize_t *space) except NoResult.EXC:
         cdef size_t sz = 0
         cdef int rc = BIO_static_mem_get_write_buf(self.incoming, pp, &sz)
         if rc != 1:
@@ -675,11 +676,11 @@ cdef class SSLEngineDirect(SSLEngine):
             raise RuntimeError("incoming BIO: no writable capacity")
         space[0] = sz
 
-    cdef incoming_bio_produce(self, Py_ssize_t nbytes):
+    cdef NoResult incoming_bio_produce(self, Py_ssize_t nbytes) except NoResult.EXC:
         if BIO_static_mem_produce(self.incoming, <size_t>nbytes) != 1:
             raise RuntimeError("incoming BIO: unable to publish received bytes")
 
-    cdef allow_renegotiation(self):
+    cdef NoResult allow_renegotiation(self) except NoResult.EXC:
         if not SSL_set_options_available():
             raise RuntimeError("SSL_set_options is not available")
 
@@ -748,7 +749,7 @@ cdef class SSLEngineDirect(SSLEngine):
         exc.reason = reason_name
         return exc
 
-    cdef _copy_hostflags_from_ctx_to_ssl(self):
+    cdef NoResult _copy_hostflags_from_ctx_to_ssl(self) except NoResult.EXC:
         cdef:
             X509_VERIFY_PARAM* ssl_verification_params
             X509_VERIFY_PARAM* ssl_ctx_verification_params
@@ -759,7 +760,7 @@ cdef class SSLEngineDirect(SSLEngine):
         ssl_ctx_host_flags = X509_VERIFY_PARAM_get_hostflags(ssl_ctx_verification_params)
         X509_VERIFY_PARAM_set_hostflags(ssl_verification_params, ssl_ctx_host_flags)
 
-    cdef _configure_hostname(self):
+    cdef NoResult _configure_hostname(self) except NoResult.EXC:
         if not self.server_hostname or self.server_hostname.startswith("."):
             raise ValueError("server_hostname cannot be an empty string or start with a leading dot.")
 
@@ -846,4 +847,3 @@ cdef class SSLEngineDirect(SSLEngine):
         finally:
             if path:
                 os.unlink(path)
-

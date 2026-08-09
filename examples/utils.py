@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import socket
 import ssl
@@ -6,7 +8,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import aiofastnet
-from .benchmark_protocol import ServerProtocol, ClientProtocol
+
+from .benchmark_protocol import ClientProtocol, ServerProtocol
 
 
 def set_socket_sndbuf(sock: socket.socket, size: int) -> int:
@@ -89,14 +92,16 @@ async def EchoClient(use_aiofastnet,
                      client_ssl: ssl.SSLContext | None,
                      is_buffered: bool = True,
                      sndbuf_size: int | None = None,
-                     host: str = "127.0.0.1"
+                     host: str = "127.0.0.1",
+                     writelines: int | None = None,
+                     writelines_seq: bool = False,
                      ) -> ClientProtocol:
     loop = asyncio.get_running_loop()
 
     if use_aiofastnet:
         transport, client = await aiofastnet.create_connection(
             loop,
-            lambda: ClientProtocol(payload, duration, is_buffered, 0),
+            lambda: ClientProtocol(payload, duration, is_buffered, 0, writelines=writelines, writelines_seq=writelines_seq),
             host=host,
             port=port,
             ssl=client_ssl,
@@ -104,7 +109,7 @@ async def EchoClient(use_aiofastnet,
         )
     else:
         transport, client = await loop.create_connection(
-            lambda: ClientProtocol(payload, duration, is_buffered, 0),
+            lambda: ClientProtocol(payload, duration, is_buffered, 0, writelines=writelines, writelines_seq=writelines_seq),
             host=host,
             port=port,
             ssl=client_ssl,
@@ -121,6 +126,64 @@ async def EchoClient(use_aiofastnet,
         transport.close()
 
 
+@asynccontextmanager
+async def DatagramEchoServer(use_aiofastnet,
+                             sndbuf_size: int | None = None,
+                             host: str = "127.0.0.1",
+                             port: int = 0):
+    loop = asyncio.get_running_loop()
+
+    if use_aiofastnet:
+        transport, _protocol = await aiofastnet.create_datagram_endpoint(
+            loop,
+            ServerProtocol,
+            local_addr=(host, port),
+        )
+    else:
+        transport, _protocol = await loop.create_datagram_endpoint(
+            ServerProtocol,
+            local_addr=(host, port),
+        )
+
+    server_sock = transport.get_extra_info("socket")
+    if server_sock is not None and sndbuf_size is not None:
+        set_socket_sndbuf(server_sock, sndbuf_size)
+    try:
+        yield transport.get_extra_info("sockname")[1]
+    finally:
+        transport.close()
+
+
+@asynccontextmanager
+async def DatagramEchoClient(use_aiofastnet,
+                             port: int,
+                             duration: float,
+                             payload: bytes,
+                             sndbuf_size: int | None = None,
+                             host: str = "127.0.0.1") -> ClientProtocol:
+    loop = asyncio.get_running_loop()
+
+    if use_aiofastnet:
+        transport, client = await aiofastnet.create_datagram_endpoint(
+            loop,
+            lambda: ClientProtocol(payload, duration, False, 0, True),
+            remote_addr=(host, port),
+        )
+    else:
+        transport, client = await loop.create_datagram_endpoint(
+            lambda: ClientProtocol(payload, duration, False, 0, True),
+            remote_addr=(host, port),
+        )
+
+    client_sock = transport.get_extra_info("socket")
+    if client_sock is not None and sndbuf_size is not None:
+        set_socket_sndbuf(client_sock, sndbuf_size)
+    try:
+        yield client
+    finally:
+        transport.close()
+
+
 async def run_pair(
     use_aiofastnet: bool,
     duration: float,
@@ -130,9 +193,33 @@ async def run_pair(
     client_ssl: ssl.SSLContext | None,
     barrier: threading.Barrier | asyncio.Barrier | None,
     sndbuf_size: int | None = None,
+    transport_kind: str = "tcp",
+    writelines: int | None = None,
+    writelines_seq: bool = False,
 ) -> int:
-    async with EchoServer(use_aiofastnet, server_ssl, is_buffered, sndbuf_size) as server_port:
-        async with EchoClient(use_aiofastnet, server_port, duration, payload, client_ssl, is_buffered, sndbuf_size) as client:
+    if transport_kind == "udp":
+        server_context = DatagramEchoServer(use_aiofastnet, sndbuf_size)
+
+        def client_context_factory(server_port):
+            return DatagramEchoClient(use_aiofastnet, server_port, duration, payload, sndbuf_size)
+    else:
+        server_context = EchoServer(use_aiofastnet, server_ssl, is_buffered, sndbuf_size)
+
+        def client_context_factory(server_port):
+            return EchoClient(
+                use_aiofastnet,
+                server_port,
+                duration,
+                payload,
+                client_ssl,
+                is_buffered,
+                sndbuf_size,
+                writelines=writelines,
+                writelines_seq=writelines_seq,
+            )
+
+    async with server_context as server_port:
+        async with client_context_factory(server_port) as client:
             if barrier is not None:
                 if isinstance(barrier, asyncio.Barrier):
                     await barrier.wait()

@@ -22,8 +22,10 @@
   </a>
 </p>
 
-`aiofastnet` gives your asyncio networking application an instant performance boost,
-lower latency and higher throughput by just adding two lines:
+`aiofastnet` is a very efficient C/Cython drop-in reimplementation of asyncio's loop Transport/Protocol layer.
+You can use it with your current event loop (asyncio loops, uvloop, winloop, etc.) to improve overall networking performance.
+
+There are multiple ways to enable `aiofastnet`; the simplest is to install it before calling `asyncio.run()`.
 
 ```python
 import aiofastnet
@@ -36,39 +38,6 @@ aiofastnet.install_policy()
 Are you using aiohttp, asyncpg, websockets, uvicorn, or any other library that
 relies on asyncio networking? They become faster if you enable aiofastnet.
 The difference is especially noticeable when SSL is used.
-
-## How is this possible?
-
-`aiofastnet` provides drop-in, highly efficient C/Cython replacements for asyncio's:
-
-- [`loop.create_connection()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_connection)
-- [`loop.open_connection()`](https://docs.python.org/3/library/asyncio-stream.html#asyncio.open_connection)
-- [`loop.create_unix_connection()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_unix_connection)
-- [`loop.open_unix_connection()`](https://docs.python.org/3/library/asyncio-stream.html#asyncio.open_unix_connection)
-- [`loop.create_server()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_server)
-- [`loop.start_server()`](https://docs.python.org/3/library/asyncio-stream.html#asyncio.start_server)
-- [`loop.create_unix_server()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_unix_server)
-- [`loop.start_unix_server()`](https://docs.python.org/3/library/asyncio-stream.html#asyncio.start_unix_server)
-- [`loop.start_tls()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.start_tls)
-- [`loop.sendfile()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sendfile)
-
-asyncio libraries use these loop primitives to establish communication channels.
-The current implementations in both `asyncio` and `uvloop` are not optimal,
-especially for SSL/TLS connections.
-
-Calling `aiofastnet.install_policy()` replaces these primitives with
-`aiofastnet`'s efficient implementations. From that moment on, any library that
-uses asyncio networking will use aiofastnet.
-
-`aiofastnet` is not a different event loop. It works on top of stock `asyncio`
-loops or `uvloop` by using low-level primitives such as `add_reader` and
-`add_writer`. It has no background threads and does not use unscalable tricks
-such as calling synchronous `recv`/`send` syscalls from another thread. Essentially, it
-provides the same kind of internal implementation you would find in `asyncio`
-and `uvloop`, but with much better optimization.
-
-As a cherry on top, `aiofastnet` supports [Kernel TLS](https://www.kernel.org/doc/html/latest/networking/tls.html)
-on Linux.
 
 ## Benchmark
 
@@ -89,9 +58,48 @@ connections.
 `aiofastnet` is fully compatible with free-threaded Python builds and scales
 as expected when multiple event loops run in parallel across multiple threads.
 
-[![Threaded benchmark](https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark_threaded.png)](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_threaded.png)
+[![SSL Threaded Benchmark](https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark_threaded_tls.png)](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_threaded_tls.png)
+
+[![TCP Threaded Benchmark](https://raw.githubusercontent.com/tarasko/aiofastnet/master/examples/benchmark_threaded_tcp.png)](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_threaded_tcp.png)
 
 Source: [examples/benchmark_threaded.py](https://github.com/tarasko/aiofastnet/blob/master/examples/benchmark_threaded.py)
+
+## How is this possible?
+
+`aiofastnet` provides drop-in, highly efficient C/Cython replacements for asyncio's:
+
+- [`loop.create_connection()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_connection)
+- [`loop.connect_accepted_socket()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.connect_accepted_socket)
+- [`loop.connect_read_pipe()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.connect_read_pipe)
+- [`loop.connect_write_pipe()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.connect_write_pipe)
+- [`loop.open_connection()`](https://docs.python.org/3/library/asyncio-stream.html#asyncio.open_connection)
+- [`loop.create_unix_connection()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_unix_connection)
+- [`loop.open_unix_connection()`](https://docs.python.org/3/library/asyncio-stream.html#asyncio.open_unix_connection)
+- [`loop.create_server()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_server)
+- [`loop.start_server()`](https://docs.python.org/3/library/asyncio-stream.html#asyncio.start_server)
+- [`loop.create_unix_server()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_unix_server)
+- [`loop.start_unix_server()`](https://docs.python.org/3/library/asyncio-stream.html#asyncio.start_unix_server)
+- [`loop.create_datagram_endpoint()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_datagram_endpoint)
+- [`loop.start_tls()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.start_tls)
+- [`loop.sendfile()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sendfile)
+
+asyncio libraries use these loop primitives to establish communication channels.
+The current implementations in both `asyncio` and `uvloop` are not optimal,
+especially for SSL/TLS connections.
+
+Calling `aiofastnet.install_policy()` replaces these primitives with
+`aiofastnet`'s efficient implementations. From that moment on, any library that
+uses asyncio networking will use aiofastnet.
+
+`aiofastnet` is not a different event loop. It works on top of stock `asyncio`
+loops or `uvloop` by using low-level primitives such as `add_reader` and
+`add_writer`. It has no background threads and does not use unscalable tricks
+such as calling synchronous `recv`/`send` syscalls from another thread. Essentially, it
+provides the same kind of internal implementation you would find in `asyncio`
+and `uvloop`, but with much better optimization.
+
+As a cherry on top, `aiofastnet` supports [Kernel TLS](https://www.kernel.org/doc/html/latest/networking/tls.html)
+on Linux.
 
 ## Why Use aiofastnet
 
