@@ -25,7 +25,7 @@ jobs:
       with:
         python-version: '3.9'
     - name: Set up uv
-      uses: astral-sh/setup-uv@v9
+      uses: astral-sh/setup-uv@v8.3.2
       with:
         enable-cache: true
         cache-dependency-glob: |
@@ -52,7 +52,7 @@ jobs:
       with:
         python-version: ${{ matrix.pyver }}
     - name: Set up uv
-      uses: astral-sh/setup-uv@v8
+      uses: astral-sh/setup-uv@v8.3.2
       with:
         enable-cache: true
         cache-dependency-glob: |
@@ -79,7 +79,7 @@ jobs:
       with:
         python-version: "3.14"
     - name: Set up uv
-      uses: astral-sh/setup-uv@v8
+      uses: astral-sh/setup-uv@v8.3.2
       with:
         enable-cache: true
         cache-dependency-glob: |
@@ -122,7 +122,7 @@ jobs:
       with:
         python-version: ${{ matrix.pyver }}
     - name: Set up uv
-      uses: astral-sh/setup-uv@v8
+      uses: astral-sh/setup-uv@v8.3.2
       with:
         enable-cache: true
         cache-dependency-glob: |
@@ -197,7 +197,7 @@ jobs:
       # important: do not use system python
       env:
         UV_PYTHON_PREFERENCE: only-managed
-      uses: astral-sh/setup-uv@v8
+      uses: astral-sh/setup-uv@v8.3.2
       with:
         python-version: '3.14'
         activate-environment: true
@@ -268,7 +268,7 @@ jobs:
       run: sudo modprobe tls
 
     - name: Set up uv
-      uses: astral-sh/setup-uv@v8
+      uses: astral-sh/setup-uv@v8.3.2
       with:
         enable-cache: true
         cache-dependency-glob: |
@@ -302,7 +302,7 @@ jobs:
       with:
         python-version: "3.14"
     - name: Set up uv
-      uses: astral-sh/setup-uv@v8
+      uses: astral-sh/setup-uv@v8.3.2
       with:
         enable-cache: true
         cache-dependency-glob: |
