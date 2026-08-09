@@ -5,6 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
+1.0.5
+------------------
+
+* Release for python 3.15
+
 1.0.4
 ------------------
 
