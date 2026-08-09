@@ -203,7 +203,7 @@ jobs:
         UV_PYTHON_PREFERENCE: only-managed
       uses: astral-sh/setup-uv@v8.3.2
       with:
-        python-version: '3.x'
+        python-version: '3.14'
         activate-environment: true
 
     - name: Install dependencies
