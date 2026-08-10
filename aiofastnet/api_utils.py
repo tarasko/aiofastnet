@@ -99,28 +99,8 @@ async def _create_connection_transport(
                 return await loop_connect_accepted_socket(protocol_factory, sock)
             else:
                 return await loop_create_connection(protocol_factory, None, None, sock=sock)
-        
-        if not ssl:
-            def wrapped_protocol_factory():
-                user_protocol = protocol_factory()
-                if aiofn_is_buffered_protocol(user_protocol):
-                    return _WrappedBufferedProtocol(user_protocol)
-                else:
-                    return _WrappedProtocol(user_protocol)
 
-            loop_transport, wrapped_protocol = await loop_create_connection(
-                wrapped_protocol_factory, None, None, sock=sock)
-
-            transport = wrapped_protocol._wrapped_transport
-            protocol = wrapped_protocol._protocol
-            wrapped_protocol._wrapped_transport = None
-
-            if server is not None:
-                # asyncio Transport needs _server in order to detach itself on disconnect
-                loop_transport._server = server
-                # and the Server must attach it, not WrappedTransport
-                transport = loop_transport
-        else:
+        if ssl:
             protocol = protocol_factory()
             waiter = loop.create_future() if server is None else None
             sslcontext = None if isinstance(ssl, bool) else ssl
@@ -140,6 +120,26 @@ async def _create_connection_transport(
             await loop_create_connection(ssl_protocol_factory, None, None, sock=sock)
 
             transport = ssl_transport
+        else:
+            def wrapped_protocol_factory():
+                user_protocol = protocol_factory()
+                if aiofn_is_buffered_protocol(user_protocol):
+                    return _WrappedBufferedProtocol(user_protocol)
+                else:
+                    return _WrappedProtocol(user_protocol)
+
+            loop_transport, wrapped_protocol = await loop_create_connection(
+                wrapped_protocol_factory, None, None, sock=sock)
+
+            transport = wrapped_protocol._wrapped_transport
+            protocol = wrapped_protocol._protocol
+            wrapped_protocol._wrapped_transport = None
+
+            if server is not None:
+                # asyncio Transport needs _server in order to detach itself on disconnect
+                loop_transport._server = server
+                # and the Server must attach it, not WrappedTransport
+                transport = loop_transport
     else:
         protocol = protocol_factory()
         waiter = loop.create_future() if server is None else None
