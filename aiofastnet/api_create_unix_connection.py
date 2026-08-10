@@ -18,6 +18,7 @@ async def create_unix_connection(
         ssl_shutdown_timeout=None,
         ssl_incoming_bio_size=None,
         ssl_outgoing_bio_size=None,
+        safe_write_on_fallback=True,
 ):
     if os.name == 'nt':
         raise NotImplementedError()
@@ -65,5 +66,6 @@ async def create_unix_connection(
         ssl_shutdown_timeout=ssl_shutdown_timeout,
         ssl_incoming_bio_size=ssl_incoming_bio_size,
         ssl_outgoing_bio_size=ssl_outgoing_bio_size,
+        safe_write_on_fallback=safe_write_on_fallback,
     )
     return transport, protocol

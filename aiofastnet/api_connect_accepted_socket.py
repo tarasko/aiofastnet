@@ -19,6 +19,7 @@ async def connect_accepted_socket(
     ssl_shutdown_timeout=None,
     ssl_incoming_bio_size=None,
     ssl_outgoing_bio_size=None,
+    safe_write_on_fallback=True,
 ):
     if sock.type != socket.SOCK_STREAM:
         raise ValueError(f"A Stream Socket was expected, got {sock!r}")
@@ -37,6 +38,7 @@ async def connect_accepted_socket(
         ssl_shutdown_timeout=ssl_shutdown_timeout,
         ssl_incoming_bio_size=ssl_incoming_bio_size,
         ssl_outgoing_bio_size=ssl_outgoing_bio_size,
+        safe_write_on_fallback=safe_write_on_fallback,
     )
     if loop.get_debug():
         # Get the socket from the transport because SSL transport closes

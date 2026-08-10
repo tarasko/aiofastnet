@@ -14,15 +14,28 @@ from .wrapped_transport import _get_original_loop_method, _should_fallback_to_as
 
 
 async def create_datagram_endpoint(
-    loop, protocol_factory, local_addr=None, remote_addr=None, *, family=0, proto=0, flags=0, reuse_port=None, allow_broadcast=None, sock=None
+    loop, protocol_factory, local_addr=None, remote_addr=None, *, family=0, proto=0, flags=0, reuse_port=None,
+    allow_broadcast=None, sock=None, safe_write_on_fallback=True
 ):
     """Create datagram connection."""
     if _should_fallback_to_asyncio(loop):
+        create_datagram_endpoint = _get_original_loop_method(loop, "create_datagram_endpoint")
+        if not safe_write_on_fallback:
+            return await create_datagram_endpoint(
+                protocol_factory,
+                local_addr,
+                remote_addr,
+                family=family,
+                proto=proto,
+                flags=flags,
+                reuse_port=reuse_port,
+                allow_broadcast=allow_broadcast,
+                sock=sock,
+            )
+
         def wrapped_protocol_factory():
             return _WrappedDatagramProtocol(protocol_factory())
 
-        create_datagram_endpoint = _get_original_loop_method(
-            loop, "create_datagram_endpoint")
         transport, protocol = await create_datagram_endpoint(
             wrapped_protocol_factory,
             local_addr,
