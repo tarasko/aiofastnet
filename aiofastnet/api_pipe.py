@@ -12,11 +12,10 @@ from .wrapped_transport import _get_original_loop_method, _WrappedProtocol
 
 
 async def _connect_pipe_asyncio(loop, method_name, protocol_factory, pipe):
-    connect_pipe = _get_original_loop_method(loop, method_name)
-
     def wrapped_protocol_factory():
         return _WrappedProtocol(protocol_factory())
 
+    connect_pipe = _get_original_loop_method(loop, method_name)
     _transport, protocol = await connect_pipe(wrapped_protocol_factory, pipe)
     wrapped_transport = protocol._wrapped_transport
     user_protocol = protocol._protocol
