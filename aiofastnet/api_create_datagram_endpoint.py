@@ -19,9 +19,9 @@ async def create_datagram_endpoint(
 ):
     """Create datagram connection."""
     if _should_fallback_to_asyncio(loop):
-        create_datagram_endpoint = _get_original_loop_method(loop, "create_datagram_endpoint")
+        loop_create_datagram_endpoint = _get_original_loop_method(loop, "create_datagram_endpoint")
         if not safe_write_on_fallback:
-            return await create_datagram_endpoint(
+            return await loop_create_datagram_endpoint(
                 protocol_factory,
                 local_addr,
                 remote_addr,
@@ -36,7 +36,7 @@ async def create_datagram_endpoint(
         def wrapped_protocol_factory():
             return _WrappedDatagramProtocol(protocol_factory())
 
-        transport, protocol = await create_datagram_endpoint(
+        transport, protocol = await loop_create_datagram_endpoint(
             wrapped_protocol_factory,
             local_addr,
             remote_addr,

@@ -11,10 +11,8 @@ from .transport import SelectorReadPipeTransport, SelectorWritePipeTransport
 from .wrapped_transport import _get_original_loop_method, _WrappedProtocol
 
 
-async def _connect_pipe_asyncio(loop, method_name, protocol_factory, pipe, safe_write_on_fallback):
+async def _connect_pipe_asyncio(loop, method_name, protocol_factory, pipe):
     connect_pipe = _get_original_loop_method(loop, method_name)
-    if not safe_write_on_fallback:
-        return await connect_pipe(protocol_factory, pipe)
 
     def wrapped_protocol_factory():
         return _WrappedProtocol(protocol_factory())
@@ -26,9 +24,9 @@ async def _connect_pipe_asyncio(loop, method_name, protocol_factory, pipe, safe_
     return wrapped_transport, user_protocol
 
 
-async def connect_read_pipe(loop, protocol_factory, pipe, *, safe_write_on_fallback=True):
+async def connect_read_pipe(loop, protocol_factory, pipe):
     if os.name == "nt":
-        return await _connect_pipe_asyncio(loop, "connect_read_pipe", protocol_factory, pipe, safe_write_on_fallback)
+        return await _connect_pipe_asyncio(loop, "connect_read_pipe", protocol_factory, pipe)
 
     protocol = protocol_factory()
     waiter = loop.create_future()
@@ -41,9 +39,9 @@ async def connect_read_pipe(loop, protocol_factory, pipe, *, safe_write_on_fallb
     return transport, protocol
 
 
-async def connect_write_pipe(loop, protocol_factory, pipe, *, safe_write_on_fallback=True):
+async def connect_write_pipe(loop, protocol_factory, pipe):
     if os.name == "nt":
-        return await _connect_pipe_asyncio(loop, "connect_write_pipe", protocol_factory, pipe, safe_write_on_fallback)
+        return await _connect_pipe_asyncio(loop, "connect_write_pipe", protocol_factory, pipe)
 
     protocol = protocol_factory()
     waiter = loop.create_future()
