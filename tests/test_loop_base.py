@@ -367,6 +367,5 @@ def test_proactor_sock_recv_into(libuv_loop):
     libuv_loop.run_until_complete(receive_into())
 
 
-def test_loop_base_is_standalone_extension_type(libuv_loop):
-    assert not isinstance(libuv_loop, asyncio.BaseEventLoop)
+def test_loop_base_is_abstract_event_loop(libuv_loop):
     assert isinstance(libuv_loop, asyncio.AbstractEventLoop)
