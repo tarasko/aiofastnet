@@ -19,13 +19,13 @@ jobs:
     timeout-minutes: 5
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: '3.9'
     - name: Set up uv
-      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      uses: astral-sh/setup-uv@v8.3.2
       with:
         enable-cache: true
         cache-dependency-glob: |
@@ -46,13 +46,13 @@ jobs:
     timeout-minutes: 5
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Set up Python ${{ matrix.pyver }}
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: ${{ matrix.pyver }}
     - name: Set up uv
-      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      uses: astral-sh/setup-uv@v8.3.2
       with:
         enable-cache: true
         cache-dependency-glob: |
@@ -73,13 +73,13 @@ jobs:
     timeout-minutes: 10
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
-        python-version: "3.14"
+        python-version: "3.x"
     - name: Set up uv
-      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      uses: astral-sh/setup-uv@v8.3.2
       with:
         enable-cache: true
         cache-dependency-glob: |
@@ -104,25 +104,29 @@ jobs:
   build:
     strategy:
       matrix:
+        # Installing test deps for 3.15 is taking a lot of time, because most of the packages
+        # haven't provided release yet
+        # pyver: ['3.9', '3.10', '3.11', '3.12', '>=3.13.5', '3.14', '3.14t', '3.15', '3.15t']
         pyver: ['3.9', '3.10', '3.11', '3.12', '>=3.13.5', '3.14', '3.14t']
         os: [ubuntu-latest, macos-latest, windows-latest]
         include:
-          - pyver: '3.14'
+          - pyver: '3.x'
             os: ubuntu-24.04-arm
-          - pyver: '3.14'
+          - pyver: '3.x'
             os: windows-11-arm
       fail-fast: false
 
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Set up Python ${{ matrix.pyver }}
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: ${{ matrix.pyver }}
+        allow-prereleases: true
     - name: Set up uv
-      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      uses: astral-sh/setup-uv@v8.3.2
       with:
         enable-cache: true
         cache-dependency-glob: |
@@ -173,7 +177,7 @@ jobs:
     - name: Show aiofastnet OpenSSL dynamic libraries
       run: python -c "import aiofastnet; print('aiofastnet.OPENSSL_DYN_LIBS:', aiofastnet.OPENSSL_DYN_LIBS)"
 
-#    - uses: actions/checkout@v6
+#    - uses: actions/checkout@v7
 #    - name: Setup tmate session
 #      if: runner.os == 'Linux'
 #      uses: mxschmitt/action-tmate@v3
@@ -192,12 +196,12 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Set up uv python
       # important: do not use system python
       env:
         UV_PYTHON_PREFERENCE: only-managed
-      uses: astral-sh/setup-uv@v8.2.0
+      uses: astral-sh/setup-uv@v8.3.2
       with:
         python-version: '3.14'
         activate-environment: true
@@ -225,7 +229,7 @@ jobs:
           - python-tag: cp314-cp314t
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Load kTLS kernel module
       run: sudo modprobe tls || true
@@ -254,21 +258,21 @@ jobs:
     timeout-minutes: 20
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     # aiofastnet requires a Python distribution whose `ssl` module is
     # dynamically linked against OpenSSL. actions/setup-python provides that,
     # so it is used here instead of a uv-managed (statically linked) Python.
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
-        python-version: "3.12"
+        python-version: "3.x"
 
     - name: Load kTLS kernel module
       run: sudo modprobe tls
 
     - name: Set up uv
-      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      uses: astral-sh/setup-uv@v8.3.2
       with:
         enable-cache: true
         cache-dependency-glob: |
@@ -296,13 +300,13 @@ jobs:
       PYTHONMALLOC: debug
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
-        python-version: "3.14"
+        python-version: "3.x"
     - name: Set up uv
-      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      uses: astral-sh/setup-uv@v8.3.2
       with:
         enable-cache: true
         cache-dependency-glob: |
