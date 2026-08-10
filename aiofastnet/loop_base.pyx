@@ -658,15 +658,16 @@ cdef class LoopBase:
 
         if (backend_ptr.state == NULL or backend_ptr.run == NULL or backend_ptr.stop == NULL or backend_ptr.close == NULL or
                 backend_ptr.now_ns == NULL or backend_ptr.call_soon == NULL or backend_ptr.call_at == NULL or
-                backend_ptr.action_cancel == NULL or backend_ptr.reactor == NULL or
+                backend_ptr.action_cancel == NULL or
                 backend_ptr.signal_watch == NULL or
                 backend_ptr.signal_unwatch == NULL):
             raise ValueError("loop backend is missing a required operation")
-        if backend_ptr.reactor.struct_size < AIOFN_REACTOR_BACKEND_MIN_SIZE:
-            raise ValueError("loop backend reactor structure is too small")
-        if (backend_ptr.reactor.add_reader == NULL or backend_ptr.reactor.remove_reader == NULL or
-                backend_ptr.reactor.add_writer == NULL or backend_ptr.reactor.remove_writer == NULL):
-            raise ValueError("loop backend reactor is missing a required operation")
+        if backend_ptr.reactor != NULL:
+            if backend_ptr.reactor.struct_size < AIOFN_REACTOR_BACKEND_MIN_SIZE:
+                raise ValueError("loop backend reactor structure is too small")
+            if (backend_ptr.reactor.add_reader == NULL or backend_ptr.reactor.remove_reader == NULL or
+                    backend_ptr.reactor.add_writer == NULL or backend_ptr.reactor.remove_writer == NULL):
+                raise ValueError("loop backend reactor is missing a required operation")
 
         self._backend = backend_ptr
         self._reactor = backend_ptr.reactor
@@ -1110,6 +1111,7 @@ cdef class LoopBase:
     async def _proactor_recv_into(self, sock, buf):
         if len(buf) == 0:
             return 0
+
         cdef:
             _ProactorSocket proactor_socket = self._proactor_socket(sock)
             object buffer = memoryview(buf).cast("B")
@@ -1118,6 +1120,7 @@ cdef class LoopBase:
             _ProactorOperation operation = _ProactorOperation(self, future, buffer, 2)
             aiofn_loop_status status
             void *buffer_ptr = NULL
+
         if len(view):
             buffer_ptr = <void *>&view[0]
         operation.proactor_socket = proactor_socket
@@ -1142,8 +1145,7 @@ cdef class LoopBase:
             _ProactorOperation operation = _ProactorOperation(self, future, view, 3)
             aiofn_loop_buffer_t buffer
 
-        buffer.iov_base = <void *>&view[0] if len(view) else NULL
-        buffer.iov_len = len(view)
+        aiofn_loop_buffer_init(&buffer, <void *>&view[0] if len(view) else NULL, len(view))
 
         operation.proactor_socket = proactor_socket
         proactor_socket.write_operation = operation
@@ -1160,7 +1162,59 @@ cdef class LoopBase:
                 self._check_status(self._proactor.cancel(self._backend.state, &operation.op))
             raise
 
-    async def _proactor_connect(self, sock, address):
+    async def _reactor_recv(self, sock, n):
+        future = self.create_future()
+        def ready():
+            try:
+                data = sock.recv(n)
+            except (BlockingIOError, InterruptedError):
+                return
+            except BaseException as exc:
+                self.remove_reader(sock)
+                future.set_exception(exc)
+            else:
+                self.remove_reader(sock)
+                future.set_result(data)
+        self.add_reader(sock, ready)
+        return await future
+
+    async def _reactor_recv_into(self, sock, buf):
+        future = self.create_future()
+        def ready():
+            try:
+                count = sock.recv_into(buf)
+            except (BlockingIOError, InterruptedError):
+                return
+            except BaseException as exc:
+                self.remove_reader(sock)
+                future.set_exception(exc)
+            else:
+                self.remove_reader(sock)
+                future.set_result(count)
+        self.add_reader(sock, ready)
+        return await future
+
+    async def _reactor_sendall(self, sock, data):
+        view = memoryview(data).cast("B")
+        future = self.create_future()
+        sent = 0
+        def ready():
+            nonlocal sent
+            try:
+                sent += sock.send(view[sent:])
+            except (BlockingIOError, InterruptedError):
+                return
+            except BaseException as exc:
+                self.remove_writer(sock)
+                future.set_exception(exc)
+                return
+            if sent == len(view):
+                self.remove_writer(sock)
+                future.set_result(None)
+        self.add_writer(sock, ready)
+        return await future
+
+    async def _reactor_connect(self, sock, address):
         # uv_tcp_open adopts an existing fd, while uv_tcp_connect creates a
         # connection on a libuv-owned socket. Connect the Python socket first;
         # the proactor then adopts it for subsequent read/write operations.
@@ -1184,65 +1238,28 @@ cdef class LoopBase:
     async def sock_recv(self, sock, n):
         if self._proactor != NULL:
             return await self._proactor_recv(sock, n)
-
-        future = self.create_future()
-        def ready():
-            try:
-                data = sock.recv(n)
-            except (BlockingIOError, InterruptedError):
-                return
-            except BaseException as exc:
-                self.remove_reader(sock)
-                future.set_exception(exc)
-            else:
-                self.remove_reader(sock)
-                future.set_result(data)
-        self.add_reader(sock, ready)
-        return await future
+        if self._reactor != NULL:
+            return await self._reactor_recv(sock, n)
+        raise NotImplementedError("sock_recv requires a reactor or proactor backend")
 
     async def sock_recv_into(self, sock, buf):
         if self._proactor != NULL:
             return await self._proactor_recv_into(sock, buf)
-        future = self.create_future()
-        def ready():
-            try:
-                count = sock.recv_into(buf)
-            except (BlockingIOError, InterruptedError):
-                return
-            except BaseException as exc:
-                self.remove_reader(sock)
-                future.set_exception(exc)
-            else:
-                self.remove_reader(sock)
-                future.set_result(count)
-        self.add_reader(sock, ready)
-        return await future
+        if self._reactor != NULL:
+            return await self._reactor_recv_into(sock, buf)
+        raise NotImplementedError("sock_recv_into requires a reactor or proactor backend")
 
     async def sock_sendall(self, sock, data):
         if self._proactor != NULL:
             await self._proactor_sendall(sock, data)
             return
-
-        view = memoryview(data).cast("B")
-        future = self.create_future()
-        sent = 0
-        def ready():
-            nonlocal sent
-            try:
-                sent += sock.send(view[sent:])
-            except (BlockingIOError, InterruptedError):
-                return
-            except BaseException as exc:
-                self.remove_writer(sock)
-                future.set_exception(exc)
-                return
-            if sent == len(view):
-                self.remove_writer(sock)
-                future.set_result(None)
-        self.add_writer(sock, ready)
-        return await future
+        if self._reactor != NULL:
+            return await self._reactor_sendall(sock, data)
+        raise NotImplementedError("sock_sendall requires a reactor or proactor backend")
 
     async def sock_accept(self, sock):
+        if self._reactor == NULL:
+            raise NotImplementedError("sock_accept requires a reactor backend")
         future = self.create_future()
         def ready():
             try:
@@ -1261,25 +1278,16 @@ cdef class LoopBase:
 
     async def sock_connect(self, sock, address):
         if self._proactor != NULL:
-            await self._proactor_connect(sock, address)
-            return
-        try:
-            sock.connect(address)
-            return
-        except (BlockingIOError, InterruptedError):
-            pass
-        future = self.create_future()
-        def ready():
-            error = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-            self.remove_writer(sock)
-            if error:
-                future.set_exception(OSError(error, f"Connect call failed {address}"))
-            else:
-                future.set_result(None)
-        self.add_writer(sock, ready)
-        await future
+            if self._reactor != NULL:
+                return await self._reactor_connect(sock, address)
+            raise NotImplementedError("sock_connect requires a reactor for this proactor backend")
+        if self._reactor != NULL:
+            return await self._reactor_connect(sock, address)
+        raise NotImplementedError("sock_connect requires a reactor or proactor backend")
 
     async def sock_recvfrom(self, sock, bufsize):
+        if self._reactor == NULL:
+            raise NotImplementedError("sock_recvfrom requires a reactor backend")
         future = self.create_future()
         def ready():
             try:
@@ -1296,6 +1304,8 @@ cdef class LoopBase:
         return await future
 
     async def sock_recvfrom_into(self, sock, buf, nbytes=0):
+        if self._reactor == NULL:
+            raise NotImplementedError("sock_recvfrom_into requires a reactor backend")
         if not nbytes:
             nbytes = len(buf)
         future = self.create_future()
@@ -1314,6 +1324,8 @@ cdef class LoopBase:
         return await future
 
     async def sock_sendto(self, sock, data, address):
+        if self._reactor == NULL:
+            raise NotImplementedError("sock_sendto requires a reactor backend")
         future = self.create_future()
         def ready():
             try:

@@ -38,8 +38,6 @@ class _EventLoopPolicy(TypingProtocol):
     def new_event_loop(self) -> asyncio.AbstractEventLoop: ...
 
 OPENSSL_DYN_LIBS: OpenSSLDynLibs | None
-libevent_loop: Any
-libuv_loop: Any
 __version__: str
 __author__: str
 

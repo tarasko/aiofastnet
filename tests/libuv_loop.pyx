@@ -2,8 +2,8 @@ import asyncio
 
 from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
 
-from .loop_base import LoopBase
-from .loop_backend cimport AIOFN_LOOP_BACKEND_CAPSULE_NAME, aiofn_loop_backend_t
+from aiofastnet.loop_base import LoopBase
+from aiofastnet.loop_backend cimport AIOFN_LOOP_BACKEND_CAPSULE_NAME, aiofn_loop_backend_t
 
 
 cdef extern from "libuv_backend.h":

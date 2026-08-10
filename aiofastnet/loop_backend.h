@@ -124,6 +124,16 @@ typedef struct
 typedef struct iovec aiofn_loop_buffer_t;
 #endif
 
+static inline void aiofn_loop_buffer_init(aiofn_loop_buffer_t *buffer, void *base, size_t len) {
+#if defined(_WIN32)
+    buffer->iov_base = (CHAR *)base;
+    buffer->iov_len = (ULONG)len;
+#else
+    buffer->iov_base = base;
+    buffer->iov_len = len;
+#endif
+}
+
 typedef void (*aiofn_loop_proactor_callback_fn)(aiofn_loop_proactor_op_t *op);
 
 /* Frontend-owned native socket wrapper used by proactor operations. */

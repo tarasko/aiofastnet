@@ -88,16 +88,8 @@ if os.name == 'posix':
             ["aiofastnet/loop_base.pyx"],
         ),
         Extension(
-            "aiofastnet.libevent_loop",
-            ["aiofastnet/libevent_loop.pyx", "aiofastnet/libevent_backend.c"],
-            libraries=[*libs, "event"],
-            define_macros=macros,
-            extra_compile_args=extra_compile_args,
-            extra_link_args=extra_link_args,
-        ),
-        Extension(
-            "aiofastnet.libuv_loop",
-            ["aiofastnet/libuv_loop.pyx", "aiofastnet/libuv_backend.c"],
+            "tests.libuv_loop",
+            ["tests/libuv_loop.pyx", "tests/libuv_backend.c"],
             libraries=[*libs, "uv"],
             define_macros=macros,
             extra_compile_args=extra_compile_args,
