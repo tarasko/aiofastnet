@@ -1,6 +1,8 @@
 import asyncio
+import os
 import platform
 import socket
+import tempfile
 
 import pytest
 
@@ -91,31 +93,33 @@ async def test_datagram_sendto_rejects_hostname(selector_loop):
         transport.close()
 
 
-@pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="Unix-domain sockets are not supported")
-async def test_unix_datagram_addresses(selector_loop, tmp_path):
+@pytest.mark.skipif(os.name == "nt" or not hasattr(socket, "AF_UNIX"), reason="Unix datagram sockets are not supported")
+async def test_unix_datagram_addresses(selector_loop):
     loop = asyncio.get_running_loop()
-    server_path = str(tmp_path / "server.sock")
-    client_path = str(tmp_path / "client.sock")
-    server_transport, server_protocol = await aiofastnet.create_datagram_endpoint(
-        loop,
-        DatagramQueueProtocol,
-        local_addr=server_path,
-        family=socket.AF_UNIX,
-    )
-    client_transport, client_protocol = await aiofastnet.create_datagram_endpoint(
-        loop,
-        DatagramQueueProtocol,
-        local_addr=client_path,
-        remote_addr=server_path,
-        family=socket.AF_UNIX,
-    )
-    try:
-        client_transport.sendto(b"hello")
-        data, addr = await asyncio.wait_for(server_protocol.received.get(), 1)
-        assert data == b"hello"
-        assert addr == client_path
-        server_transport.sendto(b"response", addr)
-        assert await asyncio.wait_for(client_protocol.received.get(), 1) == (b"response", server_path)
-    finally:
-        client_transport.close()
-        server_transport.close()
+    # macOS allows only 103 pathname bytes in sockaddr_un; pytest's tmp_path can exceed that before the socket filename is appended.
+    with tempfile.TemporaryDirectory(prefix="aiofn-", dir="/tmp") as tmpdir:
+        server_path = os.path.join(tmpdir, "server.sock")
+        client_path = os.path.join(tmpdir, "client.sock")
+        server_transport, server_protocol = await aiofastnet.create_datagram_endpoint(
+            loop,
+            DatagramQueueProtocol,
+            local_addr=server_path,
+            family=socket.AF_UNIX,
+        )
+        client_transport, client_protocol = await aiofastnet.create_datagram_endpoint(
+            loop,
+            DatagramQueueProtocol,
+            local_addr=client_path,
+            remote_addr=server_path,
+            family=socket.AF_UNIX,
+        )
+        try:
+            client_transport.sendto(b"hello")
+            data, addr = await asyncio.wait_for(server_protocol.received.get(), 1)
+            assert data == b"hello"
+            assert addr == client_path
+            server_transport.sendto(b"response", addr)
+            assert await asyncio.wait_for(client_protocol.received.get(), 1) == (b"response", server_path)
+        finally:
+            client_transport.close()
+            server_transport.close()
