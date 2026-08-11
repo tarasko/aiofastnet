@@ -74,6 +74,12 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
+    - name: Install libuv development files
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y libuv1-dev
+    - name: Install libuv development files (macOS)
+      if: runner.os == 'macOS'
+      run: brew list libuv >/dev/null 2>&1 || brew install libuv
     - name: Set up Python
       uses: actions/setup-python@v7
       with:
@@ -120,6 +126,12 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
+    - name: Install libuv development files
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y libuv1-dev
+    - name: Install libuv development files (macOS)
+      if: runner.os == 'macOS'
+      run: brew list libuv >/dev/null 2>&1 || brew install libuv
     - name: Set up Python ${{ matrix.pyver }}
       uses: actions/setup-python@v7
       with:
@@ -197,6 +209,12 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
+    - name: Install libuv development files
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y libuv1-dev
+    - name: Install libuv development files (macOS)
+      if: runner.os == 'macOS'
+      run: brew list libuv >/dev/null 2>&1 || brew install libuv
     - name: Set up uv python
       # important: do not use system python
       env:
@@ -243,6 +261,7 @@ jobs:
           sh -lc '
             manylinux-interpreters ensure ${{ matrix.python-tag }}
             PYBIN="/opt/python/${{ matrix.python-tag }}/bin"
+            apk add --no-cache libuv-dev
             "$PYBIN/python" -VV
             "$PYBIN/python" -c "import sys, sysconfig; print(sys.version); print(\"Py_GIL_DISABLED=\", sysconfig.get_config_var(\"Py_GIL_DISABLED\")); print(\"GIL enabled=\", getattr(sys, \"_is_gil_enabled\", lambda: \"n/a\")())"
             "$PYBIN/python" -m pip install --upgrade pip
@@ -259,6 +278,12 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
+    - name: Install libuv development files
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y libuv1-dev
+    - name: Install libuv development files (macOS)
+      if: runner.os == 'macOS'
+      run: brew list libuv >/dev/null 2>&1 || brew install libuv
 
     # aiofastnet requires a Python distribution whose `ssl` module is
     # dynamically linked against OpenSSL. actions/setup-python provides that,
@@ -301,6 +326,12 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
+    - name: Install libuv development files
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y libuv1-dev
+    - name: Install libuv development files (macOS)
+      if: runner.os == 'macOS'
+      run: brew list libuv >/dev/null 2>&1 || brew install libuv
     - name: Set up Python
       uses: actions/setup-python@v7
       with:
