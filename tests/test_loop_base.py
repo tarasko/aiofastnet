@@ -15,7 +15,6 @@ from tests.libuv_loop import LibuvLoop
 from tests.utils import ConnectionType, TestServer
 
 
-
 def _tcp_socketpair():
     # Use TCP descriptors because epoll rejects AF_UNIX socketpair descriptors here.
     listener = socket.socket()
