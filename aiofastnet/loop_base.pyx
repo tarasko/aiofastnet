@@ -49,6 +49,7 @@ from .utils cimport (
     aiofn_allocate_bytes,
     aiofn_finalize_bytes,
     aiofn_pyaddr_to_sockaddr,
+    aiofn_sockaddr_to_pyaddr,
     unlikely,
 )
 
@@ -497,6 +498,8 @@ cdef class _ProactorOperation:
         object future
         object buffer
         int result_kind
+        char address[256]
+        size_t address_len
         aiofn_loop_proactor_op_t op
 
 
@@ -515,6 +518,7 @@ cdef class _ProactorSocket:
         op.future = self.loop.create_future()
         op.buffer = buffer
         op.result_kind = result_kind
+        op.address_len = sizeof(op.address)
 
         op.op.callback = _proactor_callback
         op.op.callback_data = <void *>op
@@ -534,9 +538,9 @@ cdef void _proactor_callback(aiofn_loop_proactor_op_t *op) noexcept with gil:
         object message
 
     try:
-        if operation.result_kind in (1, 2):
+        if operation.result_kind in (1, 2, 5, 6):
             operation.sock.read_operation = None
-        elif operation.result_kind == 3:
+        elif operation.result_kind in (3, 7):
             operation.sock.write_operation = None
 
         if future.done():
@@ -547,8 +551,13 @@ cdef void _proactor_callback(aiofn_loop_proactor_op_t *op) noexcept with gil:
                 result = aiofn_finalize_bytes(<PyObject *>operation.buffer, op.transferred)
             elif operation.result_kind == 2:
                 result = op.transferred
+            elif operation.result_kind == 5:
+                result = (aiofn_finalize_bytes(<PyObject *>operation.buffer, op.transferred),
+                          aiofn_sockaddr_to_pyaddr(operation.address, <unsigned int>operation.address_len))
+            elif operation.result_kind == 6:
+                result = (op.transferred, aiofn_sockaddr_to_pyaddr(operation.address, <unsigned int>operation.address_len))
             else:
-                result = None
+                result = op.transferred if operation.result_kind == 7 else None
             future.set_result(result)
         else:
             if loop._backend.last_error != NULL:
@@ -1227,6 +1236,85 @@ cdef class LoopBase:
         finally:
             self._proactor_unwrap_socket(sock)
 
+    async def _proactor_recvfrom(self, py_sock, bufsize):
+        cdef:
+            char *buffer_ptr
+            object buffer = <object>aiofn_allocate_bytes(bufsize, &buffer_ptr)
+
+        cdef:
+            _ProactorSocket sock = self._proactor_wrap_socket(py_sock)
+            _ProactorOperation operation = sock.create_operation(buffer, 5)
+
+        try:
+            try:
+                sock.read_operation = operation
+                Py_INCREF(operation)
+                self._check_status(self._proactor.recvfrom(
+                    self._backend.state,
+                    &sock.backend_sock,
+                    &operation.op,
+                    buffer_ptr,
+                    bufsize,
+                    <void *>&operation.address[0],
+                    &operation.address_len,
+                ))
+            except BaseException:
+                Py_DECREF(operation)
+                raise
+
+            try:
+                return await operation.future
+            except BaseException:
+                if operation.op.backend_token != NULL:
+                    self._check_status(self._proactor.cancel(self._backend.state, &operation.op))
+                raise
+        finally:
+            self._proactor_unwrap_socket(sock)
+
+    async def _proactor_recvfrom_into(self, py_sock, buf, nbytes=0):
+        if not nbytes:
+            nbytes = len(buf)
+        if nbytes < 0 or nbytes > len(buf):
+            raise ValueError("nbytes must be between 0 and the buffer length")
+
+        cdef:
+            object buffer = memoryview(buf).cast("B")
+            unsigned char[:] view = buffer
+            void *buffer_ptr = NULL
+
+        if len(view):
+            buffer_ptr = <void *>&view[0]
+
+        cdef:
+            _ProactorSocket sock = self._proactor_wrap_socket(py_sock)
+            _ProactorOperation operation = sock.create_operation(buffer, 6)
+
+        try:
+            try:
+                sock.read_operation = operation
+                Py_INCREF(operation)
+                self._check_status(self._proactor.recvfrom(
+                    self._backend.state,
+                    &sock.backend_sock,
+                    &operation.op,
+                    buffer_ptr,
+                    nbytes,
+                    <void *>&operation.address[0],
+                    &operation.address_len,
+                ))
+            except BaseException:
+                Py_DECREF(operation)
+                raise
+
+            try:
+                return await operation.future
+            except BaseException:
+                if operation.op.backend_token != NULL:
+                    self._check_status(self._proactor.cancel(self._backend.state, &operation.op))
+                raise
+        finally:
+            self._proactor_unwrap_socket(sock)
+
     async def _proactor_sendall(self, py_sock, data):
         if len(data) == 0:
             return 0
@@ -1258,6 +1346,49 @@ cdef class LoopBase:
 
             try:
                 await operation.future
+            except BaseException:
+                if operation.op.backend_token != NULL:
+                    self._check_status(self._proactor.cancel(self._backend.state, &operation.op))
+                raise
+        finally:
+            self._proactor_unwrap_socket(sock)
+
+    async def _proactor_sendto(self, py_sock, data, address):
+        if len(data) == 0:
+            return 0
+
+        cdef:
+            const unsigned char[:] view = memoryview(data).cast("B")
+
+        cdef:
+            _ProactorSocket sock = self._proactor_wrap_socket(py_sock)
+            _ProactorOperation operation = sock.create_operation(view, 7)
+            unsigned int address_len = sizeof(operation.address)
+
+        if address is None:
+            address = py_sock.getpeername()
+        aiofn_pyaddr_to_sockaddr(py_sock.family, address, <void *>&operation.address[0], &address_len)
+        operation.address_len = address_len
+
+        try:
+            try:
+                sock.write_operation = operation
+                Py_INCREF(operation)
+                self._check_status(self._proactor.sendto(
+                    self._backend.state,
+                    &sock.backend_sock,
+                    &operation.op,
+                    <const void *>&view[0],
+                    len(view),
+                    <const void *>&operation.address[0],
+                    operation.address_len,
+                ))
+            except BaseException:
+                Py_DECREF(operation)
+                raise
+
+            try:
+                return await operation.future
             except BaseException:
                 if operation.op.backend_token != NULL:
                     self._check_status(self._proactor.cancel(self._backend.state, &operation.op))
@@ -1338,12 +1469,33 @@ cdef class LoopBase:
             return await self._reactor_recv_into(py_sock, buf)
         raise NotImplementedError("sock_recv_into requires a reactor or proactor backend")
 
+    async def sock_recvfrom(self, py_sock, bufsize):
+        if self._proactor != NULL:
+            return await self._proactor_recvfrom(py_sock, bufsize)
+        if self._reactor != NULL:
+            return await self._reactor_recvfrom(py_sock, bufsize)
+        raise NotImplementedError("sock_recvfrom requires a reactor or proactor backend")
+
+    async def sock_recvfrom_into(self, py_sock, buf, nbytes=0):
+        if self._proactor != NULL:
+            return await self._proactor_recvfrom_into(py_sock, buf, nbytes)
+        if self._reactor != NULL:
+            return await self._reactor_recvfrom_into(py_sock, buf, nbytes)
+        raise NotImplementedError("sock_recvfrom_into requires a reactor or proactor backend")
+
     async def sock_sendall(self, py_sock, data):
         if self._proactor != NULL:
             return await self._proactor_sendall(py_sock, data)
         if self._reactor != NULL:
             return await self._reactor_sendall(py_sock, data)
         raise NotImplementedError("sock_sendall requires a reactor or proactor backend")
+
+    async def sock_sendto(self, py_sock, data, address):
+        if self._proactor != NULL:
+            return await self._proactor_sendto(py_sock, data, address)
+        if self._reactor != NULL:
+            return await self._reactor_sendto(py_sock, data, address)
+        raise NotImplementedError("sock_sendto requires a reactor or proactor backend")
 
     async def sock_accept(self, py_sock):
         if self._reactor == NULL:
@@ -1364,9 +1516,7 @@ cdef class LoopBase:
         self.add_reader(py_sock, ready)
         return await future
 
-    async def sock_recvfrom(self, py_sock, bufsize):
-        if self._reactor == NULL:
-            raise NotImplementedError("sock_recvfrom requires a reactor backend")
+    async def _reactor_recvfrom(self, py_sock, bufsize):
         future = self.create_future()
         def ready():
             try:
@@ -1382,9 +1532,7 @@ cdef class LoopBase:
         self.add_reader(py_sock, ready)
         return await future
 
-    async def sock_recvfrom_into(self, py_sock, buf, nbytes=0):
-        if self._reactor == NULL:
-            raise NotImplementedError("sock_recvfrom_into requires a reactor backend")
+    async def _reactor_recvfrom_into(self, py_sock, buf, nbytes=0):
         if not nbytes:
             nbytes = len(buf)
         future = self.create_future()
@@ -1402,9 +1550,7 @@ cdef class LoopBase:
         self.add_reader(py_sock, ready)
         return await future
 
-    async def sock_sendto(self, py_sock, data, address):
-        if self._reactor == NULL:
-            raise NotImplementedError("sock_sendto requires a reactor backend")
+    async def _reactor_sendto(self, py_sock, data, address):
         future = self.create_future()
         def ready():
             try:

@@ -372,6 +372,31 @@ async def test_proactor_sock_recv_into(libuv_loop):
             client.close()
 
 
+async def test_proactor_datagram_recvfrom_sendto(libuv_loop):
+    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server.setblocking(False)
+    client.setblocking(False)
+    server.bind(("127.0.0.1", 0))
+    client.bind(("127.0.0.1", 0))
+    try:
+        address = server.getsockname()
+        assert await libuv_loop.sock_sendto(client, b"hello", address) == 5
+        data, sender = await libuv_loop.sock_recvfrom(server, 5)
+        assert data == b"hello"
+        assert sender == client.getsockname()
+
+        assert await libuv_loop.sock_sendto(client, b"world", address) == 5
+        buffer = bytearray(5)
+        count, sender = await libuv_loop.sock_recvfrom_into(server, buffer)
+        assert count == 5
+        assert buffer == b"world"
+        assert sender == client.getsockname()
+    finally:
+        server.close()
+        client.close()
+
+
 async def test_loop_base_is_abstract_event_loop(libuv_loop):
     from tests.libuv_loop import LibuvLoop
 
@@ -382,4 +407,3 @@ async def test_loop_base_is_abstract_event_loop(libuv_loop):
 async def test_addrinfo(libuv_loop):
     res = await libuv_loop.getaddrinfo("google.com", 80)
     print(res)
-
