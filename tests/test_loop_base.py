@@ -8,10 +8,12 @@ import threading
 
 import pytest
 
+pytestmark = pytest.mark.skipif(os.name != "posix", reason="the libuv test backend is Unix-only")
+
+
 from tests.libuv_loop import LibuvLoop
 from tests.utils import ConnectionType, TestServer
 
-pytestmark = pytest.mark.skipif(os.name != "posix", reason="the libuv test backend is Unix-only")
 
 
 def _tcp_socketpair():
