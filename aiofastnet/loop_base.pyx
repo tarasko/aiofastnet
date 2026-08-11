@@ -1078,6 +1078,7 @@ cdef class LoopBase:
             result.read_operation = None
             result.write_operation = None
             result.backend_sock.fd = fd
+            result.backend_sock.socktype = <int>sock.type
             result.backend_sock.backend_token = NULL
 
             self._check_status(self._proactor.wrap_socket(self._backend.state, &result.backend_sock))

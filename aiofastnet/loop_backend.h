@@ -60,7 +60,7 @@ typedef void (*aiofn_loop_fd_ready_fn)(
  * when that direction is removed. A backend with one combined registration
  * may store the same native pointer in both token fields.
  */
-typedef struct aiofn_loop_fd_watch {
+typedef struct {
     int fd;
     aiofn_loop_fd_ready_fn callback;
     void *callback_data;
@@ -78,7 +78,7 @@ typedef void (*aiofn_loop_signal_fn)(
  * initializes callback and callback_data. The backend stores its native
  * registration token in backend_token while the watch is active.
  */
-typedef struct aiofn_loop_signal_watch {
+typedef struct {
     aiofn_loop_signal_fn callback;
     void *callback_data;
     void *backend_token;
@@ -90,7 +90,7 @@ typedef struct aiofn_loop_signal_watch {
  * struct_size permits appending operations without changing the meaning of
  * existing fields. The interface object must remain valid until backend close.
  */
-typedef struct aiofn_reactor_backend {
+typedef struct {
     size_t struct_size;
 
     /* Add persistent, level-triggered read readiness; do not call inline. */
@@ -106,7 +106,14 @@ typedef struct aiofn_reactor_backend {
     aiofn_loop_status (*remove_writer)(void *state, aiofn_loop_fd_watch_t *watch);
 } aiofn_reactor_backend_t;
 
-typedef struct aiofn_loop_proactor_socket aiofn_loop_proactor_socket_t;
+/* Frontend-owned native socket wrapper used by proactor operations. */
+typedef struct {
+    int fd;
+    int socktype;
+    void *backend_token;
+} aiofn_loop_proactor_socket_t;
+
+
 typedef struct aiofn_loop_proactor_op aiofn_loop_proactor_op_t;
 
 /*
@@ -136,24 +143,18 @@ static inline void aiofn_loop_buffer_init(aiofn_loop_buffer_t *buffer, void *bas
 
 typedef void (*aiofn_loop_proactor_callback_fn)(aiofn_loop_proactor_op_t *op);
 
-/* Frontend-owned native socket wrapper used by proactor operations. */
-struct aiofn_loop_proactor_socket {
-    int fd;
-    void *backend_token;
-};
-
 /*
  * Frontend-owned one-shot operation. The backend fills status and transferred
  * before invoking callback, clears backend_token before the callback, and must
  * not access this object after the callback returns.
  */
-struct aiofn_loop_proactor_op {
+typedef struct aiofn_loop_proactor_op {
     aiofn_loop_proactor_callback_fn callback;
     void *callback_data;
     void *backend_token;
     aiofn_loop_status status;
     size_t transferred;
-};
+} aiofn_loop_proactor_op_t;
 
 /*
  * Proactor interface prototype. This is intentionally not consumed by the
@@ -162,7 +163,7 @@ struct aiofn_loop_proactor_op {
  * pending read and one pending write; a read and write may overlap. Buffer
  * memory remains owned by the frontend and must stay valid until completion.
  */
-typedef struct aiofn_proactor_backend {
+typedef struct {
     size_t struct_size;
 
     /* Wrap an existing nonblocking socket into a native proactor handle.
@@ -203,8 +204,34 @@ typedef struct aiofn_proactor_backend {
         size_t buffer_count
     );
 
-    /* Cancel one pending connect, read, or write operation. */
+    /* Cancel one pending connect, read, write, recvfrom, or sendto operation. */
     aiofn_loop_status (*cancel)(void *state, aiofn_loop_proactor_op_t *op);
+
+    /*
+     * Start one asynchronous datagram receive. The frontend supplies address
+     * storage and initializes *address_len to its capacity. The backend fills
+     * the source address and replaces *address_len with the actual length.
+     */
+    aiofn_loop_status (*recvfrom)(
+        void *state,
+        aiofn_loop_proactor_socket_t *socket,
+        aiofn_loop_proactor_op_t *op,
+        void *buffer,
+        size_t buffer_len,
+        void *address,
+        size_t *address_len
+    );
+
+    /* Start one asynchronous datagram send to the supplied native address. */
+    aiofn_loop_status (*sendto)(
+        void *state,
+        aiofn_loop_proactor_socket_t *socket,
+        aiofn_loop_proactor_op_t *op,
+        const void *buffer,
+        size_t buffer_len,
+        const void *address,
+        size_t address_len
+    );
 } aiofn_proactor_backend_t;
 
 /*
@@ -223,7 +250,7 @@ typedef struct aiofn_proactor_backend {
 * and add/remove operations have valid matching registrations. Backends still
 * must handle failures reported by the native loop library.
 */
-typedef struct aiofn_loop_backend {
+typedef struct {
     /*
      * End offset of the last field provided by the adapter. Initialize this
      * with AIOFN_LOOP_BACKEND_CURRENT_SIZE from the header used to build the
@@ -358,7 +385,7 @@ typedef struct aiofn_loop_backend {
     ((proactor)->struct_size >= AIOFN_PROACTOR_BACKEND_FIELD_END(field))
 
 #define AIOFN_PROACTOR_BACKEND_MIN_SIZE AIOFN_PROACTOR_BACKEND_FIELD_END(cancel)
-#define AIOFN_PROACTOR_BACKEND_CURRENT_SIZE AIOFN_PROACTOR_BACKEND_FIELD_END(cancel)
+#define AIOFN_PROACTOR_BACKEND_CURRENT_SIZE AIOFN_PROACTOR_BACKEND_FIELD_END(sendto)
 
 #define AIOFN_LOOP_BACKEND_MIN_SIZE AIOFN_LOOP_BACKEND_FIELD_END(signal_unwatch)
 #define AIOFN_LOOP_BACKEND_CURRENT_SIZE AIOFN_LOOP_BACKEND_FIELD_END(signal_unwatch)

@@ -58,6 +58,7 @@ cdef extern from "loop_backend.h":
 
     ctypedef struct aiofn_loop_proactor_socket_t:
         int fd
+        int socktype
         void *backend_token
 
     ctypedef struct aiofn_loop_proactor_op_t
