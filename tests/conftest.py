@@ -42,6 +42,8 @@ def _new_selector_event_loop():
 
 
 def _libuv_loop_factories():
+    if os.name != "posix":
+        return _selector_loop_factories()
     from .libuv_loop import new_event_loop
     return {"libuv": new_event_loop}
 
@@ -70,6 +72,8 @@ class _LibuvEventLoopPolicy(asyncio.DefaultEventLoopPolicy):
 
 
 def _libuv_loop_policies():
+    if os.name != "posix":
+        return _selector_loop_policies()
     return {"libuv": _LibuvEventLoopPolicy()}
 
 
