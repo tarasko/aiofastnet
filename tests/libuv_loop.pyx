@@ -17,7 +17,7 @@ cdef void _free_backend(object capsule) noexcept:
     aiofn_libuv_backend_free(backend)
 
 
-class EventLoop(LoopBase, asyncio.AbstractEventLoop):
+class LibuvLoop(LoopBase, asyncio.AbstractEventLoop):
     pass
 
 
@@ -33,4 +33,4 @@ def new_event_loop():
         aiofn_libuv_backend_free(backend)
         raise
 
-    return EventLoop(capsule)
+    return LibuvLoop(capsule)

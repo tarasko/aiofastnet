@@ -52,6 +52,8 @@ from .utils cimport (
     unlikely,
 )
 
+from .utils import DNSLookupRequired
+
 from cpython.contextvars cimport PyContext_CopyCurrent, PyContext_Enter, PyContext_Exit
 from cpython.object cimport Py_EQ, Py_GE, Py_GT, Py_LE, Py_LT, Py_NE, PyObject
 from cpython.pycapsule cimport PyCapsule_CheckExact, PyCapsule_GetPointer
@@ -1095,17 +1097,19 @@ cdef class LoopBase:
             sockaddr_storage raw_address
             unsigned int raw_address_len = sizeof(sockaddr_storage)
 
-        if not aiofn_pyaddr_to_sockaddr(address, <void *>&raw_address, &raw_address_len):
-            if not isinstance(address, tuple) or len(address) < 2:
-                raise ValueError(f"unsupported socket address: {address!r}")
+        try:
+            aiofn_pyaddr_to_sockaddr(py_sock.family, address, <void *>&raw_address, &raw_address_len)
+        except DNSLookupRequired:
             infos = await self.getaddrinfo(
                 address[0],
                 address[1],
                 family=py_sock.family,
                 type=socket.SOCK_STREAM,
             )
-            if not infos or not aiofn_pyaddr_to_sockaddr(infos[0][4], <void *>&raw_address, &raw_address_len):
+            if not infos:
                 raise ValueError(f"unsupported socket address: {address!r}")
+
+            aiofn_pyaddr_to_sockaddr(infos[0][0], infos[0][4], <void *>&raw_address, &raw_address_len)
 
         cdef:
             _ProactorSocket sock = self._proactor_wrap_socket(py_sock)

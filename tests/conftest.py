@@ -6,6 +6,7 @@ import warnings
 from importlib.metadata import version
 
 import pytest
+import pytest_asyncio
 
 pytest_plugins = ("tests.pytest_plugin",)
 
@@ -27,10 +28,22 @@ def selector_loop():
     """Opt an async test into the selector loop on Windows."""
 
 
+@pytest_asyncio.fixture
+async def libuv_loop():
+    if os.name != "posix":
+        pytest.skip("the libuv test backend is Unix-only")
+    return asyncio.get_running_loop()
+
+
 def _new_selector_event_loop():
     if os.name == "nt":
         return asyncio.SelectorEventLoop()
     return asyncio.new_event_loop()
+
+
+def _libuv_loop_factories():
+    from .libuv_loop import new_event_loop
+    return {"libuv": new_event_loop}
 
 
 def _selector_loop_factories():
@@ -47,6 +60,17 @@ def _selector_loop_policies():
             "asyncio_sel": asyncio.WindowsSelectorEventLoopPolicy(),
         }
     return {"asyncio": asyncio.DefaultEventLoopPolicy()}
+
+
+class _LibuvEventLoopPolicy(asyncio.DefaultEventLoopPolicy):
+    def new_event_loop(self):
+        from .libuv_loop import new_event_loop
+
+        return new_event_loop()
+
+
+def _libuv_loop_policies():
+    return {"libuv": _LibuvEventLoopPolicy()}
 
 
 def _platform_loop_factories():
@@ -108,16 +132,6 @@ def _requested_loop_fixtures(item):
     return fixture_names
 
 
-if not _HAS_LOOP_FACTORIES:
-    @pytest.fixture
-    def event_loop_policy(request):
-        if hasattr(request, "param"):
-            return request.param
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            return asyncio.get_event_loop_policy()
-
-
 @pytest.hookimpl(optionalhook=True)
 def pytest_asyncio_loop_factories(config, item):
     fixture_names = _requested_loop_fixtures(item)
@@ -126,7 +140,19 @@ def pytest_asyncio_loop_factories(config, item):
         return _platform_loop_factories()
     if "selector_loop" in fixture_names:
         return _selector_loop_factories()
+    if "libuv_loop" in fixture_names:
+        return _libuv_loop_factories()
     return {"asyncio": _new_selector_event_loop}
+
+
+if not _HAS_LOOP_FACTORIES:
+    @pytest.fixture
+    def event_loop_policy(request):
+        if hasattr(request, "param"):
+            return request.param
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            return asyncio.get_event_loop_policy()
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -139,6 +165,8 @@ def pytest_generate_tests(metafunc):
         policies = _platform_loop_policies()
     elif "selector_loop" in fixture_names:
         policies = _selector_loop_policies()
+    elif "libuv_loop" in fixture_names:
+        policies = _libuv_loop_policies()
     else:
         return
 
