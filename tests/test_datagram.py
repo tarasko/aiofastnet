@@ -87,7 +87,7 @@ async def test_datagram_sendto_rejects_hostname(selector_loop):
     try:
         with pytest.raises(ValueError, match="DNS lookup is required"):
             transport.sendto(b"hello", ("localhost", 12345))
-        with pytest.raises(ValueError, match="socket family mismatch"):
+        with pytest.raises(TypeError, match="invalid addr type"):
             transport.sendto(b"hello", "/tmp/aiofastnet.sock")
     finally:
         transport.close()

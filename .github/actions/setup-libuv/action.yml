@@ -1,0 +1,18 @@
+name: Setup libuv
+description: Install libuv development files
+
+runs:
+  using: composite
+  steps:
+    - name: Install libuv on Linux
+      if: runner.os == 'Linux'
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y libuv1-dev
+
+    - name: Install libuv on macOS
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        brew list libuv >/dev/null 2>&1 || brew install libuv
+        echo "CPPFLAGS=-I$(brew --prefix libuv)/include" >> "$GITHUB_ENV"
+        echo "LDFLAGS=-L$(brew --prefix libuv)/lib" >> "$GITHUB_ENV"

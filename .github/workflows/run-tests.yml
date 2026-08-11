@@ -74,15 +74,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
-    - name: Install libuv development files
-      if: runner.os == 'Linux'
-      run: sudo apt-get update && sudo apt-get install -y libuv1-dev
-    - name: Install libuv development files (macOS)
-      if: runner.os == 'macOS'
-      run: |
-        brew list libuv >/dev/null 2>&1 || brew install libuv
-        echo "CPPFLAGS=-I$(brew --prefix libuv)/include" >> "$GITHUB_ENV"
-        echo "LDFLAGS=-L$(brew --prefix libuv)/lib" >> "$GITHUB_ENV"
+    - uses: ./.github/actions/setup-libuv
     - name: Set up Python
       uses: actions/setup-python@v7
       with:
@@ -129,15 +121,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
-    - name: Install libuv development files
-      if: runner.os == 'Linux'
-      run: sudo apt-get update && sudo apt-get install -y libuv1-dev
-    - name: Install libuv development files (macOS)
-      if: runner.os == 'macOS'
-      run: |
-        brew list libuv >/dev/null 2>&1 || brew install libuv
-        echo "CPPFLAGS=-I$(brew --prefix libuv)/include" >> "$GITHUB_ENV"
-        echo "LDFLAGS=-L$(brew --prefix libuv)/lib" >> "$GITHUB_ENV"
+    - uses: ./.github/actions/setup-libuv
     - name: Set up Python ${{ matrix.pyver }}
       uses: actions/setup-python@v7
       with:
@@ -215,15 +199,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
-    - name: Install libuv development files
-      if: runner.os == 'Linux'
-      run: sudo apt-get update && sudo apt-get install -y libuv1-dev
-    - name: Install libuv development files (macOS)
-      if: runner.os == 'macOS'
-      run: |
-        brew list libuv >/dev/null 2>&1 || brew install libuv
-        echo "CPPFLAGS=-I$(brew --prefix libuv)/include" >> "$GITHUB_ENV"
-        echo "LDFLAGS=-L$(brew --prefix libuv)/lib" >> "$GITHUB_ENV"
+    - uses: ./.github/actions/setup-libuv
     - name: Set up uv python
       # important: do not use system python
       env:
@@ -287,15 +263,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
-    - name: Install libuv development files
-      if: runner.os == 'Linux'
-      run: sudo apt-get update && sudo apt-get install -y libuv1-dev
-    - name: Install libuv development files (macOS)
-      if: runner.os == 'macOS'
-      run: |
-        brew list libuv >/dev/null 2>&1 || brew install libuv
-        echo "CPPFLAGS=-I$(brew --prefix libuv)/include" >> "$GITHUB_ENV"
-        echo "LDFLAGS=-L$(brew --prefix libuv)/lib" >> "$GITHUB_ENV"
+    - uses: ./.github/actions/setup-libuv
 
     # aiofastnet requires a Python distribution whose `ssl` module is
     # dynamically linked against OpenSSL. actions/setup-python provides that,
@@ -338,15 +306,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
-    - name: Install libuv development files
-      if: runner.os == 'Linux'
-      run: sudo apt-get update && sudo apt-get install -y libuv1-dev
-    - name: Install libuv development files (macOS)
-      if: runner.os == 'macOS'
-      run: |
-        brew list libuv >/dev/null 2>&1 || brew install libuv
-        echo "CPPFLAGS=-I$(brew --prefix libuv)/include" >> "$GITHUB_ENV"
-        echo "LDFLAGS=-L$(brew --prefix libuv)/lib" >> "$GITHUB_ENV"
+    - uses: ./.github/actions/setup-libuv
     - name: Set up Python
       uses: actions/setup-python@v7
       with:
