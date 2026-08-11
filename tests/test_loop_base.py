@@ -8,11 +8,9 @@ import threading
 
 import pytest
 
-pytestmark = pytest.mark.skipif(os.name != "posix", reason="the libuv test backend is Unix-only")
-
-
-from tests.libuv_loop import LibuvLoop
 from tests.utils import ConnectionType, TestServer
+
+pytestmark = pytest.mark.skipif(os.name != "posix", reason="the libuv test backend is Unix-only")
 
 
 def _tcp_socketpair():
@@ -375,6 +373,8 @@ async def test_proactor_sock_recv_into(libuv_loop):
 
 
 async def test_loop_base_is_abstract_event_loop(libuv_loop):
+    from tests.libuv_loop import LibuvLoop
+
     assert isinstance(libuv_loop, asyncio.AbstractEventLoop)
     assert isinstance(libuv_loop, LibuvLoop)
 
