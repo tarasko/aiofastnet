@@ -1093,8 +1093,17 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
         object _address
         Py_ssize_t _header_size
         bint _has_connection
+        int _family
 
     def __init__(self, loop, sock, protocol, address, waiter):
+        cdef:
+            char raw_addr[256]
+            unsigned int raw_addr_len = 0
+
+        self._family = sock.family
+        if address is not None:
+            aiofn_pyaddr_to_sockaddr(self._family, address, raw_addr, &raw_addr_len)
+
         SelectorWritableTransport.__init__(self, loop, sock, protocol)
         self._extra['socket'] = TransportSocket(sock)
         aiofn_set_socket_extra_info(self._extra, sock)
@@ -1179,11 +1188,19 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
             self._handle_error('Fatal write error on datagram transport')
 
     cpdef sendto_nocheck(self, data, addr):
+        cdef:
+            char raw_addr[256]
+            unsigned int raw_addr_len = 0
+
         if self._address is not None:
             if addr is not None and addr != self._address:
                 raise ValueError(
                     f'Invalid address: must be None or {self._address}')
             addr = self._address
+
+        if not self._has_connection:
+            # Datagram endpoint creation resolves INET addresses; resolving here could block the event-loop thread.
+            aiofn_pyaddr_to_sockaddr(self._family, addr, raw_addr, &raw_addr_len)
 
         if unlikely(self._connection_lost_scheduled and self._address):
             if self._closed_write_count >= _log_threshold_for_connlost_writes:
@@ -1222,11 +1239,7 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
         try:
             aiofn_unpack_simple_buffer(data, &buf_ptr, &buf_len, 0)
             if not self._has_connection:
-                if not aiofn_pyaddr_to_sockaddr(addr, raw_addr, &raw_addr_len):
-                    bytes_sent = self._file.sendto(data, addr)
-                    if unlikely(self._is_debug):
-                        _logger.debug("%r: socket.sendto(...,len=%d)=%d", self, buf_len, bytes_sent)
-                    return True
+                aiofn_pyaddr_to_sockaddr(self._family, addr, raw_addr, &raw_addr_len)
                 raw_addr_ptr = raw_addr
 
             bytes_sent = aiofn_sendto(self._fileno, buf_ptr, buf_len, raw_addr_ptr, raw_addr_len)
