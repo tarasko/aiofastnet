@@ -9,9 +9,9 @@ from logging import basicConfig
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import tests.libuv_loop
 
 import aiofastnet
-import tests.libuv_loop
 from examples.utils import build_ssl_contexts, run_pair, set_socket_sndbuf
 
 try:
