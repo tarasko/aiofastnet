@@ -1,7 +1,11 @@
+import os
 import socket
 import sys
 
-from cpython.bytes cimport PyBytes_FromObject, PyBytes_FromStringAndSize, PyBytes_CheckExact, PyBytes_GET_SIZE, PyBytes_AS_STRING
+from cpython.bytes cimport (
+    PyBytes_AsStringAndSize, PyBytes_AS_STRING, PyBytes_CheckExact,
+    PyBytes_FromObject, PyBytes_FromStringAndSize, PyBytes_GET_SIZE,
+)
 from cpython.bytearray cimport PyByteArray_GET_SIZE, PyByteArray_AS_STRING
 from cpython.buffer cimport PyObject_GetBuffer, PyBuffer_Release, PyBUF_SIMPLE, PyBUF_WRITEABLE
 from cpython.ref cimport Py_XDECREF
@@ -34,8 +38,10 @@ cdef extern from *:
     #if defined(_WIN32)
 
     #include <limits.h>
+    #include <stddef.h>
     #include <winsock2.h>
     #include <ws2tcpip.h>
+    #include <afunix.h>
 
     #define AIOFN_IS_WINDOWS 1
     #define AIOFN_EAGAIN WSAEWOULDBLOCK
@@ -78,6 +84,8 @@ cdef extern from *:
 
     #include <arpa/inet.h>
     #include <netinet/in.h>
+    #include <stddef.h>
+    #include <sys/un.h>
     #include <sys/types.h>
     #include <sys/socket.h>
     #include <unistd.h>
@@ -173,30 +181,32 @@ cdef extern from *:
         return sendto(fd, buf, len, flags, (struct sockaddr*)addr, (socklen_t)addrlen);
     }
 
-    static inline int aiofn_set_ipv4_sockaddr(const char* host, long port, void* raw_addr, unsigned int* addrlen)
+    static inline int aiofn_set_ipv4_sockaddr(PyObject* pyaddr, const char* host, long port, void* raw_addr, unsigned int* addrlen)
     {
         struct sockaddr_in* sin = (struct sockaddr_in*)raw_addr;
 
         memset(raw_addr, 0, sizeof(struct sockaddr_storage));
         if (inet_pton(AF_INET, host, &sin->sin_addr) != 1)
         {
-            return 0;
+            PyErr_Format(PyExc_ValueError, "%R: socket family mismatch or a DNS lookup is required", pyaddr);
+            return -1;
         }
 
         sin->sin_family = AF_INET;
         sin->sin_port = htons((uint16_t)port);
         *addrlen = sizeof(struct sockaddr_in);
-        return 1;
+        return 0;
     }
 
-    static inline int aiofn_set_ipv6_sockaddr(const char* host, long port, long flowinfo, long scope_id, void* raw_addr, unsigned int* addrlen)
+    static inline int aiofn_set_ipv6_sockaddr(PyObject* pyaddr, const char* host, long port, long flowinfo, long scope_id, void* raw_addr, unsigned int* addrlen)
     {
         struct sockaddr_in6* sin6 = (struct sockaddr_in6*)raw_addr;
 
         memset(raw_addr, 0, sizeof(struct sockaddr_storage));
         if (inet_pton(AF_INET6, host, &sin6->sin6_addr) != 1)
         {
-            return 0;
+            PyErr_Format(PyExc_ValueError, "%R: socket family mismatch or a DNS lookup is required", pyaddr);
+            return -1;
         }
 
         sin6->sin6_family = AF_INET6;
@@ -204,7 +214,41 @@ cdef extern from *:
         sin6->sin6_flowinfo = htonl((uint32_t)flowinfo);
         sin6->sin6_scope_id = (uint32_t)scope_id;
         *addrlen = sizeof(struct sockaddr_in6);
-        return 1;
+        return 0;
+    }
+
+    static inline int aiofn_set_unix_sockaddr(PyObject* pyaddr, const char* path, Py_ssize_t pathlen, void* raw_addr, unsigned int* addrlen)
+    {
+        struct sockaddr_un* sun = (struct sockaddr_un*)raw_addr;
+        size_t path_offset = offsetof(struct sockaddr_un, sun_path);
+        size_t max_path = sizeof(sun->sun_path);
+
+        if (pathlen < 0 || (size_t)pathlen > max_path ||
+            (pathlen > 0 && path[0] != 0 && ((size_t)pathlen == max_path || memchr(path, 0, (size_t)pathlen) != NULL)))
+        {
+            PyErr_Format(PyExc_ValueError, "%R: socket family mismatch or a DNS lookup is required", pyaddr);
+            return -1;
+        }
+
+        memset(raw_addr, 0, sizeof(struct sockaddr_storage));
+        sun->sun_family = AF_UNIX;
+        memcpy(sun->sun_path, path, (size_t)pathlen);
+        *addrlen = (unsigned int)(path_offset + pathlen + (pathlen > 0 && path[0] != 0));
+        #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+        /* BSD sockaddr structures carry their syscall length in the structure as well. */
+        sun->sun_len = (unsigned char)*addrlen;
+        #endif
+        return 0;
+    }
+
+    static inline size_t aiofn_strnlen(const char* value, size_t maxlen)
+    {
+        size_t len = 0;
+        while (len < maxlen && value[len] != 0)
+        {
+            len++;
+        }
+        return len;
     }
 
     static inline PyObject* aiofn_sockaddr_to_pyaddr(void* raw_addr, unsigned int addrlen)
@@ -234,6 +278,24 @@ cdef extern from *:
             return Py_BuildValue("siii", host, ntohs(sin6->sin6_port), ntohl(sin6->sin6_flowinfo), sin6->sin6_scope_id);
         }
 
+        if (addr->ss_family == AF_UNIX)
+        {
+            struct sockaddr_un* sun = (struct sockaddr_un*)addr;
+            size_t path_offset = offsetof(struct sockaddr_un, sun_path);
+            size_t pathlen = addrlen > path_offset ? addrlen - path_offset : 0;
+
+            if (pathlen == 0)
+            {
+                return PyUnicode_FromString("");
+            }
+            if (sun->sun_path[0] == 0)
+            {
+                return PyBytes_FromStringAndSize(sun->sun_path, pathlen);
+            }
+            pathlen = aiofn_strnlen(sun->sun_path, pathlen);
+            return PyUnicode_DecodeFSDefaultAndSize(sun->sun_path, pathlen);
+        }
+
         Py_RETURN_NONE;
     }
     """
@@ -241,14 +303,18 @@ cdef extern from *:
     cdef bint AIOFN_IS_WINDOWS
     cdef int AIOFN_EWOULDBLOCK
     cdef int AIOFN_EAGAIN
+    cdef int AF_INET
+    cdef int AF_INET6
+    cdef int AF_UNIX
 
     Py_ssize_t aiofn_read_sys(int fd, void* buf, size_t len, bint is_socket)
     Py_ssize_t aiofn_write_sys(int fd, const void* buf, size_t len, bint is_socket)
     Py_ssize_t aiofn_writev_sys(int fd, aiofn_iovec *iov, int iovcnt, bint is_socket)
     Py_ssize_t aiofn_recvfrom_sys(int fd, void* buf, size_t len, void* addr, unsigned int* addrlen)
     Py_ssize_t aiofn_sendto_sys(int fd, void* buf, size_t len, void* addr, unsigned int addrlen)
-    int aiofn_set_ipv4_sockaddr(const char* host, long port, void* addr, unsigned int* addrlen)
-    int aiofn_set_ipv6_sockaddr(const char* host, long port, long flowinfo, long scope_id, void* addr, unsigned int* addrlen)
+    int aiofn_set_ipv4_sockaddr(object pyaddr, const char* host, long port, void* addr, unsigned int* addrlen) except -1
+    int aiofn_set_ipv6_sockaddr(object pyaddr, const char* host, long port, long flowinfo, long scope_id, void* addr, unsigned int* addrlen) except -1
+    int aiofn_set_unix_sockaddr(object pyaddr, const char* path, Py_ssize_t pathlen, void* addr, unsigned int* addrlen) except -1
     object aiofn_sockaddr_to_pyaddr(void* addr, unsigned int addrlen)
     void aiofn_set_exc_from_error(int error)
     int aiofn_get_last_error()
@@ -338,7 +404,7 @@ cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz
     return PyBytes_FromStringAndSize(ptr, sz)
 
 
-cdef bint aiofn_pyaddr_to_sockaddr(object addr, void* raw_addr, unsigned int* raw_addr_len) except -1:
+cdef NoResult aiofn_pyaddr_to_sockaddr(int family, object addr, void* raw_addr, unsigned int* raw_addr_len) except NoResult.EXC:
     cdef:
         Py_ssize_t tuple_size
         object host_obj
@@ -346,21 +412,38 @@ cdef bint aiofn_pyaddr_to_sockaddr(object addr, void* raw_addr, unsigned int* ra
         long port
         long flowinfo = 0
         long scope_id = 0
+        bytes path
+        char* path_ptr
+        Py_ssize_t path_len
+
+    if family == AF_UNIX:
+        if isinstance(addr, str):
+            path = os.fsencode(addr)
+        elif isinstance(addr, bytes):
+            path = addr
+        else:
+            raise ValueError(f'{addr!r}: socket family mismatch or a DNS lookup is required')
+
+        PyBytes_AsStringAndSize(path, &path_ptr, &path_len)
+        aiofn_set_unix_sockaddr(addr, path_ptr, path_len, raw_addr, raw_addr_len)
+        return NoResult.OK
 
     if not isinstance(addr, tuple):
-        return False
+        raise ValueError(f'{addr!r}: socket family mismatch or a DNS lookup is required')
 
     tuple_size = len(addr)
-    if tuple_size != 2 and tuple_size != 4:
-        return False
+    if (family == AF_INET and tuple_size != 2) or (family == AF_INET6 and tuple_size not in (2, 4)):
+        raise ValueError(f'{addr!r}: socket family mismatch or a DNS lookup is required')
+    if family not in (AF_INET, AF_INET6):
+        raise ValueError(f'{addr!r}: socket family mismatch or a DNS lookup is required')
 
     host_obj = addr[0]
     if not isinstance(host_obj, str):
-        return False
+        raise ValueError(f'{addr!r}: socket family mismatch or a DNS lookup is required')
 
     host = PyUnicode_AsUTF8(host_obj)
     if host == NULL:
-        return False
+        raise ValueError(f'{addr!r}: socket family mismatch or a DNS lookup is required')
 
     try:
         port = addr[1]
@@ -368,15 +451,16 @@ cdef bint aiofn_pyaddr_to_sockaddr(object addr, void* raw_addr, unsigned int* ra
             flowinfo = addr[2]
             scope_id = addr[3]
     except (TypeError, ValueError, OverflowError):
-        return False
+        raise ValueError(f'{addr!r}: socket family mismatch or a DNS lookup is required') from None
 
     if port < 0 or port > 65535 or flowinfo < 0 or scope_id < 0:
-        return False
+        raise ValueError(f'{addr!r}: socket family mismatch or a DNS lookup is required')
 
-    if tuple_size == 2 and aiofn_set_ipv4_sockaddr(host, port, raw_addr, raw_addr_len):
-        return True
-
-    return aiofn_set_ipv6_sockaddr(host, port, flowinfo, scope_id, raw_addr, raw_addr_len)
+    if family == AF_INET:
+        aiofn_set_ipv4_sockaddr(addr, host, port, raw_addr, raw_addr_len)
+    else:
+        aiofn_set_ipv6_sockaddr(addr, host, port, flowinfo, scope_id, raw_addr, raw_addr_len)
+    return NoResult.OK
 
 
 cdef Py_ssize_t aiofn_read(int fd, void* buf, Py_ssize_t len, bint is_socket) except -2:

@@ -45,7 +45,7 @@ cpdef object aiofn_validate_and_maybe_copy_buffer(object buffer)
 cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz)
 
 cdef object aiofn_sockaddr_to_pyaddr(void* addr, unsigned int addr_len)
-cdef bint aiofn_pyaddr_to_sockaddr(object addr, void* raw_addr, unsigned int* raw_addr_len) except -1
+cdef NoResult aiofn_pyaddr_to_sockaddr(int family, object addr, void* raw_addr, unsigned int* raw_addr_len) except NoResult.EXC
 
 cdef Py_ssize_t aiofn_read(int fd, void* buf, Py_ssize_t len, bint is_socket) except -2
 cdef Py_ssize_t aiofn_write(int fd, void* buf, Py_ssize_t len, bint is_socket) except -2
