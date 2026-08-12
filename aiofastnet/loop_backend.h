@@ -106,7 +106,12 @@ typedef struct {
     aiofn_loop_status (*remove_writer)(void *state, aiofn_loop_fd_watch_t *watch);
 } aiofn_reactor_backend_t;
 
-/* Frontend-owned native socket wrapper used by proactor operations. */
+/*
+ * Frontend-owned native socket wrapper used by proactor operations. For an
+ * accept operation, the frontend supplies an empty wrapper with socktype set;
+ * the backend fills fd/backend_token on successful completion and owns any
+ * native resources until the wrapper is unwrapped.
+ */
 typedef struct {
     int fd;
     int socktype;
@@ -204,7 +209,7 @@ typedef struct {
         size_t buffer_count
     );
 
-    /* Cancel one pending connect, read, write, recvfrom, or sendto operation. */
+    /* Cancel one pending connect, read, write, recvfrom, sendto, or accept operation. */
     aiofn_loop_status (*cancel)(void *state, aiofn_loop_proactor_op_t *op);
 
     /*
@@ -231,6 +236,22 @@ typedef struct {
         size_t buffer_len,
         const void *address,
         size_t address_len
+    );
+
+    /*
+     * Start one asynchronous accept. The frontend supplies an empty
+     * accepted-socket structure and address storage. On successful
+     * completion, the backend initializes accepted_socket and fills the
+     * peer address and its actual length. The frontend owns both structures;
+     * the backend releases native resources if the operation fails.
+     */
+    aiofn_loop_status (*accept)(
+        void *state,
+        aiofn_loop_proactor_socket_t *listener,
+        aiofn_loop_proactor_op_t *op,
+        aiofn_loop_proactor_socket_t *accepted_socket,
+        void *address,
+        size_t *address_len
     );
 } aiofn_proactor_backend_t;
 
@@ -385,7 +406,7 @@ typedef struct {
     ((proactor)->struct_size >= AIOFN_PROACTOR_BACKEND_FIELD_END(field))
 
 #define AIOFN_PROACTOR_BACKEND_MIN_SIZE AIOFN_PROACTOR_BACKEND_FIELD_END(cancel)
-#define AIOFN_PROACTOR_BACKEND_CURRENT_SIZE AIOFN_PROACTOR_BACKEND_FIELD_END(sendto)
+#define AIOFN_PROACTOR_BACKEND_CURRENT_SIZE AIOFN_PROACTOR_BACKEND_FIELD_END(accept)
 
 #define AIOFN_LOOP_BACKEND_MIN_SIZE AIOFN_LOOP_BACKEND_FIELD_END(signal_unwatch)
 #define AIOFN_LOOP_BACKEND_CURRENT_SIZE AIOFN_LOOP_BACKEND_FIELD_END(signal_unwatch)

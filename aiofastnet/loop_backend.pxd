@@ -82,6 +82,7 @@ cdef extern from "loop_backend.h":
         aiofn_loop_status (*cancel)(void *, aiofn_loop_proactor_op_t *) noexcept nogil
         aiofn_loop_status (*recvfrom)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_proactor_op_t *, void *, size_t, void *, size_t *) noexcept nogil
         aiofn_loop_status (*sendto)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_proactor_op_t *, const void *, size_t, const void *, size_t) noexcept nogil
+        aiofn_loop_status (*accept)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_proactor_op_t *, aiofn_loop_proactor_socket_t *, void *, size_t *) noexcept nogil
 
     ctypedef struct aiofn_loop_backend_t:
         size_t struct_size
