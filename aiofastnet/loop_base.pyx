@@ -497,7 +497,6 @@ cdef class _ProactorOperation:
     cdef:
         _ProactorSocket sock
         object future
-        object buffer
         bint pending  # Frontend-owned operation state; independent of backend_token.
         bint *in_progress
         aiofn_loop_proactor_op_t op
@@ -508,11 +507,9 @@ cdef class _ProactorOperation:
     cdef NoResult _submit(self) except NoResult.EXC:
         raise NotImplementedError()
 
-    cdef inline NoResult initialize(
-            self, _ProactorSocket sock, object buffer, bint *in_progress) except NoResult.EXC:
+    cdef inline NoResult initialize(self, _ProactorSocket sock, bint *in_progress) except NoResult.EXC:
         self.sock = sock
         self.future = sock.loop.create_future()
-        self.buffer = buffer
         self.pending = False
         self.in_progress = in_progress
 
@@ -561,6 +558,7 @@ cdef class _ProactorOperation:
 
 cdef class _ProactorReadOperation(_ProactorOperation):
     cdef:
+        object buffer
         void *data
         size_t size
 
@@ -580,6 +578,7 @@ cdef class _ProactorReadOperation(_ProactorOperation):
 
 cdef class _ProactorReadIntoOperation(_ProactorOperation):
     cdef:
+        object buffer
         void *data
         size_t size
 
@@ -599,6 +598,7 @@ cdef class _ProactorReadIntoOperation(_ProactorOperation):
 
 cdef class _ProactorRecvFromOperation(_ProactorOperation):
     cdef:
+        object buffer
         void *data
         size_t size
         char address[256]
@@ -625,6 +625,7 @@ cdef class _ProactorRecvFromOperation(_ProactorOperation):
 
 cdef class _ProactorRecvFromIntoOperation(_ProactorOperation):
     cdef:
+        object buffer
         void *data
         size_t size
         char address[256]
@@ -666,7 +667,9 @@ cdef class _ProactorConnectOperation(_ProactorOperation):
 
 
 cdef class _ProactorSendAllOperation(_ProactorOperation):
-    cdef aiofn_loop_buffer_t buffer_iovec
+    cdef:
+        object buffer
+        aiofn_loop_buffer_t buffer_iovec
 
     cdef NoResult _submit(self) except NoResult.EXC:
         self.sock.loop._check_status(self.sock.loop._proactor.write(
@@ -684,6 +687,7 @@ cdef class _ProactorSendAllOperation(_ProactorOperation):
 
 cdef class _ProactorSendToOperation(_ProactorOperation):
     cdef:
+        object buffer
         const void *data
         size_t size
         char address[256]
@@ -724,7 +728,8 @@ cdef class _ProactorSocket:
     cdef inline _ProactorReadOperation async_read(self, object buffer, void *data, size_t size):
         assert not self.read_in_progress
         cdef _ProactorReadOperation operation = <_ProactorReadOperation>_ProactorReadOperation.__new__(_ProactorReadOperation)
-        operation.initialize(self, buffer, &self.read_in_progress)
+        operation.initialize(self, &self.read_in_progress)
+        operation.buffer = buffer
         operation.data = data
         operation.size = size
         operation.start()
@@ -733,7 +738,8 @@ cdef class _ProactorSocket:
     cdef inline _ProactorReadIntoOperation async_read_into(self, object buffer, void *data, size_t size):
         assert not self.read_in_progress
         cdef _ProactorReadIntoOperation operation = <_ProactorReadIntoOperation>_ProactorReadIntoOperation.__new__(_ProactorReadIntoOperation)
-        operation.initialize(self, buffer, &self.read_in_progress)
+        operation.initialize(self, &self.read_in_progress)
+        operation.buffer = buffer
         operation.data = data
         operation.size = size
         operation.start()
@@ -742,7 +748,8 @@ cdef class _ProactorSocket:
     cdef inline _ProactorRecvFromOperation async_recvfrom(self, object buffer, void *data, size_t size):
         assert not self.read_in_progress
         cdef _ProactorRecvFromOperation operation = <_ProactorRecvFromOperation>_ProactorRecvFromOperation.__new__(_ProactorRecvFromOperation)
-        operation.initialize(self, buffer, &self.read_in_progress)
+        operation.initialize(self, &self.read_in_progress)
+        operation.buffer = buffer
         operation.data = data
         operation.size = size
         operation.address_len = sizeof(operation.address)
@@ -752,7 +759,8 @@ cdef class _ProactorSocket:
     cdef inline _ProactorRecvFromIntoOperation async_recvfrom_into(self, object buffer, void *data, size_t size):
         assert not self.read_in_progress
         cdef _ProactorRecvFromIntoOperation operation = <_ProactorRecvFromIntoOperation>_ProactorRecvFromIntoOperation.__new__(_ProactorRecvFromIntoOperation)
-        operation.initialize(self, buffer, &self.read_in_progress)
+        operation.initialize(self, &self.read_in_progress)
+        operation.buffer = buffer
         operation.data = data
         operation.size = size
         operation.address_len = sizeof(operation.address)
@@ -762,7 +770,7 @@ cdef class _ProactorSocket:
     cdef inline _ProactorConnectOperation async_connect(self, const void *address, unsigned int address_len):
         assert not self.connect_in_progress
         cdef _ProactorConnectOperation operation = <_ProactorConnectOperation>_ProactorConnectOperation.__new__(_ProactorConnectOperation)
-        operation.initialize(self, None, &self.connect_in_progress)
+        operation.initialize(self, &self.connect_in_progress)
         operation.address = address
         operation.address_len = address_len
         operation.start()
@@ -771,7 +779,8 @@ cdef class _ProactorSocket:
     cdef inline _ProactorSendAllOperation async_sendall(self, object buffer, aiofn_loop_buffer_t *buffer_iovec):
         assert not self.write_in_progress
         cdef _ProactorSendAllOperation operation = <_ProactorSendAllOperation>_ProactorSendAllOperation.__new__(_ProactorSendAllOperation)
-        operation.initialize(self, buffer, &self.write_in_progress)
+        operation.initialize(self, &self.write_in_progress)
+        operation.buffer = buffer
         operation.buffer_iovec = buffer_iovec[0]
         operation.start()
         return operation
@@ -780,7 +789,8 @@ cdef class _ProactorSocket:
             self, object buffer, const void *data, size_t size, const void *address, unsigned int address_len):
         assert not self.write_in_progress
         cdef _ProactorSendToOperation operation = <_ProactorSendToOperation>_ProactorSendToOperation.__new__(_ProactorSendToOperation)
-        operation.initialize(self, buffer, &self.write_in_progress)
+        operation.initialize(self, &self.write_in_progress)
+        operation.buffer = buffer
         operation.data = data
         operation.size = size
         operation.address_len = address_len
@@ -798,7 +808,6 @@ cdef void _proactor_callback(aiofn_loop_proactor_op_t *op) noexcept with gil:
 
     try:
         operation.pending = False
-
         operation.in_progress[0] = False
 
         if future.done():
