@@ -15,7 +15,7 @@ if sys.version_info >= (3, 11):
 else:
     from exceptiongroup import ExceptionGroup
 
-from .api_utils import _check_ssl_socket, _create_connection_transport, _ensure_resolved, _logger, _validate_bio_size, _validate_ssl_timeout
+from .api_utils import _check_non_ssl_socket, _create_connection_transport, _ensure_resolved, _logger, _validate_bio_size, _validate_ssl_timeout
 
 
 async def create_connection(
@@ -71,7 +71,7 @@ async def create_connection(
     ssl_outgoing_bio_size = _validate_bio_size("ssl_outgoing_bio_size", ssl_outgoing_bio_size, ssl)
 
     if sock is not None:
-        _check_ssl_socket(sock)
+        _check_non_ssl_socket(sock)
 
     if happy_eyeballs_delay is not None and interleave is None:
         # If using happy eyeballs, default to interleave addresses by family

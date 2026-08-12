@@ -6,7 +6,7 @@
 
 import socket
 
-from .api_utils import _check_ssl_socket, _create_connection_transport, _logger, _validate_bio_size, _validate_ssl_timeout
+from .api_utils import _check_non_ssl_socket, _create_connection_transport, _logger, _validate_bio_size, _validate_ssl_timeout
 
 
 async def connect_accepted_socket(
@@ -28,7 +28,7 @@ async def connect_accepted_socket(
     ssl_incoming_bio_size = _validate_bio_size("ssl_incoming_bio_size", ssl_incoming_bio_size, ssl)
     ssl_outgoing_bio_size = _validate_bio_size("ssl_outgoing_bio_size", ssl_outgoing_bio_size, ssl)
 
-    _check_ssl_socket(sock)
+    _check_non_ssl_socket(sock)
 
     transport, protocol = await _create_connection_transport(
         loop, sock, protocol_factory, ssl, "",

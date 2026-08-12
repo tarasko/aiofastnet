@@ -180,7 +180,7 @@ async def _create_connection_transport(
     return transport, protocol
 
 
-def _check_ssl_socket(sock):
+def _check_non_ssl_socket(sock):
     if isinstance(sock, ssl.SSLSocket):
         raise TypeError("Socket cannot be of type SSLSocket")
 

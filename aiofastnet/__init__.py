@@ -9,6 +9,16 @@ from .api_create_unix_server import create_unix_server
 from .api_patch import install_policy, loop_factory, patch_loop
 from .api_pipe import connect_read_pipe, connect_write_pipe
 from .api_sendfile import sendfile
+from .api_sock import (
+    sock_accept,
+    sock_connect,
+    sock_recv,
+    sock_recv_into,
+    sock_recvfrom,
+    sock_recvfrom_into,
+    sock_sendall,
+    sock_sendto,
+)
 from .api_start_tls import start_tls
 from .api_streams import (
     open_connection,
@@ -35,6 +45,14 @@ __all__ = [
     'open_connection',
     'patch_loop',
     'sendfile',
+    'sock_accept',
+    'sock_connect',
+    'sock_recv',
+    'sock_recv_into',
+    'sock_recvfrom',
+    'sock_recvfrom_into',
+    'sock_sendall',
+    'sock_sendto',
     'start_server',
     'start_tls',
 ]

@@ -82,6 +82,7 @@ Source: [examples/benchmark_threaded.py](https://github.com/tarasko/aiofastnet/b
 - [`loop.create_datagram_endpoint()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_datagram_endpoint)
 - [`loop.start_tls()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.start_tls)
 - [`loop.sendfile()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sendfile)
+- [`loop.sock_accept()`, `loop.sock_connect()`, and socket send/receive methods](https://docs.python.org/3/library/asyncio-eventloop.html#working-with-socket-objects-directly)
 
 asyncio libraries use these loop primitives to establish communication channels.
 The current implementations in both `asyncio` and `uvloop` are not optimal,

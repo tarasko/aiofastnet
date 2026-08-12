@@ -1,6 +1,7 @@
 import asyncio
+import socket
 import ssl
-from typing import BinaryIO, Callable, Optional
+from typing import Any, BinaryIO, Callable, Optional
 
 from typing_extensions import assert_type
 
@@ -83,6 +84,19 @@ async def check_public_api(
         await aiofastnet.sendfile(loop, transport, file),
         None,
     )
+
+    sock = socket.socket()
+    address = ("127.0.0.1", 80)
+    assert_type(await aiofastnet.sock_connect(loop, sock, address), None)
+    accepted_sock, accepted_address = await aiofastnet.sock_accept(loop, sock)
+    assert_type(accepted_sock, socket.socket)
+    assert_type(accepted_address, Any)
+    assert_type(await aiofastnet.sock_sendall(loop, sock, b"data"), None)
+    assert_type(await aiofastnet.sock_recv(loop, sock, 1024), bytes)
+    assert_type(await aiofastnet.sock_recv_into(loop, sock, bytearray(1024)), int)
+    assert_type(await aiofastnet.sock_recvfrom(loop, sock, 1024), tuple[bytes, Any])
+    assert_type(await aiofastnet.sock_recvfrom_into(loop, sock, bytearray(1024)), tuple[int, Any])
+    assert_type(await aiofastnet.sock_sendto(loop, sock, b"data", address), int)
     assert_type(
         aiofastnet.patch_loop(loop),
         asyncio.AbstractEventLoop,

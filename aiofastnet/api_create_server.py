@@ -14,7 +14,7 @@ import sys
 
 from .api_utils import (
     Server,
-    _check_ssl_socket,
+    _check_non_ssl_socket,
     _ensure_resolved,
     _HAS_IPv6,
     _is_asyncio_loop,
@@ -90,7 +90,7 @@ async def create_server(
             **kwargs)
 
     if sock is not None:
-        _check_ssl_socket(sock)
+        _check_non_ssl_socket(sock)
 
     if host is not None or port is not None:
         if sock is not None:
