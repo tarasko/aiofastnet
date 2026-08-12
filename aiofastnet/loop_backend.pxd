@@ -65,6 +65,14 @@ cdef extern from "loop_backend.h":
 
     ctypedef void (*aiofn_loop_proactor_callback_fn)(aiofn_loop_proactor_op_t *) noexcept nogil
 
+    ctypedef struct sockaddr:
+        pass
+
+    ctypedef void (*aiofn_loop_read_alloc_fn)(void *, size_t, void **, size_t *) noexcept nogil
+    ctypedef void (*aiofn_loop_read_callback_fn)(void *, aiofn_loop_status, void *, size_t) noexcept nogil
+    ctypedef void (*aiofn_loop_recvfrom_callback_fn)(void *, aiofn_loop_status, void *, size_t, const sockaddr *) noexcept nogil
+    ctypedef void (*aiofn_loop_accept_callback_fn)(void *, aiofn_loop_status, aiofn_loop_proactor_socket_t *, const void *, size_t) noexcept nogil
+
     ctypedef struct aiofn_loop_proactor_op_t:
         aiofn_loop_proactor_callback_fn callback
         void *callback_data
@@ -77,12 +85,15 @@ cdef extern from "loop_backend.h":
         aiofn_loop_status (*wrap_socket)(void *, aiofn_loop_proactor_socket_t *) noexcept nogil
         aiofn_loop_status (*unwrap_socket)(void *, aiofn_loop_proactor_socket_t *) noexcept nogil
         aiofn_loop_status (*connect)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_proactor_op_t *, const void *, size_t) noexcept nogil
-        aiofn_loop_status (*read)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_proactor_op_t *, void *, size_t) noexcept nogil
+        aiofn_loop_status (*read_start)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_read_alloc_fn, aiofn_loop_read_callback_fn, void *) noexcept nogil
+        aiofn_loop_status (*read_stop)(void *, aiofn_loop_proactor_socket_t *) noexcept nogil
         aiofn_loop_status (*write)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_proactor_op_t *, const aiofn_loop_buffer_t *, size_t) noexcept nogil
         aiofn_loop_status (*cancel)(void *, aiofn_loop_proactor_op_t *) noexcept nogil
-        aiofn_loop_status (*recvfrom)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_proactor_op_t *, void *, size_t, void *, size_t *) noexcept nogil
+        aiofn_loop_status (*recvfrom_start)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_read_alloc_fn, aiofn_loop_recvfrom_callback_fn, void *) noexcept nogil
+        aiofn_loop_status (*recvfrom_stop)(void *, aiofn_loop_proactor_socket_t *) noexcept nogil
         aiofn_loop_status (*sendto)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_proactor_op_t *, const void *, size_t, const void *, size_t) noexcept nogil
-        aiofn_loop_status (*accept)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_proactor_op_t *, aiofn_loop_proactor_socket_t *, void *, size_t *) noexcept nogil
+        aiofn_loop_status (*accept_start)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_accept_callback_fn, void *) noexcept nogil
+        aiofn_loop_status (*accept_stop)(void *, aiofn_loop_proactor_socket_t *) noexcept nogil
 
     ctypedef struct aiofn_loop_backend_t:
         size_t struct_size

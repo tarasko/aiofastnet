@@ -148,6 +148,36 @@ static inline void aiofn_loop_buffer_init(aiofn_loop_buffer_t *buffer, void *bas
 
 typedef void (*aiofn_loop_proactor_callback_fn)(aiofn_loop_proactor_op_t *op);
 
+typedef void (*aiofn_loop_read_alloc_fn)(
+    void *callback_data,
+    size_t suggested_size,
+    void **buffer,
+    size_t *buffer_len
+);
+
+typedef void (*aiofn_loop_read_callback_fn)(
+    void *callback_data,
+    aiofn_loop_status status,
+    void *buffer,
+    size_t bytes_read
+);
+
+typedef void (*aiofn_loop_recvfrom_callback_fn)(
+    void *callback_data,
+    aiofn_loop_status status,
+    void *buffer,
+    size_t bytes_read,
+    const struct sockaddr *address
+);
+
+typedef void (*aiofn_loop_accept_callback_fn)(
+    void *callback_data,
+    aiofn_loop_status status,
+    aiofn_loop_proactor_socket_t *accepted_socket,
+    const void *address,
+    size_t address_len
+);
+
 /*
  * Frontend-owned one-shot operation. The backend fills status and transferred
  * before invoking callback, clears backend_token before the callback, and must
@@ -165,8 +195,9 @@ typedef struct aiofn_loop_proactor_op {
  * Proactor interface prototype. This is intentionally not consumed by the
  * current SelectorLoopBase. Each operation is called from the loop thread,
  * just like the common backend interface. A socket may have at most one
- * pending read and one pending write; a read and write may overlap. Buffer
- * memory remains owned by the frontend and must stay valid until completion.
+ * active stream read, one active datagram read, and one pending write; a read
+ * and write may overlap. The shared allocation callback supplies data buffers;
+ * datagram callbacks receive the source address from backend-owned storage.
  */
 typedef struct {
     size_t struct_size;
@@ -191,13 +222,19 @@ typedef struct {
         size_t address_len
     );
 
-    /* Start the socket's one pending asynchronous read. */
-    aiofn_loop_status (*read)(
+    /* Start persistent asynchronous stream reads. */
+    aiofn_loop_status (*read_start)(
         void *state,
         aiofn_loop_proactor_socket_t *socket,
-        aiofn_loop_proactor_op_t *op,
-        void *buffer,
-        size_t buffer_len
+        aiofn_loop_read_alloc_fn alloc,
+        aiofn_loop_read_callback_fn callback,
+        void *callback_data
+    );
+
+    /* Stop persistent stream reads. */
+    aiofn_loop_status (*read_stop)(
+        void *state,
+        aiofn_loop_proactor_socket_t *socket
     );
 
     /* Start the socket's one pending asynchronous scatter-gather write. */
@@ -209,22 +246,25 @@ typedef struct {
         size_t buffer_count
     );
 
-    /* Cancel one pending connect, read, write, recvfrom, sendto, or accept operation. */
+    /* Cancel one pending connect, write, or sendto operation. */
     aiofn_loop_status (*cancel)(void *state, aiofn_loop_proactor_op_t *op);
 
     /*
-     * Start one asynchronous datagram receive. The frontend supplies address
-     * storage and initializes *address_len to its capacity. The backend fills
-     * the source address and replaces *address_len with the actual length.
+     * Start persistent asynchronous datagram receives. alloc supplies both a
+     * receive buffer and address storage for each datagram.
      */
-    aiofn_loop_status (*recvfrom)(
+    aiofn_loop_status (*recvfrom_start)(
         void *state,
         aiofn_loop_proactor_socket_t *socket,
-        aiofn_loop_proactor_op_t *op,
-        void *buffer,
-        size_t buffer_len,
-        void *address,
-        size_t *address_len
+        aiofn_loop_read_alloc_fn alloc,
+        aiofn_loop_recvfrom_callback_fn callback,
+        void *callback_data
+    );
+
+    /* Stop persistent asynchronous datagram receives. */
+    aiofn_loop_status (*recvfrom_stop)(
+        void *state,
+        aiofn_loop_proactor_socket_t *socket
     );
 
     /* Start one asynchronous datagram send to the supplied native address. */
@@ -239,19 +279,21 @@ typedef struct {
     );
 
     /*
-     * Start one asynchronous accept. The frontend supplies an empty
-     * accepted-socket structure and address storage. On successful
-     * completion, the backend initializes accepted_socket and fills the
-     * peer address and its actual length. The frontend owns both structures;
-     * the backend releases native resources if the operation fails.
+     * Start persistent asynchronous accepts. On each successful callback the
+     * backend transfers ownership of the accepted native handle to the
+     * frontend. The address pointer is valid only during the callback.
      */
-    aiofn_loop_status (*accept)(
+    aiofn_loop_status (*accept_start)(
         void *state,
         aiofn_loop_proactor_socket_t *listener,
-        aiofn_loop_proactor_op_t *op,
-        aiofn_loop_proactor_socket_t *accepted_socket,
-        void *address,
-        size_t *address_len
+        aiofn_loop_accept_callback_fn callback,
+        void *callback_data
+    );
+
+    /* Stop persistent asynchronous accepts. */
+    aiofn_loop_status (*accept_stop)(
+        void *state,
+        aiofn_loop_proactor_socket_t *listener
     );
 } aiofn_proactor_backend_t;
 
@@ -406,7 +448,7 @@ typedef struct {
     ((proactor)->struct_size >= AIOFN_PROACTOR_BACKEND_FIELD_END(field))
 
 #define AIOFN_PROACTOR_BACKEND_MIN_SIZE AIOFN_PROACTOR_BACKEND_FIELD_END(cancel)
-#define AIOFN_PROACTOR_BACKEND_CURRENT_SIZE AIOFN_PROACTOR_BACKEND_FIELD_END(accept)
+#define AIOFN_PROACTOR_BACKEND_CURRENT_SIZE AIOFN_PROACTOR_BACKEND_FIELD_END(accept_stop)
 
 #define AIOFN_LOOP_BACKEND_MIN_SIZE AIOFN_LOOP_BACKEND_FIELD_END(signal_unwatch)
 #define AIOFN_LOOP_BACKEND_CURRENT_SIZE AIOFN_LOOP_BACKEND_FIELD_END(signal_unwatch)

@@ -37,6 +37,12 @@ typedef struct {
     uv_connect_t connect_request;
     aiofn_loop_proactor_op_t *connect_op;
     struct sockaddr_storage connect_address;
+
+    uv_poll_t accept_poll;
+    aiofn_loop_proactor_op_t *accept_op;
+    aiofn_loop_proactor_socket_t *accept_frontend;
+    void *accept_address;
+    size_t *accept_address_len;
 } aiofn_libuv_socket_t;
 
 typedef struct {
@@ -570,6 +576,117 @@ static aiofn_loop_status aiofn_libuv_connect(
     return AIOFN_LOOP_OK;
 }
 
+static void aiofn_libuv_on_accept(uv_poll_t *poll, int status, int events) {
+    aiofn_libuv_socket_t *listener = (aiofn_libuv_socket_t *)poll->data;
+    aiofn_loop_proactor_op_t *op = listener->accept_op;
+    aiofn_loop_proactor_socket_t *accepted_frontend = listener->accept_frontend;
+    aiofn_libuv_socket_t *accepted;
+    uv_os_fd_t native_fd;
+    int result;
+
+    if ((events & UV_READABLE) == 0 && status == 0) {
+        return;
+    }
+
+    uv_poll_stop(poll);
+    uv_close((uv_handle_t *)poll, NULL);
+    listener->accept_op = NULL;
+    listener->accept_frontend = NULL;
+    if (status < 0) {
+        aiofn_libuv_set_error((aiofn_libuv_state_t *)poll->loop->data, "uv_poll", status);
+        aiofn_libuv_complete(op, AIOFN_LOOP_ERROR, 0);
+        return;
+    }
+
+    accepted = calloc(1, sizeof(*accepted));
+    if (accepted == NULL) {
+        aiofn_libuv_complete(op, AIOFN_LOOP_NO_MEMORY, 0);
+        return;
+    }
+    result = uv_tcp_init(poll->loop, &accepted->handle.tcp);
+    if (result == 0) {
+        result = uv_accept((uv_stream_t *)&listener->handle.tcp,
+                           (uv_stream_t *)&accepted->handle.tcp);
+    }
+    if (result != 0) {
+        aiofn_libuv_set_error((aiofn_libuv_state_t *)poll->loop->data, "uv_accept", result);
+        uv_close((uv_handle_t *)&accepted->handle.tcp, aiofn_libuv_free_handle);
+        aiofn_libuv_complete(op, AIOFN_LOOP_ERROR, 0);
+        return;
+    }
+
+    result = uv_fileno((const uv_handle_t *)&accepted->handle.tcp, &native_fd);
+    if (result != 0) {
+        aiofn_libuv_set_error((aiofn_libuv_state_t *)poll->loop->data, "uv_fileno", result);
+        uv_close((uv_handle_t *)&accepted->handle.tcp, aiofn_libuv_free_handle);
+        aiofn_libuv_complete(op, AIOFN_LOOP_ERROR, 0);
+        return;
+    }
+    accepted_frontend->fd = dup((int)native_fd);
+    if (accepted_frontend->fd < 0) {
+        aiofn_libuv_set_error((aiofn_libuv_state_t *)poll->loop->data, "dup", -errno);
+        uv_close((uv_handle_t *)&accepted->handle.tcp, aiofn_libuv_free_handle);
+        aiofn_libuv_complete(op, AIOFN_LOOP_ERROR, 0);
+        return;
+    }
+    accepted->socktype = SOCK_STREAM;
+    accepted->frontend = accepted_frontend;
+    accepted_frontend->socktype = SOCK_STREAM;
+    accepted_frontend->backend_token = accepted;
+    if (listener->accept_address != NULL) {
+        int address_len = (int)*listener->accept_address_len;
+        result = uv_tcp_getpeername(&accepted->handle.tcp,
+                                    (struct sockaddr *)listener->accept_address,
+                                    &address_len);
+        if (result != 0) {
+            close(accepted_frontend->fd);
+            accepted_frontend->fd = -1;
+            accepted_frontend->backend_token = NULL;
+            uv_close((uv_handle_t *)&accepted->handle.tcp, aiofn_libuv_free_handle);
+            aiofn_libuv_set_error((aiofn_libuv_state_t *)poll->loop->data, "uv_tcp_getpeername", result);
+            aiofn_libuv_complete(op, AIOFN_LOOP_ERROR, 0);
+            return;
+        }
+        *listener->accept_address_len = (size_t)address_len;
+    }
+    aiofn_libuv_complete(op, AIOFN_LOOP_OK, 0);
+}
+
+static aiofn_loop_status aiofn_libuv_accept(
+    void *data,
+    aiofn_loop_proactor_socket_t *frontend,
+    aiofn_loop_proactor_op_t *op,
+    aiofn_loop_proactor_socket_t *accepted,
+    void *address,
+    size_t *address_len
+) {
+    aiofn_libuv_state_t *state = data;
+    aiofn_libuv_socket_t *listener = frontend->backend_token;
+    int result;
+
+    result = uv_poll_init(&state->loop, &listener->accept_poll, frontend->fd);
+    if (result != 0) {
+        aiofn_libuv_set_error(state, "uv_poll_init(accept)", result);
+        return AIOFN_LOOP_ERROR;
+    }
+    listener->accept_poll.data = listener;
+    listener->accept_op = op;
+    listener->accept_frontend = accepted;
+    listener->accept_address = address;
+    listener->accept_address_len = address_len;
+    op->backend_token = listener;
+    result = uv_poll_start(&listener->accept_poll, UV_READABLE, aiofn_libuv_on_accept);
+    if (result != 0) {
+        listener->accept_op = NULL;
+        listener->accept_frontend = NULL;
+        op->backend_token = NULL;
+        uv_close((uv_handle_t *)&listener->accept_poll, NULL);
+        aiofn_libuv_set_error(state, "uv_poll_start(accept)", result);
+        return AIOFN_LOOP_ERROR;
+    }
+    return AIOFN_LOOP_OK;
+}
+
 
 static aiofn_loop_status aiofn_libuv_cancel_proactor(void *data, aiofn_loop_proactor_op_t *op) {
     aiofn_libuv_state_t *state = data;
@@ -609,6 +726,20 @@ static aiofn_loop_status aiofn_libuv_cancel_proactor(void *data, aiofn_loop_proa
             aiofn_libuv_set_error(state, "uv_cancel(connect)", result);
             return AIOFN_LOOP_ERROR;
         }
+        return AIOFN_LOOP_OK;
+    }
+    if (socket->accept_op == op) {
+        result = uv_poll_stop(&socket->accept_poll);
+        socket->accept_op = NULL;
+        socket->accept_frontend = NULL;
+        if (result != 0) {
+            aiofn_libuv_set_error(state, "uv_poll_stop(accept)", result);
+            return AIOFN_LOOP_ERROR;
+        }
+        op->backend_token = NULL;
+        uv_close((uv_handle_t *)&socket->accept_poll, NULL);
+        aiofn_libuv_set_error(state, "uv_accept", UV_ECANCELED);
+        aiofn_libuv_complete(op, AIOFN_LOOP_ERROR, 0);
         return AIOFN_LOOP_OK;
     }
     return AIOFN_LOOP_ERROR;
@@ -813,6 +944,7 @@ aiofn_loop_backend_t *aiofn_libuv_backend_new(void) {
     state->proactor.cancel = aiofn_libuv_cancel_proactor;
     state->proactor.recvfrom = aiofn_libuv_recvfrom;
     state->proactor.sendto = aiofn_libuv_sendto;
+    state->proactor.accept = aiofn_libuv_accept;
     state->backend.proactor = &state->proactor;
 
     state->backend.last_error = aiofn_libuv_last_error;

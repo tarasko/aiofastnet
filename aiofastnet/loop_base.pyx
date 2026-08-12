@@ -72,7 +72,7 @@ from cpython.ref cimport Py_DECREF, Py_INCREF
 from libc.errno cimport EAGAIN, EINTR, errno
 from libc.stdint cimport uint32_t, uint64_t, uint8_t
 from libc.string cimport memcpy
-from posix.unistd cimport close as posix_close, read as posix_read, write as posix_write
+from posix.unistd cimport close as posix_close, dup as posix_dup, read as posix_read, write as posix_write
 
 cdef extern from "sys/socket.h":
     cdef struct sockaddr_storage:
@@ -709,6 +709,30 @@ cdef class _ProactorSendToOperation(_ProactorOperation):
         return self.op.transferred
 
 
+cdef class _ProactorAcceptOperation(_ProactorOperation):
+    cdef:
+        aiofn_loop_proactor_socket_t accepted
+        char address[256]
+        size_t address_len
+
+    cdef NoResult _submit(self) except NoResult.EXC:
+        self.sock.loop._check_status(self.sock.loop._proactor.accept(
+            self.sock.loop._backend.state,
+            &self.sock.backend_sock,
+            &self.op,
+            &self.accepted,
+            <void *>&self.address[0],
+            &self.address_len,
+        ))
+        return NoResult.OK
+
+    cdef object _result(self):
+        return (
+            self.accepted.fd,
+            aiofn_sockaddr_to_pyaddr(self.address, <unsigned int>self.address_len),
+        )
+
+
 cdef class _ProactorSocket:
     cdef:
         LoopBase loop
@@ -795,6 +819,17 @@ cdef class _ProactorSocket:
         operation.size = size
         operation.address_len = address_len
         memcpy(operation.address, address, address_len)
+        operation.start()
+        return operation
+
+    cdef inline _ProactorAcceptOperation async_accept(self):
+        assert not self.read_in_progress
+        cdef _ProactorAcceptOperation operation = <_ProactorAcceptOperation>_ProactorAcceptOperation.__new__(_ProactorAcceptOperation)
+        operation.initialize(self, &self.read_in_progress)
+        operation.accepted.fd = -1
+        operation.accepted.socktype = <int>socket.SOCK_STREAM
+        operation.accepted.backend_token = NULL
+        operation.address_len = sizeof(operation.address)
         operation.start()
         return operation
 
@@ -1589,9 +1624,33 @@ cdef class LoopBase:
             return await self._reactor_sendto(py_sock, data, address)
         raise NotImplementedError("sock_sendto requires a reactor or proactor backend")
 
+    async def _proactor_accept(self, py_sock):
+        cdef:
+            _ProactorAcceptOperation operation
+            _ProactorSocket listener
+            object accepted_sock
+            object address
+            int accepted_fd
+
+        with self._proactor_wrap_socket(py_sock) as listener:
+            operation = listener.async_accept()
+            try:
+                accepted_fd, address = await operation
+                accepted_sock = socket.socket(fileno=accepted_fd)
+                accepted_sock.setblocking(False)
+                return accepted_sock, address
+            finally:
+                if operation.accepted.backend_token != NULL:
+                    self._check_status(self._proactor.unwrap_socket(
+                        self._backend.state,
+                        &operation.accepted,
+                    ))
+
     async def sock_accept(self, py_sock):
+        if self._proactor != NULL and self._proactor.accept != NULL:
+            return await self._proactor_accept(py_sock)
         if self._reactor == NULL:
-            raise NotImplementedError("sock_accept requires a reactor backend")
+            raise NotImplementedError("sock_accept requires a reactor or proactor backend")
         future = self.create_future()
         def ready():
             try:
