@@ -36,6 +36,9 @@ async def TcpSocketPair():
 
 @asynccontextmanager
 async def UdpSocketPair():
+    if getattr(socket, "AF_UNIX", None) is None:
+        pytest.skip("UdpSocketPair requires socket.AF_UNIX and is not supported on current platform")
+
     with tempfile.TemporaryDirectory(prefix="aiofn-", dir="/tmp") as tmpdir:
         server = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
         client = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
