@@ -84,11 +84,10 @@ async def sock_accept(loop, py_sock):
     def _do_accept():
         try:
             conn, address = py_sock.accept()
-        except (BlockingIOError, InterruptedError):
-            return None
-        else:
             conn.setblocking(False)
             return conn, address
+        except (BlockingIOError, InterruptedError):
+            return None
 
     result = _do_accept()
     if result is not None:
