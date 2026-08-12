@@ -36,9 +36,6 @@ def _set_exception(future, exc):
 
 
 async def sock_connect(loop, py_sock, address):
-    if _should_fallback_to_asyncio(loop):
-        return await _get_original_loop_method(loop, "sock_connect")(py_sock, address)
-
     _check_socket(loop, py_sock)
     if py_sock.family == socket.AF_INET or (hasattr(socket, "AF_INET6") and py_sock.family == socket.AF_INET6):
         resolved = await _ensure_resolved(
@@ -49,6 +46,10 @@ async def sock_connect(loop, py_sock, address):
             loop=loop,
         )
         _, _, _, _, address = resolved[0]
+
+    if _should_fallback_to_asyncio(loop):
+        # Windows ConnectEx requires a numeric address, so resolve hostnames before delegating to the proactor implementation.
+        return await _get_original_loop_method(loop, "sock_connect")(py_sock, address)
 
     try:
         py_sock.connect(address)
