@@ -499,3 +499,8 @@ def _set_reuseport(sock):
         except OSError:
             raise ValueError('reuse_port not supported by socket module, '
                              'SO_REUSEPORT defined but not implemented.')
+
+
+def _check_nonblocking_socket(py_sock):
+    if py_sock.getblocking():
+        raise ValueError("the socket must be non-blocking")

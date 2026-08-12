@@ -6,14 +6,8 @@
 
 import socket
 
-from .api_utils import _check_non_ssl_socket, _ensure_resolved
+from .api_utils import _check_non_ssl_socket, _ensure_resolved, _check_nonblocking_socket
 from .wrapped_transport import _get_original_loop_method, _should_fallback_to_asyncio
-
-
-def _check_socket(loop, py_sock):
-    _check_non_ssl_socket(py_sock)
-    if loop.get_debug() and py_sock.gettimeout() != 0:
-        raise ValueError("the socket must be non-blocking")
 
 
 def _ensure_fd_no_transport(loop, py_sock):
@@ -36,7 +30,9 @@ def _set_exception(future, exc):
 
 
 async def sock_connect(loop, py_sock, address):
-    _check_socket(loop, py_sock)
+    _check_non_ssl_socket(py_sock)
+    _check_nonblocking_socket(py_sock)
+
     if py_sock.family == socket.AF_INET or (hasattr(socket, "AF_INET6") and py_sock.family == socket.AF_INET6):
         resolved = await _ensure_resolved(
             address,
@@ -82,7 +78,9 @@ async def sock_accept(loop, py_sock):
     if _should_fallback_to_asyncio(loop):
         return await _get_original_loop_method(loop, "sock_accept")(py_sock)
 
-    _check_socket(loop, py_sock)
+    _check_non_ssl_socket(py_sock)
+    _check_nonblocking_socket(py_sock)
+
     try:
         conn, address = py_sock.accept()
     except (BlockingIOError, InterruptedError):
@@ -116,7 +114,9 @@ async def sock_sendall(loop, py_sock, data):
     if _should_fallback_to_asyncio(loop):
         return await _get_original_loop_method(loop, "sock_sendall")(py_sock, data)
 
-    _check_socket(loop, py_sock)
+    _check_non_ssl_socket(py_sock)
+    _check_nonblocking_socket(py_sock)
+
     try:
         sent = py_sock.send(data)
     except (BlockingIOError, InterruptedError):
@@ -151,7 +151,9 @@ async def sock_recv(loop, py_sock, n):
     if _should_fallback_to_asyncio(loop):
         return await _get_original_loop_method(loop, "sock_recv")(py_sock, n)
 
-    _check_socket(loop, py_sock)
+    _check_non_ssl_socket(py_sock)
+    _check_nonblocking_socket(py_sock)
+
     try:
         return py_sock.recv(n)
     except (BlockingIOError, InterruptedError):
@@ -181,7 +183,9 @@ async def sock_recv_into(loop, py_sock, buf):
     if _should_fallback_to_asyncio(loop):
         return await _get_original_loop_method(loop, "sock_recv_into")(py_sock, buf)
 
-    _check_socket(loop, py_sock)
+    _check_non_ssl_socket(py_sock)
+    _check_nonblocking_socket(py_sock)
+
     try:
         return py_sock.recv_into(buf)
     except (BlockingIOError, InterruptedError):
@@ -211,7 +215,9 @@ async def sock_recvfrom(loop, py_sock, bufsize):
     if _should_fallback_to_asyncio(loop):
         return await _get_original_loop_method(loop, "sock_recvfrom")(py_sock, bufsize)
 
-    _check_socket(loop, py_sock)
+    _check_non_ssl_socket(py_sock)
+    _check_nonblocking_socket(py_sock)
+
     try:
         return py_sock.recvfrom(bufsize)
     except (BlockingIOError, InterruptedError):
@@ -241,7 +247,9 @@ async def sock_recvfrom_into(loop, py_sock, buf, nbytes=0):
     if _should_fallback_to_asyncio(loop):
         return await _get_original_loop_method(loop, "sock_recvfrom_into")(py_sock, buf, nbytes)
 
-    _check_socket(loop, py_sock)
+    _check_non_ssl_socket(py_sock)
+    _check_nonblocking_socket(py_sock)
+
     if not nbytes:
         nbytes = len(buf)
     try:
@@ -273,7 +281,9 @@ async def sock_sendto(loop, py_sock, data, address):
     if _should_fallback_to_asyncio(loop):
         return await _get_original_loop_method(loop, "sock_sendto")(py_sock, data, address)
 
-    _check_socket(loop, py_sock)
+    _check_non_ssl_socket(py_sock)
+    _check_nonblocking_socket(py_sock)
+
     try:
         return py_sock.sendto(data, address)
     except (BlockingIOError, InterruptedError):
