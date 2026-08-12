@@ -6,7 +6,7 @@
 
 import socket
 
-from .api_utils import _check_non_ssl_socket, _ensure_resolved, _check_nonblocking_socket
+from .api_utils import _check_non_ssl_socket, _check_nonblocking_socket, _ensure_resolved
 from .wrapped_transport import _get_original_loop_method, _should_fallback_to_asyncio
 
 
