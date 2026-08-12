@@ -75,6 +75,8 @@ from libc.string cimport memcpy
 from posix.unistd cimport close as posix_close, dup as posix_dup, read as posix_read, write as posix_write
 
 cdef extern from "sys/socket.h":
+    cdef struct sockaddr:
+        pass
     cdef struct sockaddr_storage:
         pass
 
@@ -491,7 +493,10 @@ cdef void _action_callback(aiofn_loop_action_t *action) noexcept with gil:
 
 
 cdef class _ProactorSocket
-
+cdef class _ProactorReadActivity
+cdef class _ProactorActivity
+cdef class _ProactorRecvFromActivity
+cdef class _ProactorAcceptActivity
 
 cdef class _ProactorOperation:
     cdef:
@@ -563,14 +568,7 @@ cdef class _ProactorReadOperation(_ProactorOperation):
         size_t size
 
     cdef NoResult _submit(self) except NoResult.EXC:
-        self.sock.loop._check_status(self.sock.loop._proactor.read(
-            self.sock.loop._backend.state,
-            &self.sock.backend_sock,
-            &self.op,
-            self.data,
-            self.size,
-        ))
-        return NoResult.OK
+        raise NotImplementedError()
 
     cdef object _result(self):
         return aiofn_finalize_bytes(<PyObject *>self.buffer, self.op.transferred)
@@ -583,14 +581,7 @@ cdef class _ProactorReadIntoOperation(_ProactorOperation):
         size_t size
 
     cdef NoResult _submit(self) except NoResult.EXC:
-        self.sock.loop._check_status(self.sock.loop._proactor.read(
-            self.sock.loop._backend.state,
-            &self.sock.backend_sock,
-            &self.op,
-            self.data,
-            self.size,
-        ))
-        return NoResult.OK
+        raise NotImplementedError()
 
     cdef object _result(self):
         return self.op.transferred
@@ -605,16 +596,7 @@ cdef class _ProactorRecvFromOperation(_ProactorOperation):
         size_t address_len
 
     cdef NoResult _submit(self) except NoResult.EXC:
-        self.sock.loop._check_status(self.sock.loop._proactor.recvfrom(
-            self.sock.loop._backend.state,
-            &self.sock.backend_sock,
-            &self.op,
-            self.data,
-            self.size,
-            <void *>&self.address[0],
-            &self.address_len,
-        ))
-        return NoResult.OK
+        raise NotImplementedError()
 
     cdef object _result(self):
         return (
@@ -632,16 +614,7 @@ cdef class _ProactorRecvFromIntoOperation(_ProactorOperation):
         size_t address_len
 
     cdef NoResult _submit(self) except NoResult.EXC:
-        self.sock.loop._check_status(self.sock.loop._proactor.recvfrom(
-            self.sock.loop._backend.state,
-            &self.sock.backend_sock,
-            &self.op,
-            self.data,
-            self.size,
-            <void *>&self.address[0],
-            &self.address_len,
-        ))
-        return NoResult.OK
+        raise NotImplementedError()
 
     cdef object _result(self):
         return (
@@ -716,21 +689,156 @@ cdef class _ProactorAcceptOperation(_ProactorOperation):
         size_t address_len
 
     cdef NoResult _submit(self) except NoResult.EXC:
-        self.sock.loop._check_status(self.sock.loop._proactor.accept(
-            self.sock.loop._backend.state,
-            &self.sock.backend_sock,
-            &self.op,
-            &self.accepted,
-            <void *>&self.address[0],
-            &self.address_len,
-        ))
-        return NoResult.OK
+        raise NotImplementedError()
 
     cdef object _result(self):
         return (
             self.accepted.fd,
             aiofn_sockaddr_to_pyaddr(self.address, <unsigned int>self.address_len),
         )
+
+
+cdef void _proactor_read_alloc(void *data, size_t suggested_size, void **buffer, size_t *buffer_len) noexcept with gil:
+    cdef _ProactorActivity activity = <_ProactorActivity>data
+    buffer[0] = activity.data
+    buffer_len[0] = activity.size if activity.size else suggested_size
+
+
+cdef void _proactor_read_callback(void *data, aiofn_loop_status status, void *buffer, size_t bytes_read) noexcept with gil:
+    cdef _ProactorReadActivity activity = <_ProactorReadActivity>data
+    try:
+        activity.stop()
+        if status == AIOFN_LOOP_OK:
+            activity.future.set_result(bytes_read if activity.into else aiofn_finalize_bytes(<PyObject *>activity.buffer, bytes_read))
+        else:
+            activity.future.set_exception(RuntimeError("proactor read failed"))
+    except BaseException as exc:
+        activity.sock.loop._backend_failed(exc)
+
+
+cdef void _proactor_recvfrom_callback(void *data, aiofn_loop_status status, void *buffer, size_t bytes_read,
+                                      const sockaddr *address) noexcept with gil:
+    cdef _ProactorRecvFromActivity activity = <_ProactorRecvFromActivity>data
+    try:
+        activity.stop()
+        if status == AIOFN_LOOP_OK:
+            activity.future.set_result((bytes_read if activity.into else aiofn_finalize_bytes(<PyObject *>activity.buffer, bytes_read),
+                                        None if address == NULL else aiofn_sockaddr_to_pyaddr(<void *>address, sizeof(sockaddr_storage))))
+        else:
+            activity.future.set_exception(RuntimeError("proactor datagram read failed"))
+    except BaseException as exc:
+        activity.sock.loop._backend_failed(exc)
+
+
+cdef class _ProactorActivity:
+    cdef:
+        _ProactorSocket sock
+        object future
+        bint active
+        void *data
+        size_t size
+
+    def __await__(self):
+        try:
+            result = yield from self.future.__await__()
+            return result
+        except BaseException:
+            self.stop()
+            raise
+
+
+cdef class _ProactorReadActivity(_ProactorActivity):
+    cdef:
+        object buffer
+        bint into
+
+    cdef inline NoResult start(self) except NoResult.EXC:
+        self.active = True
+        self.sock.loop._check_status(self.sock.loop._proactor.read_start(
+            self.sock.loop._backend.state, &self.sock.backend_sock,
+            _proactor_read_alloc, _proactor_read_callback, <void *>self))
+        return NoResult.OK
+
+    cdef inline NoResult stop(self) except NoResult.EXC:
+        if self.active:
+            self.active = False
+            self.sock.read_in_progress = False
+            self.sock.loop._check_status(self.sock.loop._proactor.read_stop(
+                self.sock.loop._backend.state, &self.sock.backend_sock))
+        return NoResult.OK
+
+
+cdef class _ProactorRecvFromActivity(_ProactorActivity):
+    cdef:
+        object buffer
+        bint into
+
+    cdef inline NoResult start(self) except NoResult.EXC:
+        self.active = True
+        self.sock.loop._check_status(self.sock.loop._proactor.recvfrom_start(
+            self.sock.loop._backend.state, &self.sock.backend_sock,
+            _proactor_read_alloc, _proactor_recvfrom_callback, <void *>self))
+        return NoResult.OK
+
+    cdef inline NoResult stop(self) except NoResult.EXC:
+        if self.active:
+            self.active = False
+            self.sock.read_in_progress = False
+            self.sock.loop._check_status(self.sock.loop._proactor.recvfrom_stop(
+                self.sock.loop._backend.state, &self.sock.backend_sock))
+        return NoResult.OK
+
+
+cdef class _ProactorAcceptActivity:
+    cdef:
+        _ProactorSocket sock
+        object future
+        bint active
+
+    cdef inline NoResult start(self) except NoResult.EXC:
+        self.active = True
+        self.sock.loop._check_status(self.sock.loop._proactor.accept_start(
+            self.sock.loop._backend.state, &self.sock.backend_sock,
+            _proactor_accept_callback, <void *>self))
+        return NoResult.OK
+
+    cdef inline NoResult stop(self) except NoResult.EXC:
+        if self.active:
+            self.active = False
+            self.sock.read_in_progress = False
+            self.sock.loop._check_status(self.sock.loop._proactor.accept_stop(
+                self.sock.loop._backend.state, &self.sock.backend_sock))
+        return NoResult.OK
+
+    def __await__(self):
+        try:
+            return (yield from self.future.__await__())
+        except BaseException:
+            self.stop()
+            raise
+
+
+cdef void _proactor_accept_callback(void *data, aiofn_loop_status status,
+                                    aiofn_loop_proactor_socket_t *accepted,
+                                    const void *address, size_t address_len) noexcept with gil:
+    cdef:
+        _ProactorAcceptActivity activity = <_ProactorAcceptActivity>data
+        object py_sock
+        object py_address
+    try:
+        if status != AIOFN_LOOP_OK:
+            activity.stop()
+            activity.future.set_exception(RuntimeError("proactor accept failed"))
+            return
+        py_sock = socket.socket(fileno=accepted.fd)
+        py_sock.setblocking(False)
+        py_address = aiofn_sockaddr_to_pyaddr(<void *>address, <unsigned int>address_len)
+        activity.sock.loop._check_status(activity.sock.loop._proactor.unwrap_socket(
+            activity.sock.loop._backend.state, accepted))
+        activity.stop()
+        activity.future.set_result((py_sock, py_address))
+    except BaseException as exc:
+        activity.sock.loop._backend_failed(exc)
 
 
 cdef class _ProactorSocket:
@@ -749,7 +857,7 @@ cdef class _ProactorSocket:
         self.loop._proactor_unwrap_socket(self)
         return False
 
-    cdef inline _ProactorReadOperation async_read(self, object buffer, void *data, size_t size):
+    cdef inline _ProactorReadOperation async_read_oneshot(self, object buffer, void *data, size_t size):
         assert not self.read_in_progress
         cdef _ProactorReadOperation operation = <_ProactorReadOperation>_ProactorReadOperation.__new__(_ProactorReadOperation)
         operation.initialize(self, &self.read_in_progress)
@@ -769,7 +877,7 @@ cdef class _ProactorSocket:
         operation.start()
         return operation
 
-    cdef inline _ProactorRecvFromOperation async_recvfrom(self, object buffer, void *data, size_t size):
+    cdef inline _ProactorRecvFromOperation async_recvfrom_oneshot(self, object buffer, void *data, size_t size):
         assert not self.read_in_progress
         cdef _ProactorRecvFromOperation operation = <_ProactorRecvFromOperation>_ProactorRecvFromOperation.__new__(_ProactorRecvFromOperation)
         operation.initialize(self, &self.read_in_progress)
@@ -821,6 +929,56 @@ cdef class _ProactorSocket:
         memcpy(operation.address, address, address_len)
         operation.start()
         return operation
+
+    cdef inline _ProactorReadActivity async_read(self, object buffer, void *data, size_t size, bint into=False):
+        assert not self.read_in_progress
+        cdef _ProactorReadActivity activity = <_ProactorReadActivity>_ProactorReadActivity.__new__(_ProactorReadActivity)
+        activity.sock = self
+        activity.future = self.loop.create_future()
+        activity.buffer = buffer
+        activity.data = data
+        activity.size = size
+        activity.into = into
+        activity.active = False
+        self.read_in_progress = True
+        try:
+            activity.start()
+        except BaseException:
+            self.read_in_progress = False
+            raise
+        return activity
+
+    cdef inline _ProactorRecvFromActivity async_recvfrom(self, object buffer, void *data, size_t size, bint into=False):
+        assert not self.read_in_progress
+        cdef _ProactorRecvFromActivity activity = <_ProactorRecvFromActivity>_ProactorRecvFromActivity.__new__(_ProactorRecvFromActivity)
+        activity.sock = self
+        activity.future = self.loop.create_future()
+        activity.buffer = buffer
+        activity.data = data
+        activity.size = size
+        activity.into = into
+        activity.active = False
+        self.read_in_progress = True
+        try:
+            activity.start()
+        except BaseException:
+            self.read_in_progress = False
+            raise
+        return activity
+
+    cdef inline _ProactorAcceptActivity async_accept_activity(self):
+        assert not self.read_in_progress
+        cdef _ProactorAcceptActivity activity = <_ProactorAcceptActivity>_ProactorAcceptActivity.__new__(_ProactorAcceptActivity)
+        activity.sock = self
+        activity.future = self.loop.create_future()
+        activity.active = False
+        self.read_in_progress = True
+        try:
+            activity.start()
+        except BaseException:
+            self.read_in_progress = False
+            raise
+        return activity
 
     cdef inline _ProactorAcceptOperation async_accept(self):
         assert not self.read_in_progress
@@ -980,7 +1138,8 @@ cdef class LoopBase:
             if self._proactor.struct_size < AIOFN_PROACTOR_BACKEND_MIN_SIZE:
                 raise ValueError("loop backend proactor structure is too small")
             if (self._proactor.wrap_socket == NULL or self._proactor.unwrap_socket == NULL or
-                    self._proactor.connect == NULL or self._proactor.read == NULL or
+                    self._proactor.connect == NULL or self._proactor.read_start == NULL or self._proactor.read_stop == NULL or
+                    self._proactor.recvfrom_start == NULL or self._proactor.recvfrom_stop == NULL or
                     self._proactor.write == NULL or self._proactor.cancel == NULL):
                 raise ValueError("loop backend proactor is missing a required operation")
         self._backend_owner = backend
@@ -1463,7 +1622,7 @@ cdef class LoopBase:
         cdef _ProactorSocket sock
 
         with self._proactor_wrap_socket(py_sock) as sock:
-            return await sock.async_read_into(buffer, buffer_ptr, len(view))
+            return await sock.async_read(buffer, buffer_ptr, len(view), True)
 
     async def _proactor_recvfrom(self, py_sock, bufsize):
         cdef:
@@ -1490,7 +1649,7 @@ cdef class LoopBase:
 
         cdef _ProactorSocket sock
         with self._proactor_wrap_socket(py_sock) as sock:
-            return await sock.async_recvfrom_into(buffer, buffer_ptr, nbytes)
+            return await sock.async_recvfrom(buffer, buffer_ptr, nbytes, True)
 
     async def _proactor_sendall(self, py_sock, data):
         if len(data) == 0:
@@ -1625,29 +1784,12 @@ cdef class LoopBase:
         raise NotImplementedError("sock_sendto requires a reactor or proactor backend")
 
     async def _proactor_accept(self, py_sock):
-        cdef:
-            _ProactorAcceptOperation operation
-            _ProactorSocket listener
-            object accepted_sock
-            object address
-            int accepted_fd
-
+        cdef _ProactorSocket listener
         with self._proactor_wrap_socket(py_sock) as listener:
-            operation = listener.async_accept()
-            try:
-                accepted_fd, address = await operation
-                accepted_sock = socket.socket(fileno=accepted_fd)
-                accepted_sock.setblocking(False)
-                return accepted_sock, address
-            finally:
-                if operation.accepted.backend_token != NULL:
-                    self._check_status(self._proactor.unwrap_socket(
-                        self._backend.state,
-                        &operation.accepted,
-                    ))
+            return await listener.async_accept_activity()
 
     async def sock_accept(self, py_sock):
-        if self._proactor != NULL and self._proactor.accept != NULL:
+        if self._proactor != NULL and self._proactor.accept_start != NULL:
             return await self._proactor_accept(py_sock)
         if self._reactor == NULL:
             raise NotImplementedError("sock_accept requires a reactor or proactor backend")
