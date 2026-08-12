@@ -81,13 +81,18 @@ async def sock_accept(loop, py_sock):
     _check_non_ssl_socket(py_sock)
     _check_nonblocking_socket(py_sock)
 
-    try:
-        conn, address = py_sock.accept()
-    except (BlockingIOError, InterruptedError):
-        pass
-    else:
-        conn.setblocking(False)
-        return conn, address
+    def _do_accept():
+        try:
+            conn, address = py_sock.accept()
+        except (BlockingIOError, InterruptedError):
+            return None
+        else:
+            conn.setblocking(False)
+            return conn, address
+
+    result = _do_accept()
+    if result is not None:
+        return result
 
     future = loop.create_future()
 
@@ -95,14 +100,11 @@ async def sock_accept(loop, py_sock):
         if future.done():
             return
         try:
-            conn, address = py_sock.accept()
-            conn.setblocking(False)
-        except (BlockingIOError, InterruptedError):
-            return
+            result = _do_accept()
+            if result is not None:
+                _set_result(future, result)
         except BaseException as exc:
             _set_exception(future, exc)
-        else:
-            _set_result(future, (conn, address))
 
     fd = _ensure_fd_no_transport(loop, py_sock)
     loop.add_reader(fd, ready)
