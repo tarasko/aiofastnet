@@ -117,6 +117,11 @@ on Linux.
   and familiar loop-level networking operations.
 - **Works with the event loop you already use**. `aiofastnet` works with
   stock `asyncio` loops, `uvloop`, and `winloop`.
+- **Fills gaps in loop APIs**. Calling aiofastnet APIs directly can provide
+  networking operations that an event loop or older Python version does not
+  implement. For example, uvloop exposes `sock_sendto()`, `sock_recvfrom()`,
+  and `sock_recvfrom_into()`, but those methods raise `NotImplementedError`;
+  aiofastnet provides working implementations.
 - **Particularly strong for SSL-heavy workloads**. `aiofastnet` uses OpenSSL directly and avoids
   extra memory copying and unnecessary Python plumbing in the data path.
 - **Kernel TLS support on Linux**. Enable native `sendfile` for SSL. `aiohttp` can
