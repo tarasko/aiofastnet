@@ -1,9 +1,3 @@
-# Portions of this file are derived from CPython's asyncio sources
-# (notably asyncio.selector_events).
-# Copyright (c) Python Software Foundation.
-# Licensed under the Python Software Foundation License Version 2.
-# See LICENSES/PSF-2.0.txt and THIRD_PARTY_NOTICES for details.
-
 import socket
 
 from .api_utils import _check_non_ssl_socket, _check_nonblocking_socket, _ensure_resolved
@@ -52,6 +46,38 @@ async def sock_connect(loop, py_sock, address):
     if _should_fallback_to_asyncio(loop):
         # Windows ConnectEx requires a numeric address, so resolve hostnames before delegating to the proactor implementation.
         return await _get_original_loop_method(loop, "sock_connect")(py_sock, address)
+
+    #   For a nonblocking socket, the initial connect(address) has three relevant outcomes:
+    #
+    #   1. Immediate success
+    #
+    #   py_sock.connect(address)  # returns None
+    #
+    #   The connection is complete. There is no deferred error to retrieve, so checking SO_ERROR is unnecessary.
+    #
+    #   2. Connection is in progress
+    #   connect() raises one of the retryable exceptions, normally:
+    #   - BlockingIOError with EINPROGRESS, EWOULDBLOCK, or sometimes EALREADY
+    #   - InterruptedError with EINTR
+    #
+    #   This does not mean the connection failed. The kernel continues connecting asynchronously.
+    #   When the socket later becomes writable, writability only means the connection attempt finished—not that it succeeded. At that point:
+    #
+    #   error = py_sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+    #
+    #   determines the result:
+    #   - 0: connection succeeded
+    #   - nonzero: connection failed, for example ECONNREFUSED, ETIMEDOUT, or ENETUNREACH
+    #
+    #   This is why the ready handler checks SO_ERROR.
+    #
+    #   3. Immediate failure
+    #   connect() raises another OSError directly, such as:
+    #   - invalid address
+    #   - unsupported address family
+    #   - bad file descriptor
+    #   - permission failure
+    #   - some immediately detectable routing errors
 
     try:
         return py_sock.connect(address)
