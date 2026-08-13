@@ -53,17 +53,27 @@ async def UdpSocketPair():
             client.close()
 
 
-async def test_sock_connect_accept_sendall_recv(all_loops):
+@pytest.mark.parametrize("buffered_read", [False, True], ids=["simple", "buffered"])
+async def test_sock_connect_accept_sendall_recv(all_loops, buffered_read):
     loop = asyncio.get_running_loop()
+
+    async def recv(sock):
+        if buffered_read:
+            ba = bytearray(64*1024)
+            count = await aiofastnet.sock_recv_into(loop, sock, ba)
+            return bytes(memoryview(ba)[:count])
+        else:
+            return await aiofastnet.sock_recv(loop, sock, 64*1024)
+
     async with TcpSocketPair() as (server, client):
         client.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
-        payload = b"data" * (256 * 1024)
+        payload = b"data" * (64 * 1024)
 
         async def receive_all():
-            received = bytearray()
-            while len(received) < len(payload):
-                received.extend(await aiofastnet.sock_recv(loop, server, 64 * 1024))
-            return received
+            data = bytearray()
+            while len(data) < len(payload):
+                data.extend(await recv(server))
+            return data
 
         _, received = await asyncio.gather(
             aiofastnet.sock_sendall(loop, client, payload),
@@ -71,26 +81,35 @@ async def test_sock_connect_accept_sendall_recv(all_loops):
         )
         assert received == payload
 
-        buffer = bytearray(16)
-        server.send(b"into")
-        count = await aiofastnet.sock_recv_into(loop, client, buffer)
-        assert buffer[:count] == b"into"
 
-
-async def test_sock_sendto_recvfrom(all_loops):
+@pytest.mark.parametrize("buffered_read", [False, True], ids=["simple", "buffered"])
+async def test_sock_sendto_recvfrom(all_loops, buffered_read):
     loop = asyncio.get_running_loop()
+    
+    async def readfrom(sock):
+        if buffered_read:
+            ba = bytearray(64*1024)
+            count, address = await aiofastnet.sock_recvfrom_into(loop, sock, ba)
+            return bytes(memoryview(ba)[:count]), address
+        else:
+            count, address = await aiofastnet.sock_recvfrom(loop, sock, 64*1024)
+            return count, address
+
     async with UdpSocketPair() as (server, client):
+        client.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+
         sent = await aiofastnet.sock_sendto(loop, client, b"first", server.getsockname())
         assert sent == 5
-        data, address = await aiofastnet.sock_recvfrom(loop, server, 64)
+        data, address = await readfrom(server)
         assert data == b"first"
         assert address == client.getsockname()
 
-        await aiofastnet.sock_sendto(loop, client, b"second", server.getsockname())
-        buffer = bytearray(64)
-        (count, address) = await aiofastnet.sock_recvfrom_into(loop, server, buffer)
-        assert buffer[:count] == b"second"
+        # Defer sending, cause wouldblock on reading
+        send_task = loop.create_task(aiofastnet.sock_sendto(loop, client, b"second", server.getsockname()))
+        data, address = await readfrom(server)
+        assert data == b"second"
         assert address == client.getsockname()
+        await send_task
 
 
 async def test_sock_recv_cancellation_does_not_consume_later_data(selector_loop):
