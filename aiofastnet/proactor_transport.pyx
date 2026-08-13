@@ -193,11 +193,7 @@ cdef class ProactorSocketTransport(Transport):
 
         if status != AIOFN_LOOP_OK:
             self._release_read_buffer()
-            try:
-                self._proactor_socket.context.check_status(status)
-            except BaseException as exc:
-                self._fatal_error(exc, 'Fatal read error on proactor socket transport')
-            return NoResult.OK
+            self._proactor_socket.context.check_status(status)
 
         if bytes_read == 0:
             self._release_read_buffer()
@@ -485,11 +481,7 @@ cdef class ProactorSocketTransport(Transport):
 
         if status != AIOFN_LOOP_OK:
             self._write_submitted_size = 0
-            try:
-                self._proactor_socket.context.check_status(status)
-            except BaseException as exc:
-                self._fatal_error(exc, 'Fatal write error on proactor socket transport')
-            return NoResult.OK
+            self._proactor_socket.context.check_status(status)
 
         self._adjust_write_backlog(bytes_sent)
         if self._write_backlog:
