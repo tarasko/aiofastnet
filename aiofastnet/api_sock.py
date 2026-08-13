@@ -35,10 +35,11 @@ def _wrap_sock_method_call(future, fn, *args):
     # This greatly improves coverage
     if future.done():
         return
+
     try:
-        result = fn(*args)
-        if result is not None:
-            _set_result(future, result)
+        fn(*args)
+        if future.done():
+            return
     except (BlockingIOError, InterruptedError):
         return
     except BaseException as exc:
@@ -69,23 +70,18 @@ async def sock_connect(loop, py_sock, address):
     except (BlockingIOError, InterruptedError):
         pass
 
+    fd = _ensure_fd_no_transport(loop, py_sock)
     future = loop.create_future()
 
     def ready():
-        if future.done():
-            return
-
-        try:
-            error = py_sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-            if error:
-                raise OSError(error, f"Connect call failed {address}")
-        except BaseException as exc:
-            _set_exception(future, exc)
+        error = py_sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+        if error:
+            future.set_exception(OSError(error, f"Connect call failed {address}"))
         else:
-            _set_result(future, None)
+            future.set_result(None)
 
-    fd = _ensure_fd_no_transport(loop, py_sock)
-    loop.add_writer(fd, ready)
+    loop.add_writer(fd, lambda: _wrap_sock_method_call(future, ready))
+
     future.add_done_callback(lambda _: loop.remove_writer(fd))
     return await future
 
@@ -142,28 +138,34 @@ async def sock_recv(loop, py_sock, n):
     fd = _ensure_fd_no_transport(loop, py_sock)
     future = loop.create_future()
 
-    loop.add_reader(fd, lambda: _wrap_sock_method_call(future, py_sock.recv, n))
+    def ready():
+        future.set_result(py_sock.recv(n))
+
+    loop.add_reader(fd, lambda: _wrap_sock_method_call(future, ready))
 
     future.add_done_callback(lambda _: loop.remove_reader(fd))
     return await future
 
 
-async def sock_recv_into(loop, py_sock, buf):
+async def sock_recv_into(loop, py_sock, buf, **kwargs):
     if _should_fallback_to_asyncio(loop):
-        return await _get_original_loop_method(loop, "sock_recv_into")(py_sock, buf)
+        return await _get_original_loop_method(loop, "sock_recv_into")(py_sock, buf, **kwargs)
 
     _check_non_ssl_socket(py_sock)
     _check_nonblocking_socket(py_sock)
 
     try:
-        return py_sock.recv_into(buf)
+        return py_sock.recv_into(buf, **kwargs)
     except (BlockingIOError, InterruptedError):
         pass
 
     fd = _ensure_fd_no_transport(loop, py_sock)
     future = loop.create_future()
 
-    loop.add_reader(fd, lambda: _wrap_sock_method_call(future, py_sock.recv_into, buf))
+    def ready():
+        future.set_result(py_sock.recv_into(buf, **kwargs))
+
+    loop.add_reader(fd, lambda: _wrap_sock_method_call(future, ready))
 
     future.add_done_callback(lambda _: loop.remove_reader(fd))
     return await future
@@ -184,30 +186,34 @@ async def sock_recvfrom(loop, py_sock, bufsize):
     fd = _ensure_fd_no_transport(loop, py_sock)
     future = loop.create_future()
 
-    loop.add_reader(fd, lambda: _wrap_sock_method_call(future, py_sock.recvfrom, bufsize))
+    def ready():
+        future.set_result(py_sock.recvfrom(bufsize))
+
+    loop.add_reader(fd, lambda: _wrap_sock_method_call(future, ready))
 
     future.add_done_callback(lambda _: loop.remove_reader(fd))
     return await future
 
 
-async def sock_recvfrom_into(loop, py_sock, buf, nbytes=0):
+async def sock_recvfrom_into(loop, py_sock, buf, **kwargs):
     if _should_fallback_to_asyncio(loop):
-        return await _get_original_loop_method(loop, "sock_recvfrom_into")(py_sock, buf, nbytes)
+        return await _get_original_loop_method(loop, "sock_recvfrom_into")(py_sock, buf, **kwargs)
 
     _check_non_ssl_socket(py_sock)
     _check_nonblocking_socket(py_sock)
 
-    if not nbytes:
-        nbytes = len(buf)
     try:
-        return py_sock.recvfrom_into(buf, nbytes)
+        return py_sock.recvfrom_into(buf, **kwargs)
     except (BlockingIOError, InterruptedError):
         pass
 
     fd = _ensure_fd_no_transport(loop, py_sock)
     future = loop.create_future()
 
-    loop.add_reader(fd, lambda: _wrap_sock_method_call(future, py_sock.recvfrom_into, buf, nbytes))
+    def ready():
+        future.set_result(py_sock.recvfrom_into(buf, **kwargs))
+
+    loop.add_reader(fd, lambda: _wrap_sock_method_call(future, ready))
 
     future.add_done_callback(lambda _: loop.remove_reader(fd))
     return await future
@@ -228,7 +234,10 @@ async def sock_sendto(loop, py_sock, data, address):
     fd = _ensure_fd_no_transport(loop, py_sock)
     future = loop.create_future()
 
-    loop.add_writer(fd, lambda: _wrap_sock_method_call(future, py_sock.sendto, data, address))
+    def ready():
+        future.set_result(py_sock.sendto(data, address))
+
+    loop.add_writer(fd, lambda: _wrap_sock_method_call(future, ready))
 
     future.add_done_callback(lambda _: loop.remove_writer(fd))
     return await future
@@ -256,7 +265,7 @@ async def sock_sendall(loop, py_sock, data):
         nonlocal sent
         sent += py_sock.send(view[sent:])
         if sent == len(view):
-            _set_result(future, None)
+            future.set_result(None)
 
     fd = _ensure_fd_no_transport(loop, py_sock)
     loop.add_writer(fd, lambda: _wrap_sock_method_call(future, ready))
