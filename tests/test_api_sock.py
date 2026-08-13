@@ -67,18 +67,17 @@ async def test_wrap_sock_ready_handler_rejects_error_after_completion(selector_l
     assert future.result() == "done"
 
 
-@pytest.mark.skipif(
-    sys.platform != "linux",
-    reason="bound non-listening TCP port is rejected promptly only on Linux",
-)
 async def test_sock_connect_refused(selector_loop):
+    # Test socket becoming write-ready but with SO_ERROR set to error.
+    
     loop = asyncio.get_running_loop()
     unavailable_server = socket.socket()
     unavailable_server.bind(("127.0.0.1", 0))
     client = socket.socket()
     client.setblocking(False)
     try:
-        with pytest.raises(ConnectionRefusedError):
+        # On macos SO_ERROR reports ETIMEDOUT
+        with pytest.raises((ConnectionRefusedError, TimeoutError)):
             await aiofastnet.sock_connect(loop, client, unavailable_server.getsockname())
     finally:
         client.close()
