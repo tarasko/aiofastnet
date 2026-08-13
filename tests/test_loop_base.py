@@ -309,7 +309,7 @@ async def test_reader_can_cancel_simultaneously_ready_writer(libuv_loop):
 
 
 async def test_aiofastnet_socket_transport(libuv_loop):
-    from aiofastnet.loop_base import ProactorSocketTransport
+    from aiofastnet.proactor_transport import ProactorSocketTransport
 
     peer, client = _tcp_socketpair()
     peer.setblocking(False)
@@ -350,7 +350,7 @@ async def test_aiofastnet_socket_transport(libuv_loop):
 
 @pytest.mark.parametrize("buffered", [False, True])
 async def test_proactor_socket_transport_stream_io(libuv_loop, buffered):
-    from aiofastnet.loop_base import ProactorSocketTransport
+    from aiofastnet.proactor_transport import ProactorSocketTransport
 
     async with TestServer(ct=ConnectionType("tcp")) as server:
         async with TestClient(server, is_buffered=buffered) as client:

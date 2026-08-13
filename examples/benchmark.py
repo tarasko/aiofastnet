@@ -26,9 +26,15 @@ except ImportError:
     blazio = None
 
 
+try:
+    import zuvloop
+except ImportError:
+    zuvloop = None
+
+
 UDP_MAX_PAYLOAD_SIZE = 65507
 SUPPORTED_TRANSPORTS = ["ssl", "tcp", "udp"]
-SUPPORTED_LOOPS = ["asyncio", "uvloop", "blazio", "libuv"]
+SUPPORTED_LOOPS = ["asyncio", "uvloop", "blazio", "libuv", "zuvloop"]
 
 
 def _round_msg_size(msg_size: int, chunks: int) -> int:
@@ -364,6 +370,8 @@ def main():
                         loop_factory = uvloop.Loop
                     elif loop_kind == "blazio":
                         loop_factory = blazio.new_event_loop
+                    elif loop_kind == "zuvloop":
+                        loop_factory = zuvloop.new_event_loop
                     elif loop_kind == "libuv":
                         loop_factory = tests.libuv_loop.new_event_loop
                     else:

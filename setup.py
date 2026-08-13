@@ -87,6 +87,10 @@ if os.name == 'posix':
             "aiofastnet.loop_base",
             ["aiofastnet/loop_base.pyx"],
         ),
+        make_extension(
+            "aiofastnet.proactor_transport",
+            ["aiofastnet/proactor_transport.pyx"],
+        ),
         Extension(
             "tests.libuv_loop",
             ["tests/libuv_loop.pyx", "tests/libuv_backend.c"],
