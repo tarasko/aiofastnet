@@ -125,6 +125,9 @@ async def UdpSocketPair():
                 server.close()
                 client.close()
     else:
+        if sys.version_info < (3, 11):
+            pytest.skip("Datagram sock_ methods are missing in asyncio loop on windows prior to 3.11")
+
         server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         server.setblocking(False)
