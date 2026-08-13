@@ -19,16 +19,6 @@ def _ensure_fd_no_transport(loop, py_sock):
     return fd
 
 
-def _set_result(future, result):
-    if not future.done():
-        future.set_result(result)
-
-
-def _set_exception(future, exc):
-    if not future.done():
-        future.set_exception(exc)
-
-
 def _wrap_sock_method_call(future, fn, *args):
     # This nice utility helps us to centralized error handling when socket readiness is reported.
     # We can unit-test this function, instead of trying to simulate various errors for each api
@@ -38,12 +28,10 @@ def _wrap_sock_method_call(future, fn, *args):
 
     try:
         fn(*args)
-        if future.done():
-            return
     except (BlockingIOError, InterruptedError):
         return
     except BaseException as exc:
-        _set_exception(future, exc)
+        future.set_exception(exc)
 
 
 async def sock_connect(loop, py_sock, address):
