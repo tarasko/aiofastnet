@@ -193,9 +193,8 @@ typedef struct aiofn_loop_proactor_op {
 } aiofn_loop_proactor_op_t;
 
 /*
- * Proactor interface prototype. This is intentionally not consumed by the
- * current SelectorLoopBase. Each operation is called from the loop thread,
- * just like the common backend interface. A socket may have at most one
+ * Proactor interface. Each operation is called from the loop thread, just
+ * like the common backend interface. A socket may have at most one
  * active stream read, one active datagram read, and one pending write; a read
  * and write may overlap. The shared allocation callback supplies data buffers;
  * datagram callbacks receive the source address from backend-owned storage.
@@ -223,7 +222,8 @@ typedef struct {
         size_t address_len
     );
 
-    /* Start persistent asynchronous stream reads. */
+    /* Start persistent asynchronous stream reads. A successful callback with
+       zero bytes signals stream EOF. */
     aiofn_loop_status (*read_start)(
         void *state,
         aiofn_loop_proactor_socket_t *socket,
@@ -238,7 +238,9 @@ typedef struct {
         aiofn_loop_proactor_socket_t *socket
     );
 
-    /* Start the socket's one pending asynchronous scatter-gather write. */
+    /* Start the socket's one pending asynchronous scatter-gather write. The
+       frontend keeps buffers and their referenced memory alive through the
+       completion callback; the backend must not access them afterwards. */
     aiofn_loop_status (*write)(
         void *state,
         aiofn_loop_proactor_socket_t *socket,

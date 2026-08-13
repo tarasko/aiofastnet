@@ -61,6 +61,24 @@ def _ssl_needs_fallback_engine(sslcontext: ssl.SSLContext) -> bool:
     return openssl_compat.OPENSSL_DYN_LIBS is None or getattr(sslcontext, "_aiofastnet_force_fallback_ssl", False)
 
 
+def _loop_has_proactor_transport(loop, sock):
+    # Only LoopBase exposes this method; third-party selector loops continue
+    # using SelectorSocketTransport. The current proactor transport and ABI
+    # cover TCP streams; Unix-domain streams still use the reactor transport.
+    has_proactor_transport = getattr(loop, "_has_proactor_transport", None)
+    return (
+        has_proactor_transport is not None
+        and sock.family in (socket.AF_INET, socket.AF_INET6)
+        and has_proactor_transport()
+    )
+
+
+def _make_socket_transport(loop, sock, protocol, waiter=None, server=None, *, proactor):
+    if proactor:
+        return loop._make_proactor_socket_transport(sock, protocol, waiter, server)
+    return SelectorSocketTransport(loop, sock, protocol, waiter=waiter, server=server)
+
+
 async def _wait_and_close_transport_on_exc(waiter: asyncio.Future[Any], transport: Any) -> Any:
     try:
         return await waiter
@@ -134,9 +152,10 @@ async def _create_connection_transport(
     else:
         protocol = protocol_factory()
         waiter = loop.create_future() if server is None else None
+        proactor = _loop_has_proactor_transport(loop, sock)
         if ssl:
             sslcontext = openssl_compat.create_transport_context(server_side, server_hostname) if isinstance(ssl, bool) else ssl
-            if _ssl_needs_fallback_engine(sslcontext):
+            if proactor or _ssl_needs_fallback_engine(sslcontext):
                 transport = SSLTransport_Transport(
                     loop, protocol, sslcontext,
                     server_side,
@@ -148,7 +167,7 @@ async def _create_connection_transport(
                     server_hostname=server_hostname,
                     server=server
                 )
-                SelectorSocketTransport(loop, sock, transport.get_tls_protocol())
+                _make_socket_transport(loop, sock, transport.get_tls_protocol(), proactor=proactor)
             else:
                 transport = SSLTransport_Socket(
                     loop, protocol, sslcontext,
@@ -163,8 +182,7 @@ async def _create_connection_transport(
                     server=server
                 )
         else:
-            transport = SelectorSocketTransport(loop, sock, protocol,
-                                                waiter=waiter, server=server)
+            transport = _make_socket_transport(loop, sock, protocol, waiter, server, proactor=proactor)
 
     if waiter is not None:
         try:

@@ -8,7 +8,7 @@ import threading
 
 import pytest
 
-from tests.utils import ConnectionType, TestServer
+from tests.utils import ConnectionType, TestClient, TestServer, make_test_ssl_contexts
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="the libuv test backend is Unix-only")
 
@@ -309,6 +309,8 @@ async def test_reader_can_cancel_simultaneously_ready_writer(libuv_loop):
 
 
 async def test_aiofastnet_socket_transport(libuv_loop):
+    from aiofastnet.loop_base import ProactorSocketTransport
+
     peer, client = _tcp_socketpair()
     peer.setblocking(False)
     client.setblocking(False)
@@ -333,6 +335,7 @@ async def test_aiofastnet_socket_transport(libuv_loop):
     libuv_loop.add_reader(peer, echo)
     try:
         transport, _protocol = await libuv_loop.create_connection(lambda: ClientProtocol(done), sock=client)
+        assert isinstance(transport, ProactorSocketTransport)
         assert await done == b"request"
     finally:
         if transport is None:
@@ -343,6 +346,70 @@ async def test_aiofastnet_socket_transport(libuv_loop):
         await asyncio.sleep(0)
 
     peer.close()
+
+
+@pytest.mark.parametrize("buffered", [False, True])
+async def test_proactor_socket_transport_stream_io(libuv_loop, buffered):
+    from aiofastnet.loop_base import ProactorSocketTransport
+
+    async with TestServer(ct=ConnectionType("tcp")) as server:
+        async with TestClient(server, is_buffered=buffered) as client:
+            assert isinstance(client.transport, ProactorSocketTransport)
+
+            data = b"proactor transport" * 32_768
+            client.write_in_lines(data, 300)
+            assert await client.readn(len(data)) == data
+
+
+async def test_proactor_socket_transport_ssl_layer(libuv_loop):
+    from aiofastnet.ssl_transport import SSLTransport_Transport
+
+    server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", True)
+    connection_type = ConnectionType("ssl_mbio", server_context, client_context)
+
+    async with TestServer(ct=connection_type) as server:
+        async with TestClient(server, ct=connection_type) as client:
+            assert isinstance(client.transport, SSLTransport_Transport)
+
+            data = b"encrypted proactor transport"
+            client.write(data)
+            assert await client.readn(len(data)) == data
+
+
+async def test_proactor_socket_transport_read_control_and_eof(libuv_loop):
+    async with TestServer(ct=ConnectionType("tcp")) as server:
+        async with TestClient(server) as client:
+            assert client.transport.is_reading()
+            client.transport.pause_reading()
+            assert not client.transport.is_reading()
+            client.transport.resume_reading()
+            assert client.transport.is_reading()
+
+            client.write(b"before eof")
+            assert await client.readn(10) == b"before eof"
+
+            client.transport.write_eof()
+            await client.wait_closed()
+            assert client.is_eof_received
+
+
+async def test_proactor_socket_transport_abort_pending_write(libuv_loop):
+    async with TestServer(ct=ConnectionType("tcp")) as server:
+        async with TestClient(server) as client:
+            client.write(b"x" * 2_000_000)
+            client.abort()
+            await client.wait_closed()
+
+
+async def test_unix_socket_transport_uses_reactor(libuv_loop):
+    from aiofastnet.transport import SelectorSocketTransport
+
+    async with TestServer(ct=ConnectionType("unix")) as server:
+        async with TestClient(server, ct=ConnectionType("unix")) as client:
+            assert isinstance(client.transport, SelectorSocketTransport)
+
+            client.write(b"reactor fallback")
+            assert await client.readn(16) == b"reactor fallback"
 
 
 async def test_proactor_sock_connect_recv_sendall(libuv_loop):

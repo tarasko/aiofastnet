@@ -319,8 +319,10 @@ static void aiofn_libuv_on_read(uv_stream_t *stream, ssize_t nread, const uv_buf
         return;
     }
 
-    if (nread >= 0 || nread == UV_EOF) {
+    if (nread >= 0) {
         socket->read_callback(socket->read_callback_data, AIOFN_LOOP_OK, buffer->base, (size_t)nread);
+    } else if (nread == UV_EOF) {
+        socket->read_callback(socket->read_callback_data, AIOFN_LOOP_OK, buffer->base, 0);
     } else {
         aiofn_libuv_set_error((aiofn_libuv_state_t *)stream->loop->data, "uv_read", (int)nread);
         socket->read_callback(socket->read_callback_data, AIOFN_LOOP_ERROR, buffer->base, 0);
