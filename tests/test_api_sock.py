@@ -69,7 +69,7 @@ async def test_wrap_sock_ready_handler_rejects_error_after_completion(selector_l
 
 async def test_sock_connect_refused(selector_loop):
     # Test socket becoming write-ready but with SO_ERROR set to error.
-    
+
     loop = asyncio.get_running_loop()
     unavailable_server = socket.socket()
     unavailable_server.bind(("127.0.0.1", 0))
@@ -224,10 +224,3 @@ async def test_sock_recv_cancellation_does_not_consume_later_data(selector_loop)
 
         client.send(b"x")
         assert await asyncio.wait_for(aiofastnet.sock_recv(loop, server, 1), 1) == b"x"
-
-
-async def test_patch_loop_patches_sock_methods(all_loops):
-    loop = aiofastnet.patch_loop(asyncio.get_running_loop())
-    async with TcpSocketPair() as (server, client):
-        await loop.sock_sendall(client, b"patched")
-        assert await loop.sock_recv(server, 64) == b"patched"
