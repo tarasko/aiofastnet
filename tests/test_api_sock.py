@@ -1,6 +1,7 @@
 import asyncio
 import os
 import socket
+import sys
 import tempfile
 from contextlib import asynccontextmanager
 
@@ -104,12 +105,30 @@ async def test_sock_sendto_recvfrom(all_loops, buffered_read):
         assert data == b"first"
         assert address == client.getsockname()
 
-        # Defer sending, cause wouldblock on reading
+        # Defer sending, cause EAGAIN on reading
         send_task = loop.create_task(aiofastnet.sock_sendto(loop, client, b"second", server.getsockname()))
         data, address = await readfrom(server)
         assert data == b"second"
         assert address == client.getsockname()
         await send_task
+
+        # Cause EAGAIN from sendto,
+        # works reliably only on linux with AF_UNIX, SOCK_DGRAM
+        # other systems just report success and drop data
+        if sys.platform == "linux":
+            payload = b"x" * (4 * 1024)
+
+            async def sendto():
+                await aiofastnet.sock_sendto(loop, client, payload, server.getsockname())
+                await aiofastnet.sock_sendto(loop, client, payload, server.getsockname())
+
+            # Tasks are not eager so sendto will start only after readfrom could not complete immediately
+            send_task = loop.create_task(sendto())
+            data, _ = await readfrom(server)
+            assert data == payload
+            data, _ = await readfrom(server)
+            assert data == payload
+            await send_task
 
 
 async def test_sock_recv_cancellation_does_not_consume_later_data(selector_loop):

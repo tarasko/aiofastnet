@@ -29,6 +29,22 @@ def _set_exception(future, exc):
         future.set_exception(exc)
 
 
+def _wrap_sock_method_call(future, fn, *args):
+    # This nice utility helps us to centralized error handling when socket readiness is reported.
+    # We can unit-test this function, instead of trying to simulate various errors for each api
+    # This greatly improves coverage
+    if future.done():
+        return
+    try:
+        result = fn(*args)
+        if result is not None:
+            _set_result(future, result)
+    except (BlockingIOError, InterruptedError):
+        return
+    except BaseException as exc:
+        _set_exception(future, exc)
+
+
 async def sock_connect(loop, py_sock, address):
     _check_non_ssl_socket(py_sock)
     _check_nonblocking_socket(py_sock)
@@ -111,43 +127,6 @@ async def sock_accept(loop, py_sock):
     return await future
 
 
-async def sock_sendall(loop, py_sock, data):
-    if _should_fallback_to_asyncio(loop):
-        return await _get_original_loop_method(loop, "sock_sendall")(py_sock, data)
-
-    _check_non_ssl_socket(py_sock)
-    _check_nonblocking_socket(py_sock)
-
-    try:
-        sent = py_sock.send(data)
-    except (BlockingIOError, InterruptedError):
-        sent = 0
-    if sent == len(data):
-        return
-
-    view = memoryview(data).cast("B")
-    future = loop.create_future()
-
-    def ready():
-        nonlocal sent
-        if future.done():
-            return
-        try:
-            sent += py_sock.send(view[sent:])
-        except (BlockingIOError, InterruptedError):
-            return
-        except BaseException as exc:
-            _set_exception(future, exc)
-            return
-        if sent == len(view):
-            _set_result(future, None)
-
-    fd = _ensure_fd_no_transport(loop, py_sock)
-    loop.add_writer(fd, ready)
-    future.add_done_callback(lambda _: loop.remove_writer(fd))
-    return await future
-
-
 async def sock_recv(loop, py_sock, n):
     if _should_fallback_to_asyncio(loop):
         return await _get_original_loop_method(loop, "sock_recv")(py_sock, n)
@@ -160,22 +139,11 @@ async def sock_recv(loop, py_sock, n):
     except (BlockingIOError, InterruptedError):
         pass
 
+    fd = _ensure_fd_no_transport(loop, py_sock)
     future = loop.create_future()
 
-    def ready():
-        if future.done():
-            return
-        try:
-            data = py_sock.recv(n)
-        except (BlockingIOError, InterruptedError):
-            return
-        except BaseException as exc:
-            _set_exception(future, exc)
-        else:
-            _set_result(future, data)
+    loop.add_reader(fd, lambda: _wrap_sock_method_call(future, py_sock.recv, n))
 
-    fd = _ensure_fd_no_transport(loop, py_sock)
-    loop.add_reader(fd, ready)
     future.add_done_callback(lambda _: loop.remove_reader(fd))
     return await future
 
@@ -192,22 +160,11 @@ async def sock_recv_into(loop, py_sock, buf):
     except (BlockingIOError, InterruptedError):
         pass
 
+    fd = _ensure_fd_no_transport(loop, py_sock)
     future = loop.create_future()
 
-    def ready():
-        if future.done():
-            return
-        try:
-            count = py_sock.recv_into(buf)
-        except (BlockingIOError, InterruptedError):
-            return
-        except BaseException as exc:
-            _set_exception(future, exc)
-        else:
-            _set_result(future, count)
+    loop.add_reader(fd, lambda: _wrap_sock_method_call(future, py_sock.recv_into, buf))
 
-    fd = _ensure_fd_no_transport(loop, py_sock)
-    loop.add_reader(fd, ready)
     future.add_done_callback(lambda _: loop.remove_reader(fd))
     return await future
 
@@ -224,22 +181,11 @@ async def sock_recvfrom(loop, py_sock, bufsize):
     except (BlockingIOError, InterruptedError):
         pass
 
+    fd = _ensure_fd_no_transport(loop, py_sock)
     future = loop.create_future()
 
-    def ready():
-        if future.done():
-            return
-        try:
-            result = py_sock.recvfrom(bufsize)
-        except (BlockingIOError, InterruptedError):
-            return
-        except BaseException as exc:
-            _set_exception(future, exc)
-        else:
-            _set_result(future, result)
+    loop.add_reader(fd, lambda: _wrap_sock_method_call(future, py_sock.recvfrom, bufsize))
 
-    fd = _ensure_fd_no_transport(loop, py_sock)
-    loop.add_reader(fd, ready)
     future.add_done_callback(lambda _: loop.remove_reader(fd))
     return await future
 
@@ -258,22 +204,11 @@ async def sock_recvfrom_into(loop, py_sock, buf, nbytes=0):
     except (BlockingIOError, InterruptedError):
         pass
 
+    fd = _ensure_fd_no_transport(loop, py_sock)
     future = loop.create_future()
 
-    def ready():
-        if future.done():
-            return
-        try:
-            result = py_sock.recvfrom_into(buf, nbytes)
-        except (BlockingIOError, InterruptedError):
-            return
-        except BaseException as exc:
-            _set_exception(future, exc)
-        else:
-            _set_result(future, result)
+    loop.add_reader(fd, lambda: _wrap_sock_method_call(future, py_sock.recvfrom_into, buf, nbytes))
 
-    fd = _ensure_fd_no_transport(loop, py_sock)
-    loop.add_reader(fd, ready)
     future.add_done_callback(lambda _: loop.remove_reader(fd))
     return await future
 
@@ -290,21 +225,40 @@ async def sock_sendto(loop, py_sock, data, address):
     except (BlockingIOError, InterruptedError):
         pass
 
+    fd = _ensure_fd_no_transport(loop, py_sock)
+    future = loop.create_future()
+
+    loop.add_writer(fd, lambda: _wrap_sock_method_call(future, py_sock.sendto, data, address))
+
+    future.add_done_callback(lambda _: loop.remove_writer(fd))
+    return await future
+
+
+async def sock_sendall(loop, py_sock, data):
+    if _should_fallback_to_asyncio(loop):
+        return await _get_original_loop_method(loop, "sock_sendall")(py_sock, data)
+
+    _check_non_ssl_socket(py_sock)
+    _check_nonblocking_socket(py_sock)
+
+    try:
+        sent = py_sock.send(data)
+    except (BlockingIOError, InterruptedError):
+        sent = 0
+
+    if sent == len(data):
+        return
+
+    view = memoryview(data).cast("B")
     future = loop.create_future()
 
     def ready():
-        if future.done():
-            return
-        try:
-            result = py_sock.sendto(data, address)
-        except (BlockingIOError, InterruptedError):
-            return
-        except BaseException as exc:
-            _set_exception(future, exc)
-        else:
-            _set_result(future, result)
+        nonlocal sent
+        sent += py_sock.send(view[sent:])
+        if sent == len(view):
+            _set_result(future, None)
 
     fd = _ensure_fd_no_transport(loop, py_sock)
-    loop.add_writer(fd, ready)
+    loop.add_writer(fd, lambda: _wrap_sock_method_call(future, ready))
     future.add_done_callback(lambda _: loop.remove_writer(fd))
     return await future
