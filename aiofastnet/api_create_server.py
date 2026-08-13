@@ -44,7 +44,8 @@ async def create_server(
         ssl_shutdown_timeout=None,
         ssl_incoming_bio_size=None,
         ssl_outgoing_bio_size=None,
-        start_serving=True):
+        start_serving=True,
+        safe_write_on_fallback=True):
     """Create a TCP server.
 
     The host parameter can be a string, in that case the TCP server is
@@ -87,6 +88,7 @@ async def create_server(
             loop, protocol_factory, ssl,
             ssl_handshake_timeout, ssl_shutdown_timeout,
             ssl_incoming_bio_size, ssl_outgoing_bio_size,
+            safe_write_on_fallback,
             **kwargs)
 
     if sock is not None:
@@ -206,8 +208,13 @@ async def _create_server_fallback(loop,
                                   ssl_shutdown_timeout,
                                   ssl_incoming_bio_size,
                                   ssl_outgoing_bio_size,
+                                  safe_write_on_fallback,
                                   **kwargs
 ):
+    loop_create_server = _get_original_loop_method(loop, "create_server")
+    if not safe_write_on_fallback and not ssl:
+        return await loop_create_server(protocol_factory, **kwargs)
+
     if ssl:
         sslcontext = None if isinstance(ssl, bool) else ssl
 
@@ -224,8 +231,7 @@ async def _create_server_fallback(loop,
             )
             return tls_transport.get_tls_protocol()
 
-        create_server = _get_original_loop_method(loop, "create_server")
-        return await create_server(ssl_protocol_factory, **kwargs)
+        return await loop_create_server(ssl_protocol_factory, **kwargs)
     else:
         def wrapped_protocol_factory():
             user_protocol = protocol_factory()
@@ -234,8 +240,7 @@ async def _create_server_fallback(loop,
             else:
                 return _WrappedProtocol(user_protocol)
 
-        create_server = _get_original_loop_method(loop, "create_server")
-        return await create_server(wrapped_protocol_factory, **kwargs)
+        return await loop_create_server(wrapped_protocol_factory, **kwargs)
 
 
 async def _create_server_getaddrinfo(loop, host, port, family, flags):
@@ -245,5 +250,3 @@ async def _create_server_getaddrinfo(loop, host, port, family, flags):
     if not infos:
         raise OSError(f'getaddrinfo({host!r}) returned empty list')
     return infos
-
-
