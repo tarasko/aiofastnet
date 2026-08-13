@@ -68,19 +68,27 @@ async def test_sock_connect_accept_sendall_recv(all_loops, buffered_read):
 
     async with TcpSocketPair() as (server, client):
         client.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
-        payload = b"data" * (64 * 1024)
+        payload_1 = b"b" * (64 * 1024)
+        payload_2 = b"c" * (64 * 1024)
+        payload_3 = b"a"
+        total_len = len(payload_1) + len(payload_2) + len(payload_3)
+
+        async def sendall():
+            await aiofastnet.sock_sendall(loop, client, payload_1)
+            await aiofastnet.sock_sendall(loop, client, payload_2)
+            await aiofastnet.sock_sendall(loop, client, payload_3)
 
         async def receive_all():
             data = bytearray()
-            while len(data) < len(payload):
+            while len(data) < total_len:
                 data.extend(await recv(server))
             return data
 
         _, received = await asyncio.gather(
-            aiofastnet.sock_sendall(loop, client, payload),
+            sendall(),
             receive_all(),
         )
-        assert received == payload
+        assert received == payload_1 + payload_2 + payload_3
 
 
 @pytest.mark.parametrize("buffered_read", [False, True], ids=["simple", "buffered"])
