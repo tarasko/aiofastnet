@@ -82,6 +82,14 @@ Source: [examples/benchmark_threaded.py](https://github.com/tarasko/aiofastnet/b
 - [`loop.create_datagram_endpoint()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_datagram_endpoint)
 - [`loop.start_tls()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.start_tls)
 - [`loop.sendfile()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sendfile)
+- [`loop.sock_accept()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sock_accept)
+- [`loop.sock_connect()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sock_connect)
+- [`loop.sock_recv()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sock_recv)
+- [`loop.sock_recv_into()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sock_recv_into)
+- [`loop.sock_recvfrom()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sock_recvfrom)
+- [`loop.sock_recvfrom_into()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sock_recvfrom_into)
+- [`loop.sock_sendall()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sock_sendall)
+- [`loop.sock_sendto()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.sock_sendto)
 
 asyncio libraries use these loop primitives to establish communication channels.
 The current implementations in both `asyncio` and `uvloop` are not optimal,
