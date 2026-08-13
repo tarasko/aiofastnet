@@ -18,22 +18,6 @@ cpdef enum SSLProtocolState:
     SHUTDOWN = 4
 
 
-cdef enum AppProtocolState:
-    # This tracks the state of app protocol (https://git.io/fj59P):
-    #
-    #     INIT -cm-> CON_MADE [-dr*->] [-er-> EOF?] -cl-> CON_LOST
-    #
-    # * cm: connection_made()
-    # * dr: data_received()
-    # * er: eof_received()
-    # * cl: connection_lost()
-
-    STATE_INIT = 0
-    STATE_CON_MADE = 1
-    STATE_EOF = 2
-    STATE_CON_LOST = 3
-
-
 cpdef aiofn_set_result_unless_cancelled(fut, result)
 cdef NoResult aiofn_set_nodelay(sock) except NoResult.EXC
 cpdef aiofn_set_socket_extra_info(object extra, object sock)

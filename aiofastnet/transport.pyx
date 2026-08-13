@@ -68,6 +68,7 @@ cdef class Transport:
         self._protocol_buffered = False
         self._protocol_aiofn = False
         self._protocol_connected = False
+        self._protocol_eof_received = False
 
         self._extra = {}
 
@@ -177,6 +178,9 @@ cdef class Transport:
         self._fatal_error(exc, message)
 
     cpdef _call_protocol_connection_made(self):
+        if self._protocol_connected or self._connection_lost_scheduled:
+            return
+
         self._protocol_connected = True
         self._protocol.connection_made(self)
 
@@ -196,6 +200,10 @@ cdef class Transport:
             aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.')
 
     cdef object _call_protocol_eof_received(self):
+        if not self._protocol_connected or self._protocol_eof_received:
+            return None
+
+        self._protocol_eof_received = True
         try:
             return self._protocol.eof_received()
         except:

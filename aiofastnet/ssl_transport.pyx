@@ -19,7 +19,6 @@ from . import constants
 from .utils cimport (
     NoResult,
     SSLProtocolState,
-    AppProtocolState,
     aiofn_unpack_simple_buffer,
     aiofn_maybe_copy_buffer,
     aiofn_maybe_copy_buffer_tail,
@@ -103,7 +102,6 @@ cdef class SSLTransportBase(Transport):
         Py_ssize_t _write_backlog_size
 
         SSLProtocolState _state
-        AppProtocolState _app_state
         object _ssl_handshake_complete_waiter
         object _ssl_handshake_timeout
         object _ssl_shutdown_timeout
@@ -225,7 +223,6 @@ cdef class SSLTransportBase(Transport):
         self._server_side = server_side
         self._server_hostname = None if server_side else server_hostname
         self._state = SSLProtocolState.UNWRAPPED
-        self._app_state = AppProtocolState.STATE_INIT
         self._data_received_max_size = constants.DATA_RECEIVED_MAX_SIZE
         self._max_read_bytes_per_cycle_hint = constants.MAX_READ_BYTES_PER_CYCLE_HINT
 
@@ -865,14 +862,12 @@ cdef class SSLTransportBase(Transport):
                 return aiofn_maybe_copy_buffer_tail(data, data_ptr, data_len)
 
     cpdef _call_protocol_connection_made(self):
-        if self._app_state == AppProtocolState.STATE_INIT:
-            self._app_state = AppProtocolState.STATE_CON_MADE
-            try:
-                Transport._call_protocol_connection_made(self)
-            except (KeyboardInterrupt, SystemExit):
-                raise
-            except Exception as exc:
-                self._fatal_error_no_close(exc, "user connection_made raised an exception")
+        try:
+            Transport._call_protocol_connection_made(self)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:
+            self._fatal_error_no_close(exc, "user connection_made raised an exception")
 
     cpdef _call_protocol_connection_lost(self, protocol, exc):
         try:
@@ -883,11 +878,9 @@ cdef class SSLTransportBase(Transport):
             self._fatal_error_no_close(exc, "user connection_lost raised an exception")
 
     cdef object _call_protocol_eof_received(self):
-        if self._app_state == AppProtocolState.STATE_CON_MADE:
-            self._app_state = AppProtocolState.STATE_EOF
-            keep_open = Transport._call_protocol_eof_received(self)
-            if keep_open:
-                _logger.warning('returning true from eof_received() has no effect when using ssl')
+        keep_open = Transport._call_protocol_eof_received(self)
+        if keep_open:
+            _logger.warning('returning true from eof_received() has no effect when using ssl')
 
         return None
 
@@ -1302,8 +1295,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
 
     cpdef _call_connection_lost(self, exc):
         try:
-            if self._protocol_connected and self._app_state in (AppProtocolState.STATE_CON_MADE, AppProtocolState.STATE_EOF):
-                self._app_state = AppProtocolState.STATE_CON_LOST
+            if self._protocol_connected:
                 self._protocol_connected = False
                 self._call_protocol_connection_lost(self._protocol, exc)
         finally:
@@ -1409,10 +1401,7 @@ cdef class SSLTransport_Transport(SSLTransportBase):
         self._is_aiofn_transport = False
         self._is_direct_engine = SSLEngineDirect is not None and isinstance(self._ssl_engine, SSLEngineDirect)
 
-        if call_connection_made:
-            self._app_state = AppProtocolState.STATE_INIT
-        else:
-            self._app_state = AppProtocolState.STATE_CON_MADE
+        if not call_connection_made:
             self._protocol_connected = True
 
     cpdef get_tls_protocol(self):
@@ -1446,8 +1435,7 @@ cdef class SSLTransport_Transport(SSLTransportBase):
             self._clear_write_backlog(exc)
         self._ssl_engine.outgoing_bio_reset()
 
-        if self._app_state in (AppProtocolState.STATE_CON_MADE, AppProtocolState.STATE_EOF):
-            self._app_state = AppProtocolState.STATE_CON_LOST
+        if self._protocol_connected:
             # Force lookup of the Python cpdef wrapper instead of converting the C vtable entry.
             self._loop.call_soon((<object> self)._call_protocol_connection_lost,
                                  self._protocol, exc)

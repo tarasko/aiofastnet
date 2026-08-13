@@ -18,6 +18,7 @@ cdef class Transport:
         bint _protocol_buffered
         bint _protocol_aiofn
         bint _protocol_connected
+        bint _protocol_eof_received
         dict _extra
 
         bint _read_paused
