@@ -90,6 +90,18 @@ cdef class Protocol:
     cpdef Py_ssize_t get_local_write_buffer_size(self) except -1
 
 
+cdef class WriteRequest:
+    cdef:
+        object data
+        char *ptr
+        Py_ssize_t size
+
+
+cdef WriteRequest make_write_request(object data)
+cdef WriteRequest make_write_request_from_ptr(char *ptr, Py_ssize_t size)
+cdef WriteRequest make_write_request_tail(object data, char *ptr, Py_ssize_t size)
+
+
 cdef class WriteWatermarks:
     cdef:
         object _loop

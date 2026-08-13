@@ -484,7 +484,7 @@ cdef void _action_callback(aiofn_loop_action_t *action) noexcept with gil:
         loop._backend_failed(exc)
 
 
-cdef class _ProactorContext:
+cdef class ProactorContext:
     cdef inline NoResult check_status(self, aiofn_loop_status status) except NoResult.EXC:
         (<LoopBase>self.loop)._check_status(status)
         return NoResult.OK
@@ -493,13 +493,13 @@ cdef class _ProactorContext:
         (<LoopBase>self.loop)._backend_failed(exc)
         return NoResult.OK
 
-    cdef inline _ProactorSocket wrap_socket(self, object sock):
+    cdef inline ProactorSocket wrap_socket(self, object sock):
         cdef:
             int fd = _fileobj_to_fileno_obj(sock)
-            _ProactorSocket result = self.sockets.get(fd)
+            ProactorSocket result = self.sockets.get(fd)
 
         if result is None:
-            result = <_ProactorSocket>_ProactorSocket.__new__(_ProactorSocket)
+            result = <ProactorSocket>ProactorSocket.__new__(ProactorSocket)
             result.context = self
             result.owner = None
             result.write_in_progress = False
@@ -512,7 +512,7 @@ cdef class _ProactorContext:
 
         return result
 
-    cdef inline NoResult unwrap_socket(self, _ProactorSocket sock) except NoResult.EXC:
+    cdef inline NoResult unwrap_socket(self, ProactorSocket sock) except NoResult.EXC:
         if not sock.write_in_progress and sock.backend_sock.backend_token != NULL:
             self.check_status(self.proactor.unwrap_socket(self.backend.state, &sock.backend_sock))
             self.sockets.pop(sock.backend_sock.fd, None)
@@ -520,17 +520,17 @@ cdef class _ProactorContext:
         return NoResult.OK
 
     cdef NoResult close(self) except NoResult.EXC:
-        cdef _ProactorSocket sock
+        cdef ProactorSocket sock
 
         for socket_obj in tuple(self.sockets.values()):
-            sock = <_ProactorSocket>socket_obj
+            sock = <ProactorSocket>socket_obj
             self.check_status(self.proactor.unwrap_socket(self.backend.state, &sock.backend_sock))
             sock.owner = None
         self.sockets = None
         return NoResult.OK
 
 
-cdef class _ProactorSocket:
+cdef class ProactorSocket:
     pass
 
 
@@ -570,7 +570,7 @@ cdef class LoopBase:
 
         aiofn_loop_backend_t *_backend
         const aiofn_reactor_backend_t *_reactor
-        _ProactorContext _proactor_context
+        ProactorContext _proactor_context
         object _backend_owner
         str _backend_name
         object _backend_fatal_error
@@ -634,7 +634,7 @@ cdef class LoopBase:
         cdef:
             aiofn_loop_backend_t *backend_ptr
             const aiofn_proactor_backend_t *proactor
-            _ProactorContext proactor_context
+            ProactorContext proactor_context
 
         if not PyCapsule_CheckExact(backend):
             raise TypeError("backend must be an aiofastnet loop backend capsule")
@@ -668,7 +668,7 @@ cdef class LoopBase:
                     proactor.write == NULL or proactor.cancel == NULL):
                 raise ValueError("loop backend proactor is missing a required operation")
 
-            proactor_context = <_ProactorContext>_ProactorContext.__new__(_ProactorContext)
+            proactor_context = <ProactorContext>ProactorContext.__new__(ProactorContext)
             proactor_context.loop = self
             proactor_context.backend = backend_ptr
             proactor_context.proactor = proactor

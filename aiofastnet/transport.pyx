@@ -337,20 +337,15 @@ cdef SendFileRequest _make_send_file_request(file, offset, count):
 cdef class WriteRequest:
     """Own an immutable write buffer and its current unsent memory range."""
 
-    cdef:
-        object data
-        char* ptr
-        Py_ssize_t size
 
-
-cdef WriteRequest _make_write_request(object data):
+cdef WriteRequest make_write_request(object data):
     cdef WriteRequest req = <WriteRequest>WriteRequest.__new__(WriteRequest)
     req.data = aiofn_maybe_copy_buffer(data)
     aiofn_unpack_simple_buffer(req.data, &req.ptr, &req.size, 0)
     return req
 
 
-cdef WriteRequest _make_write_request_from_ptr(char* ptr, Py_ssize_t size):
+cdef WriteRequest make_write_request_from_ptr(char* ptr, Py_ssize_t size):
     cdef WriteRequest req = <WriteRequest>WriteRequest.__new__(WriteRequest)
     req.data = PyBytes_FromStringAndSize(ptr, size)
     req.ptr = PyBytes_AS_STRING(req.data)
@@ -358,7 +353,7 @@ cdef WriteRequest _make_write_request_from_ptr(char* ptr, Py_ssize_t size):
     return req
 
 
-cdef WriteRequest _make_write_request_tail(object data, char* ptr, Py_ssize_t size):
+cdef WriteRequest make_write_request_tail(object data, char* ptr, Py_ssize_t size):
     cdef WriteRequest req = <WriteRequest>WriteRequest.__new__(WriteRequest)
     req.data = aiofn_maybe_copy_buffer_tail(data, ptr, size)
     aiofn_unpack_simple_buffer(req.data, &req.ptr, &req.size, 0)
@@ -650,7 +645,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
                 # Not all was written; register write handler.
                 self._ensure_writer()
             else:
-                req = _make_write_request(data)
+                req = make_write_request(data)
 
             self._write_backlog.append(req)
             self._write_backlog_size += req.size
@@ -732,14 +727,14 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
                 total_bytes_sent -= data_len
                 continue
             elif total_bytes_sent <= 0:
-                req = _make_write_request(data)
+                req = make_write_request(data)
                 self._write_backlog.append(req)
                 self._write_backlog_size += req.size
             else:
                 data_ptr += total_bytes_sent
                 data_len -= total_bytes_sent
                 total_bytes_sent = 0
-                req = _make_write_request_tail(data, data_ptr, data_len)
+                req = make_write_request_tail(data, data_ptr, data_len)
                 self._write_backlog.append(req)
                 self._write_backlog_size += req.size
 
@@ -789,7 +784,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
                 # Not all was written; register write handler.
                 self._ensure_writer()
             else:
-                req = _make_write_request_from_ptr(ptr, sz)
+                req = make_write_request_from_ptr(ptr, sz)
 
             self._write_backlog.append(req)
             self._write_backlog_size += req.size
@@ -830,9 +825,9 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
             data_len -= bytes_sent
 
         if data is None:
-            return _make_write_request_from_ptr(data_ptr, data_len)
+            return make_write_request_from_ptr(data_ptr, data_len)
         else:
-            return _make_write_request_tail(data, data_ptr, data_len)
+            return make_write_request_tail(data, data_ptr, data_len)
 
     cdef inline NoResult _adjust_write_backlog(self, Py_ssize_t bytes_sent) except NoResult.EXC:
         cdef:

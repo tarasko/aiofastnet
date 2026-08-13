@@ -13,14 +13,21 @@ from .loop_backend cimport (
     aiofn_loop_proactor_op_t,
     aiofn_loop_status,
 )
-from .loop_base cimport _ProactorContext, _ProactorSocket
-from .transport cimport Protocol, Transport, WriteWatermarks
+from .loop_base cimport ProactorContext, ProactorSocket
+from .transport cimport (
+    Protocol,
+    Transport,
+    WriteRequest,
+    WriteWatermarks,
+    make_write_request,
+    make_write_request_from_ptr,
+    make_write_request_tail,
+)
 from .utils cimport (
     NoResult,
     aiofn_allocate_bytes,
     aiofn_finalize_bytes,
     aiofn_iovec,
-    aiofn_maybe_copy_buffer,
     aiofn_set_nodelay,
     aiofn_set_socket_extra_info,
     aiofn_unpack_simple_buffer,
@@ -31,7 +38,6 @@ from .utils cimport (
 
 from .utils import aiofn_set_result_unless_cancelled
 
-from cpython.bytes cimport PyBytes_FromStringAndSize
 from cpython.object cimport PyObject
 from cpython.ref cimport Py_XDECREF
 
@@ -42,38 +48,11 @@ cdef:
     size_t _log_threshold_for_connlost_writes = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
 
 
-cdef class _ProactorTransportWriteRequest:
-    cdef:
-        object data
-        char *ptr
-        Py_ssize_t size
-
-
-cdef inline _ProactorTransportWriteRequest _make_proactor_transport_write_request(object data):
-    cdef _ProactorTransportWriteRequest request = (
-        <_ProactorTransportWriteRequest>_ProactorTransportWriteRequest.__new__(_ProactorTransportWriteRequest)
-    )
-    request.data = aiofn_maybe_copy_buffer(data)
-    aiofn_unpack_simple_buffer(request.data, &request.ptr, &request.size, 0)
-    return request
-
-
-cdef inline _ProactorTransportWriteRequest _make_proactor_transport_write_request_tail(
-    object data,
-    Py_ssize_t bytes_sent,
-):
-    cdef _ProactorTransportWriteRequest request = _make_proactor_transport_write_request(data)
-    assert 0 <= bytes_sent < request.size
-    request.ptr += bytes_sent
-    request.size -= bytes_sent
-    return request
-
-
 cdef class ProactorSocketTransport(Transport):
     """Stream transport driven directly by a LoopBase proactor backend."""
 
     cdef:
-        _ProactorSocket _proactor_socket
+        ProactorSocket _proactor_socket
         object _file
         int _fileno
         object _server
@@ -94,7 +73,7 @@ cdef class ProactorSocketTransport(Transport):
         object _close_exc
         public bint _sendfile_compatible
 
-    def __init__(self, _ProactorContext context, loop, sock, protocol, waiter=None, server=None):
+    def __init__(self, ProactorContext context, loop, sock, protocol, waiter=None, server=None):
         Transport.__init__(self, loop)
         aiofn_set_nodelay(sock)
         sock.setblocking(False)
@@ -269,17 +248,18 @@ cdef class ProactorSocketTransport(Transport):
         self._write_watermarks.maybe_resume_protocol(self, self._protocol, self._get_write_buffer_size_nocheck())
         return NoResult.OK
 
-    cdef inline NoResult _append_write(self, object data) except NoResult.EXC:
-        cdef _ProactorTransportWriteRequest request = _make_proactor_transport_write_request(data)
+    cdef inline NoResult _append_write_request(self, WriteRequest request) except NoResult.EXC:
         if request.size:
             self._write_backlog.append(request)
             self._write_backlog_size += request.size
         return NoResult.OK
 
-    cdef inline NoResult _append_write_tail(self, object data, Py_ssize_t bytes_sent) except NoResult.EXC:
-        cdef _ProactorTransportWriteRequest request = _make_proactor_transport_write_request_tail(data, bytes_sent)
-        self._write_backlog.append(request)
-        self._write_backlog_size += request.size
+    cdef inline NoResult _append_write(self, object data) except NoResult.EXC:
+        self._append_write_request(make_write_request(data))
+        return NoResult.OK
+
+    cdef inline NoResult _append_write_tail(self, object data, char *ptr, Py_ssize_t size) except NoResult.EXC:
+        self._append_write_request(make_write_request_tail(data, ptr, size))
         return NoResult.OK
 
     cpdef write_nocheck(self, data):
@@ -311,7 +291,7 @@ cdef class ProactorSocketTransport(Transport):
                 if bytes_sent < 0:
                     bytes_sent = 0
 
-                self._append_write_tail(data, bytes_sent)
+                self._append_write_tail(data, data_ptr + bytes_sent, data_len - bytes_sent)
             else:
                 self._append_write(data)
 
@@ -383,7 +363,7 @@ cdef class ProactorSocketTransport(Transport):
                 total_bytes_sent -= data_len
                 continue
             if total_bytes_sent:
-                self._append_write_tail(data, total_bytes_sent)
+                self._append_write_tail(data, data_ptr + total_bytes_sent, data_len - total_bytes_sent)
                 total_bytes_sent = 0
             elif data_len:
                 self._append_write(data)
@@ -437,7 +417,7 @@ cdef class ProactorSocketTransport(Transport):
                 if bytes_sent < 0:
                     bytes_sent = 0
 
-            self._append_write(PyBytes_FromStringAndSize(ptr + bytes_sent, size - bytes_sent))
+            self._append_write_request(make_write_request_from_ptr(ptr + bytes_sent, size - bytes_sent))
             if not self._write_pending:
                 self._submit_write()
             self._maybe_pause_protocol()
@@ -447,7 +427,7 @@ cdef class ProactorSocketTransport(Transport):
 
     cdef NoResult _submit_write(self) except NoResult.EXC:
         cdef:
-            _ProactorTransportWriteRequest request
+            WriteRequest request
             size_t buffer_count = 0
             size_t submitted_size = 0
 
@@ -455,7 +435,7 @@ cdef class ProactorSocketTransport(Transport):
         assert self._write_backlog
 
         for request_obj in self._write_backlog:
-            request = <_ProactorTransportWriteRequest>request_obj
+            request = <WriteRequest>request_obj
             aiofn_loop_buffer_init(&self._write_buffers[buffer_count], request.ptr, <size_t>request.size)
             submitted_size += <size_t>request.size
             buffer_count += 1
@@ -483,12 +463,12 @@ cdef class ProactorSocketTransport(Transport):
         return NoResult.OK
 
     cdef inline NoResult _adjust_write_backlog(self, size_t bytes_sent) except NoResult.EXC:
-        cdef _ProactorTransportWriteRequest request
+        cdef WriteRequest request
 
         assert 0 < bytes_sent <= self._write_submitted_size
         self._write_backlog_size -= <Py_ssize_t>bytes_sent
         while bytes_sent:
-            request = <_ProactorTransportWriteRequest>self._write_backlog[0]
+            request = <WriteRequest>self._write_backlog[0]
             if <size_t>request.size <= bytes_sent:
                 bytes_sent -= <size_t>request.size
                 self._write_backlog.popleft()
