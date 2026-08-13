@@ -19,7 +19,7 @@ def _ensure_fd_no_transport(loop, py_sock):
     return fd
 
 
-def _wrap_sock_method_call(future, fn, *args):
+def _wrap_sock_ready_handler(future, fn, *args):
     # This nice utility helps us to centralized error handling when socket readiness is reported.
     # We can unit-test this function, instead of trying to simulate various errors for each api
     # This greatly improves coverage
@@ -31,6 +31,7 @@ def _wrap_sock_method_call(future, fn, *args):
     except (BlockingIOError, InterruptedError):
         return
     except BaseException as exc:
+        assert not future.done() # If fn set result on future it should be the very last operation
         future.set_exception(exc)
 
 
@@ -53,8 +54,7 @@ async def sock_connect(loop, py_sock, address):
         return await _get_original_loop_method(loop, "sock_connect")(py_sock, address)
 
     try:
-        py_sock.connect(address)
-        return
+        return py_sock.connect(address)
     except (BlockingIOError, InterruptedError):
         pass
 
@@ -68,7 +68,7 @@ async def sock_connect(loop, py_sock, address):
         else:
             future.set_result(None)
 
-    loop.add_writer(fd, lambda: _wrap_sock_method_call(future, ready))
+    loop.add_writer(fd, lambda: _wrap_sock_ready_handler(future, ready))
 
     future.add_done_callback(lambda _: loop.remove_writer(fd))
     return await future
@@ -96,7 +96,7 @@ async def sock_accept(loop, py_sock):
         conn.setblocking(False)
         future.set_result((conn, address))
 
-    loop.add_reader(fd, lambda: _wrap_sock_method_call(future, ready))
+    loop.add_reader(fd, lambda: _wrap_sock_ready_handler(future, ready))
     future.add_done_callback(lambda _: loop.remove_reader(fd))
 
     return await future
@@ -120,7 +120,7 @@ async def sock_recv(loop, py_sock, n):
     def ready():
         future.set_result(py_sock.recv(n))
 
-    loop.add_reader(fd, lambda: _wrap_sock_method_call(future, ready))
+    loop.add_reader(fd, lambda: _wrap_sock_ready_handler(future, ready))
 
     future.add_done_callback(lambda _: loop.remove_reader(fd))
     return await future
@@ -144,7 +144,7 @@ async def sock_recv_into(loop, py_sock, buf, **kwargs):
     def ready():
         future.set_result(py_sock.recv_into(buf, **kwargs))
 
-    loop.add_reader(fd, lambda: _wrap_sock_method_call(future, ready))
+    loop.add_reader(fd, lambda: _wrap_sock_ready_handler(future, ready))
 
     future.add_done_callback(lambda _: loop.remove_reader(fd))
     return await future
@@ -168,7 +168,7 @@ async def sock_recvfrom(loop, py_sock, bufsize):
     def ready():
         future.set_result(py_sock.recvfrom(bufsize))
 
-    loop.add_reader(fd, lambda: _wrap_sock_method_call(future, ready))
+    loop.add_reader(fd, lambda: _wrap_sock_ready_handler(future, ready))
 
     future.add_done_callback(lambda _: loop.remove_reader(fd))
     return await future
@@ -192,7 +192,7 @@ async def sock_recvfrom_into(loop, py_sock, buf, **kwargs):
     def ready():
         future.set_result(py_sock.recvfrom_into(buf, **kwargs))
 
-    loop.add_reader(fd, lambda: _wrap_sock_method_call(future, ready))
+    loop.add_reader(fd, lambda: _wrap_sock_ready_handler(future, ready))
 
     future.add_done_callback(lambda _: loop.remove_reader(fd))
     return await future
@@ -216,7 +216,7 @@ async def sock_sendto(loop, py_sock, data, address):
     def ready():
         future.set_result(py_sock.sendto(data, address))
 
-    loop.add_writer(fd, lambda: _wrap_sock_method_call(future, ready))
+    loop.add_writer(fd, lambda: _wrap_sock_ready_handler(future, ready))
 
     future.add_done_callback(lambda _: loop.remove_writer(fd))
     return await future
@@ -247,6 +247,6 @@ async def sock_sendall(loop, py_sock, data):
             future.set_result(None)
 
     fd = _ensure_fd_no_transport(loop, py_sock)
-    loop.add_writer(fd, lambda: _wrap_sock_method_call(future, ready))
+    loop.add_writer(fd, lambda: _wrap_sock_ready_handler(future, ready))
     future.add_done_callback(lambda _: loop.remove_writer(fd))
     return await future
