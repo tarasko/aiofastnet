@@ -14,10 +14,10 @@ The transport hierarchy is:
         |-- SSLTransport_Socket
         `-- SSLTransport_Transport
 
-Transport owns loop/thread/debug state and the validated public write methods.
-SelectorTransport owns descriptor, protocol, read-readiness, and connection
-lifecycle state. SelectorWritableTransport adds state shared by all writable
-selector transports. SelectorStreamTransport implements ordered byte-stream writes.
+Transport owns protocol/lifecycle state, loop/thread/debug state, and the validated
+public write methods. SelectorTransport owns descriptor and read-readiness state.
+SelectorWritableTransport adds state shared by all writable selector transports.
+SelectorStreamTransport implements ordered byte-stream writes.
 """
 
 import collections
@@ -64,6 +64,17 @@ cdef class Transport:
         self._thread_id = PyThread_get_thread_ident()
         self._is_debug = loop.get_debug()
 
+        self._protocol = None
+        self._protocol_buffered = False
+        self._protocol_aiofn = False
+        self._protocol_connected = False
+
+        self._extra = {}
+
+        self._read_paused = False
+        self._connection_lost_scheduled = False
+        self._closing = False
+
     cdef inline NoResult _check_thread(self, meth) except NoResult.EXC:
         cdef unsigned long curr_thread_id = PyThread_get_thread_ident()
         if self._thread_id != curr_thread_id:
@@ -72,6 +83,147 @@ cdef class Transport:
                 f"transport thread id={self._thread_id}, "
                 f"curr thread_id={curr_thread_id}"
             )
+
+    cdef inline NoResult _set_protocol(self, protocol) except NoResult.EXC:
+        self._protocol = protocol
+        self._protocol_buffered = aiofn_is_buffered_protocol(protocol)
+        self._protocol_aiofn = isinstance(protocol, Protocol)
+        return NoResult.OK
+
+    cpdef set_protocol(self, protocol):
+        self._check_thread("set_protocol")
+        self._set_protocol(protocol)
+
+    cpdef get_protocol(self):
+        self._check_thread("get_protocol")
+        return self._protocol
+
+    cpdef get_extra_info(self, name, default=None):
+        self._check_thread("get_extra_info")
+        return self._extra.get(name, default)
+
+    cpdef is_closing(self):
+        self._check_thread("is_closing")
+        return self._closing
+
+    cpdef is_reading(self):
+        self._check_thread("is_reading")
+        return not self._closing and not self._read_paused
+
+    cpdef pause_reading(self):
+        self._check_thread("pause_reading")
+        if self._closing or self._read_paused:
+            return
+
+        self._stop_reading()
+        self._read_paused = True
+
+        if unlikely(self._is_debug):
+            _logger.debug("%r pauses reading", self)
+
+    cpdef resume_reading(self):
+        self._check_thread("resume_reading")
+        if self._closing or not self._read_paused:
+            return
+
+        self._start_reading()
+        self._read_paused = False
+
+        if unlikely(self._is_debug):
+            _logger.debug("%r resumes reading", self)
+
+    cpdef abort(self):
+        self._check_thread("abort")
+        self._force_close(None)
+
+    cdef NoResult _start_reading(self) except NoResult.EXC:
+        raise NotImplementedError()
+
+    cdef NoResult _stop_reading(self) except NoResult.EXC:
+        raise NotImplementedError()
+
+    cpdef _force_close(self, exc):
+        raise NotImplementedError()
+
+    cdef NoResult _fatal_error(self, exc, message='Fatal error on transport') except NoResult.EXC:
+        if self._should_report_fatal_error(exc):
+            self._report_protocol_exception(exc, message)
+        elif unlikely(self._is_debug):
+            _logger.debug("%r: %s", self, message, exc_info=True)
+
+        self._force_close(exc)
+
+    cdef inline NoResult _report_protocol_exception(self, exc, message) except NoResult.EXC:
+        self._loop.call_exception_handler({
+            'message': message,
+            'exception': exc,
+            'transport': self,
+            'protocol': self._protocol,
+        })
+
+    cdef bint _should_report_fatal_error(self, exc) except -1:
+        return True
+
+    cdef NoResult _handle_error(self, message) except NoResult.EXC:
+        _, exc, _ = sys.exc_info()
+
+        if unlikely(self._is_debug):
+            _logger.debug("%r: _handle_error(%s), exc=%s", self, message, exc)
+
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+
+        message = getattr(exc, constants.EXC_INFO_ATTR, message)
+        self._fatal_error(exc, message)
+
+    cpdef _call_protocol_connection_made(self):
+        self._protocol_connected = True
+        self._protocol.connection_made(self)
+
+    cdef inline NoResult _notify_protocol_connection_lost(self, exc) except NoResult.EXC:
+        if self._protocol_connected:
+            self._protocol_connected = False
+            self._protocol.connection_lost(exc)
+        return NoResult.OK
+
+    cdef inline NoResult _call_protocol_data_received(self, data) except NoResult.EXC:
+        try:
+            if self._protocol_aiofn:
+                (<Protocol> self._protocol).data_received(data)
+            else:
+                self._protocol.data_received(data)
+        except:
+            aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.')
+
+    cdef object _call_protocol_eof_received(self):
+        try:
+            return self._protocol.eof_received()
+        except:
+            aiofn_add_info_and_reraise('Fatal error: protocol.eof_received() call failed.')
+
+    cdef inline object _call_protocol_get_buffer(self, char** buf_ptr, Py_ssize_t* buf_len):
+        try:
+            if self._protocol_aiofn:
+                buf = (<Protocol> self._protocol).get_buffer_c(-1, buf_ptr, buf_len)
+            else:
+                buf = self._protocol.get_buffer(-1)
+                aiofn_unpack_simple_buffer(buf, buf_ptr, buf_len, PyBUF_WRITABLE)
+
+            if buf_len[0] == 0:
+                raise RuntimeError('get_buffer() returned an empty buffer')
+
+            return buf
+        except:
+            aiofn_add_info_and_reraise('Fatal error: protocol.get_buffer() call failed.')
+
+    cdef inline NoResult _call_protocol_buffer_updated(self, Py_ssize_t bytes_read) except NoResult.EXC:
+        try:
+            if self._protocol_aiofn:
+                (<Protocol> self._protocol).buffer_updated(bytes_read)
+            else:
+                self._protocol.buffer_updated(bytes_read)
+        except:
+            aiofn_add_info_and_reraise('Fatal error: protocol.buffer_updated() call failed.')
 
     def write(self, data):
         self._check_thread("write")
@@ -261,28 +413,16 @@ cdef class WriteWatermarks:
 
 
 cdef class SelectorTransport(Transport):
-    """Manage common selector descriptor, protocol, read, and close state."""
+    """Manage a nonblocking descriptor and its selector read registration."""
 
     cdef:
-        object _protocol
-        bint _protocol_buffered
-        bint _protocol_aiofn
-        bint _protocol_connected
-        dict _extra
-
         object _file
         object _fileno_obj
         int _fileno
         bint _is_socket
 
-        bint _read_paused
-
-        bint _connection_lost_scheduled
-        bint _closing
-
     def __init__(self, loop, file, protocol):
         Transport.__init__(self, loop)
-        self._extra = {}
         self._file = file
         self._fileno_obj = file.fileno()
         self._fileno = self._fileno_obj
@@ -291,11 +431,6 @@ cdef class SelectorTransport(Transport):
             file.setblocking(False)
         else:
             os.set_blocking(self._fileno_obj, False)
-
-        self._read_paused = False
-
-        self._connection_lost_scheduled = False
-        self._closing = False
 
         self.set_protocol(protocol)
 
@@ -315,76 +450,14 @@ cdef class SelectorTransport(Transport):
             warnings.warn(f"unclosed {self.__class__.__name__} for {self._file}", ResourceWarning, source=self)
             self._file.close()
 
-    cpdef set_protocol(self, protocol):
-        self._check_thread("set_protocol")
-        self._protocol = protocol
-        self._protocol_buffered = aiofn_is_buffered_protocol(protocol)
-        self._protocol_aiofn = isinstance(protocol, Protocol)
-        self._protocol_connected = True
-
-    cpdef get_protocol(self):
-        self._check_thread("get_protocol")
-        return self._protocol
-
-    cpdef get_extra_info(self, name, default=None):
-        self._check_thread("get_extra_info")
-        return self._extra.get(name, default)
-
-    cpdef is_closing(self):
-        self._check_thread("is_closing")
-        return self._closing
-
-    cpdef is_reading(self):
-        self._check_thread("is_reading")
-        return not self._closing and not self._read_paused
-
-    cpdef pause_reading(self):
-        self._check_thread("pause_reading")
-        if self._closing or self._read_paused:
-            return
-
+    cdef NoResult _stop_reading(self) except NoResult.EXC:
         self._loop.remove_reader(self._fileno_obj)
-        self._read_paused = True
 
-        if unlikely(self._is_debug):
-            _logger.debug("%r pauses reading", self)
-
-    cpdef resume_reading(self):
-        self._check_thread("resume_reading")
-        if self._closing or not self._read_paused:
-            return
-
+    cdef NoResult _start_reading(self) except NoResult.EXC:
         self._loop.add_reader(self._fileno_obj, self._read_ready)
-        self._read_paused = False
-
-        if unlikely(self._is_debug):
-            _logger.debug("%r resumes reading", self)
-
-    cpdef abort(self):
-        self._check_thread("abort")
-        self._force_close(None)
 
     cpdef close(self):
         self.abort()
-
-    cdef inline NoResult _fatal_error(self, exc, message='Fatal error on transport') except NoResult.EXC:
-        if self._should_report_fatal_error(exc):
-            self._report_protocol_exception(exc, message)
-        elif unlikely(self._is_debug):
-            _logger.debug("%r: %s", self, message, exc_info=True)
-
-        self._force_close(exc)
-
-    cdef inline NoResult _report_protocol_exception(self, exc, message) except NoResult.EXC:
-        self._loop.call_exception_handler({
-            'message': message,
-            'exception': exc,
-            'transport': self,
-            'protocol': self._protocol,
-        })
-
-    cdef bint _should_report_fatal_error(self, exc) except -1:
-        return True
 
     # May be used by create_connection/create_server
     # Keep cpdef
@@ -397,41 +470,17 @@ cdef class SelectorTransport(Transport):
         self._connection_lost_scheduled = True
         self._loop.call_soon(self._call_connection_lost, exc)
 
-    cdef inline NoResult _call_protocol_data_received(self, data) except NoResult.EXC:
-        try:
-            if self._protocol_aiofn:
-                (<Protocol> self._protocol).data_received(data)
-            else:
-                self._protocol.data_received(data)
-        except:
-            aiofn_add_info_and_reraise('Fatal error: protocol.data_received() call failed.')
-
-    cdef inline _call_protocol_eof_received(self):
-        try:
-            return self._protocol.eof_received()
-        except:
-            aiofn_add_info_and_reraise('Fatal error: protocol.eof_received() call failed.')
+    def _read_ready(self):
+        raise NotImplementedError()
 
     def _call_connection_lost(self, exc):
         try:
-            if self._protocol_connected:
-                self._protocol.connection_lost(exc)
+            self._notify_protocol_connection_lost(exc)
         finally:
             self._file.close()
             self._file = None
             self._protocol = None
 
-    cdef inline NoResult _handle_error(self, message) except NoResult.EXC:
-        _, exc, _ = sys.exc_info()
-
-        if unlikely(self._is_debug):
-            _logger.debug("%r: _handle_error(%s), exc=%s", self, message, exc)
-
-        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-            raise
-
-        message = getattr(exc, constants.EXC_INFO_ATTR, message)
-        self._fatal_error(exc, message)
 
 cdef class SelectorWritableTransport(SelectorTransport):
     """Manage write backlog, readiness, flow control, and close state.
@@ -894,7 +943,7 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
         aiofn_set_socket_extra_info(self._extra, sock)
         self._sendfile_compatible = os.name != 'nt'
 
-        self._loop.call_soon(self._protocol.connection_made, self)
+        self._loop.call_soon((<object>self)._call_protocol_connection_made)
         # only start reading when connection_made() has been called
         self._loop.call_soon(self._loop.add_reader,
                              self._fileno_obj, self._read_ready)
@@ -1020,30 +1069,6 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
         else:
             self.close()
 
-    cdef inline _call_protocol_get_buffer(self, char** buf_ptr, Py_ssize_t* buf_len):
-        try:
-            if self._protocol_aiofn:
-                buf = (<Protocol> self._protocol).get_buffer_c(-1, buf_ptr, buf_len)
-            else:
-                buf = self._protocol.get_buffer(-1)
-                aiofn_unpack_simple_buffer(buf, buf_ptr, buf_len, PyBUF_WRITABLE)
-
-            if buf_len[0] == 0:
-                raise RuntimeError('get_buffer() returned an empty buffer')
-
-            return buf
-        except:
-            aiofn_add_info_and_reraise('Fatal error: protocol.get_buffer() call failed.')
-
-    cdef inline NoResult _call_protocol_buffer_updated(self, Py_ssize_t bytes_read) except NoResult.EXC:
-        try:
-            if self._protocol_aiofn:
-                (<Protocol> self._protocol).buffer_updated(bytes_read)
-            else:
-                self._protocol.buffer_updated(bytes_read)
-        except:
-            aiofn_add_info_and_reraise('Fatal error: protocol.buffer_updated() call failed.')
-
     cdef NoResult _write_eof_now(self) except NoResult.EXC:
         self._file.shutdown(socket.SHUT_WR)
         if unlikely(self._is_debug):
@@ -1112,7 +1137,7 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
         self._header_size = 8
         self._has_connection = self._extra['peername'] is not None
 
-        self._loop.call_soon(self._protocol.connection_made, self)
+        self._loop.call_soon((<object>self)._call_protocol_connection_made)
         # only start reading when connection_made() has been called
         self._loop.call_soon(self._loop.add_reader,
                              self._fileno_obj, self._read_ready)
@@ -1288,7 +1313,7 @@ cdef class SelectorReadPipeTransport(SelectorTransport):
         self._extra['pipe'] = pipe
         self._is_socket = False
 
-        self._loop.call_soon(self._protocol.connection_made, self)
+        self._loop.call_soon((<object>self)._call_protocol_connection_made)
         # only start reading when connection_made() has been called
         self._loop.call_soon(self._loop.add_reader,
                              self._fileno_obj, self._read_ready)
@@ -1338,7 +1363,7 @@ cdef class SelectorWritePipeTransport(SelectorStreamTransport):
         self._extra['pipe'] = pipe
         self._is_socket = False
 
-        self._loop.call_soon(self._protocol.connection_made, self)
+        self._loop.call_soon((<object>self)._call_protocol_connection_made)
 
         # On AIX, the reader trick (to be notified when the read end of the
         # socket is closed) only works for sockets. On other platforms it
