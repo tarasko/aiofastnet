@@ -12,6 +12,16 @@ from .api_create_unix_connection import create_unix_connection
 from .api_create_unix_server import create_unix_server
 from .api_pipe import connect_read_pipe, connect_write_pipe
 from .api_sendfile import sendfile
+from .api_sock import (
+    sock_accept,
+    sock_connect,
+    sock_recv,
+    sock_recv_into,
+    sock_recvfrom,
+    sock_recvfrom_into,
+    sock_sendall,
+    sock_sendto,
+)
 from .api_start_tls import start_tls
 from .wrapped_transport import (
     _AIOFASTNET_ORIGINAL_ATTR,
@@ -28,6 +38,14 @@ _PATCHABLE_METHODS = {
     "create_unix_server": create_unix_server,
     "start_tls": start_tls,
     "sendfile": sendfile,
+    "sock_accept": sock_accept,
+    "sock_connect": sock_connect,
+    "sock_recv": sock_recv,
+    "sock_recv_into": sock_recv_into,
+    "sock_recvfrom": sock_recvfrom,
+    "sock_recvfrom_into": sock_recvfrom_into,
+    "sock_sendall": sock_sendall,
+    "sock_sendto": sock_sendto,
 }
 
 
@@ -43,7 +61,7 @@ def patch_loop(
     The loop's ``create_connection``, ``create_datagram_endpoint``,
     ``create_unix_connection``, ``create_server``, ``create_unix_server``,
     ``connect_read_pipe``, ``connect_write_pipe``, ``start_tls``, and
-    ``sendfile`` methods are replaced.
+    ``sendfile``, and ``sock_*`` methods are replaced.
 
     The patch is idempotent. Original loop methods are retained on the loop so
     aiofastnet's compatibility fallbacks, such as Windows ProactorEventLoop
@@ -66,7 +84,11 @@ def patch_loop(
     for name, aiofn_method in _PATCHABLE_METHODS.items():
         if name in patched:
             continue
-        originals[name] = getattr(loop, name)
+        original = getattr(loop, name, None)
+        # recvfrom APIs were added to asyncio after Python 3.9, so only patch methods provided by the underlying loop.
+        if original is None:
+            continue
+        originals[name] = original
         setattr(loop, name, partial(aiofn_method, loop))
         patched.add(name)
 

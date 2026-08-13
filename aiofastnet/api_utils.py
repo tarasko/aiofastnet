@@ -180,7 +180,7 @@ async def _create_connection_transport(
     return transport, protocol
 
 
-def _check_ssl_socket(sock):
+def _check_non_ssl_socket(sock):
     if isinstance(sock, ssl.SSLSocket):
         raise TypeError("Socket cannot be of type SSLSocket")
 
@@ -499,3 +499,8 @@ def _set_reuseport(sock):
         except OSError:
             raise ValueError('reuse_port not supported by socket module, '
                              'SO_REUSEPORT defined but not implemented.')
+
+
+def _check_nonblocking_socket(py_sock):
+    if py_sock.getblocking():
+        raise ValueError("the socket must be non-blocking")

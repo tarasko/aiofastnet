@@ -1,6 +1,8 @@
 import asyncio
 import warnings
+from functools import partial
 
+import aiofastnet
 from aiofastnet import install_policy, loop_factory, patch_loop
 from aiofastnet.transport import Transport
 from aiofastnet.wrapped_transport import (
@@ -8,6 +10,17 @@ from aiofastnet.wrapped_transport import (
     _AIOFASTNET_PATCHED_ATTR,
 )
 from tests.utils import TestClient, TestServer
+
+SOCK_METHODS = (
+    "sock_accept",
+    "sock_connect",
+    "sock_recv",
+    "sock_recv_into",
+    "sock_recvfrom",
+    "sock_recvfrom_into",
+    "sock_sendall",
+    "sock_sendto",
+)
 
 
 async def test_patch_loop_is_idempotent():
@@ -32,6 +45,27 @@ async def test_patch_loop_is_idempotent():
         loop.create_datagram_endpoint
     assert "create_datagram_endpoint" in getattr(
         loop, _AIOFASTNET_PATCHED_ATTR)
+
+
+async def test_patch_loop_patches_sock_methods(all_loops):
+    loop = asyncio.get_running_loop()
+    original_methods = {
+        name: getattr(loop, name)
+        for name in SOCK_METHODS
+        if hasattr(loop, name)
+    }
+
+    patch_loop(loop)
+
+    originals = getattr(loop, _AIOFASTNET_ORIGINAL_ATTR)
+    patched = getattr(loop, _AIOFASTNET_PATCHED_ATTR)
+    for name, original_method in original_methods.items():
+        patched_method = getattr(loop, name)
+        assert originals[name] == original_method
+        assert isinstance(patched_method, partial)
+        assert patched_method.func is getattr(aiofastnet, name)
+        assert patched_method.args == (loop,)
+        assert name in patched
 
 
 def test_loop_factory_sets_and_patches_current_loop():

@@ -5,10 +5,11 @@ aiofastnet Release History
    :depth: 1
    :local:
 
-1.0.6
+1.1.0
 ------------------
 
 * Added missing support for AF_UNIX addresses to SelectorDatagramTransport.sendto
+* Added async sock_* methods. Implemented on top of read/write socket readiness.
 
 1.0.5
 ------------------
