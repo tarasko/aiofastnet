@@ -67,6 +67,10 @@ async def test_wrap_sock_ready_handler_rejects_error_after_completion(selector_l
     assert future.result() == "done"
 
 
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="bound non-listening TCP port is rejected promptly only on Linux",
+)
 async def test_sock_connect_refused(selector_loop):
     loop = asyncio.get_running_loop()
     unavailable_server = socket.socket()
