@@ -25,5 +25,4 @@ cdef class ProactorSocket:
     cdef:
         ProactorContext context
         object owner
-        bint write_in_progress
         aiofn_loop_proactor_socket_t backend_sock

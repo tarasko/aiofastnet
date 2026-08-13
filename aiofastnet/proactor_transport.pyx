@@ -64,7 +64,6 @@ cdef class ProactorSocketTransport(Transport):
         object _write_backlog
         Py_ssize_t _write_backlog_size
         size_t _write_submitted_size
-        bint _write_pending
         aiofn_loop_proactor_op_t _write_op
         aiofn_loop_buffer_t _write_buffers[256]
 
@@ -92,7 +91,6 @@ cdef class ProactorSocketTransport(Transport):
         self._write_backlog = collections.deque()
         self._write_backlog_size = 0
         self._write_submitted_size = 0
-        self._write_pending = False
         self._write_op.callback = _proactor_transport_write_callback
         self._write_op.callback_data = <void *>self
         self._write_op.backend_token = NULL
@@ -281,7 +279,7 @@ cdef class ProactorSocketTransport(Transport):
 
         try:
             if self._write_backlog_size == 0:
-                assert not self._write_pending
+                assert self._write_submitted_size == 0
                 aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
                 bytes_sent = aiofn_write(self._fileno, data_ptr, data_len, True)
                 if unlikely(self._is_debug):
@@ -295,7 +293,7 @@ cdef class ProactorSocketTransport(Transport):
             else:
                 self._append_write(data)
 
-            if not self._write_pending:
+            if self._write_submitted_size == 0:
                 self._submit_write()
             self._maybe_pause_protocol()
         except:
@@ -383,12 +381,12 @@ cdef class ProactorSocketTransport(Transport):
 
         try:
             if self._write_backlog_size == 0:
-                assert not self._write_pending
+                assert self._write_submitted_size == 0
                 if self._try_write_lines(list_of_data, &total_bytes_sent):
                     return
 
             self._append_write_lines_tail(list_of_data, total_bytes_sent)
-            if self._write_backlog and not self._write_pending:
+            if self._write_backlog and self._write_submitted_size == 0:
                 self._submit_write()
             self._maybe_pause_protocol()
         except:
@@ -408,7 +406,7 @@ cdef class ProactorSocketTransport(Transport):
 
         try:
             if self._write_backlog_size == 0:
-                assert not self._write_pending
+                assert self._write_submitted_size == 0
                 bytes_sent = aiofn_write(self._fileno, ptr, size, True)
                 if unlikely(self._is_debug):
                     _logger.debug("%r: aiofn_write(..., len=%d)=%d", self, size, bytes_sent)
@@ -418,7 +416,7 @@ cdef class ProactorSocketTransport(Transport):
                     bytes_sent = 0
 
             self._append_write_request(make_write_request_from_ptr(ptr + bytes_sent, size - bytes_sent))
-            if not self._write_pending:
+            if self._write_submitted_size == 0:
                 self._submit_write()
             self._maybe_pause_protocol()
         except:
@@ -431,7 +429,7 @@ cdef class ProactorSocketTransport(Transport):
             size_t buffer_count = 0
             size_t submitted_size = 0
 
-        assert not self._write_pending
+        assert self._write_submitted_size == 0
         assert self._write_backlog
 
         for request_obj in self._write_backlog:
@@ -446,8 +444,6 @@ cdef class ProactorSocketTransport(Transport):
         self._write_op.backend_token = NULL
         self._write_op.status = AIOFN_LOOP_OK
         self._write_op.transferred = 0
-        self._write_pending = True
-        self._proactor_socket.write_in_progress = True
         try:
             self._proactor_socket.context.check_status(self._proactor_socket.context.proactor.write(
                 self._proactor_socket.context.backend.state,
@@ -457,8 +453,7 @@ cdef class ProactorSocketTransport(Transport):
                 buffer_count,
             ))
         except BaseException:
-            self._write_pending = False
-            self._proactor_socket.write_in_progress = False
+            self._write_submitted_size = 0
             raise
         return NoResult.OK
 
@@ -476,19 +471,20 @@ cdef class ProactorSocketTransport(Transport):
                 request.ptr += bytes_sent
                 request.size -= <Py_ssize_t>bytes_sent
                 bytes_sent = 0
+        self._write_submitted_size = 0
         return NoResult.OK
 
     cdef NoResult _write_completed(self, aiofn_loop_status status, size_t bytes_sent) except NoResult.EXC:
-        assert self._write_pending
-        self._write_pending = False
-        self._proactor_socket.write_in_progress = False
+        assert self._write_submitted_size > 0
 
         if self._finalizing_close:
+            self._write_submitted_size = 0
             self._clear_write_backlog()
             self._schedule_finalize_close()
             return NoResult.OK
 
         if status != AIOFN_LOOP_OK:
+            self._write_submitted_size = 0
             try:
                 self._proactor_socket.context.check_status(status)
             except BaseException as exc:
@@ -509,7 +505,7 @@ cdef class ProactorSocketTransport(Transport):
         return NoResult.OK
 
     cdef inline NoResult _clear_write_backlog(self) except NoResult.EXC:
-        assert not self._write_pending
+        assert self._write_submitted_size == 0
         self._write_backlog.clear()
         self._write_backlog_size = 0
         return NoResult.OK
@@ -539,7 +535,7 @@ cdef class ProactorSocketTransport(Transport):
         self.pause_reading()
         self._closing = True
         if not self._write_backlog:
-            assert not self._write_pending
+            assert self._write_submitted_size == 0
             self._finalizing_close = True
             self._schedule_finalize_close()
 
@@ -552,7 +548,7 @@ cdef class ProactorSocketTransport(Transport):
         self._finalizing_close = True
         self._close_exc = exc
 
-        if not self._write_pending:
+        if self._write_submitted_size == 0:
             self._clear_write_backlog()
             self._schedule_finalize_close()
 
@@ -563,7 +559,7 @@ cdef class ProactorSocketTransport(Transport):
         cdef object server
 
         assert self._read_paused
-        assert not self._write_pending
+        assert self._write_submitted_size == 0
         try:
             self._call_protocol_connection_lost(exc)
         finally:
