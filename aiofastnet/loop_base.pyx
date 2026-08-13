@@ -22,6 +22,16 @@ from .api_create_unix_server import create_unix_server
 from .api_pipe import connect_read_pipe, connect_write_pipe
 from .api_sendfile import sendfile
 from .api_start_tls import start_tls
+from .api_sock import (
+    sock_accept,
+    sock_connect,
+    sock_recv,
+    sock_recv_into,
+    sock_recvfrom,
+    sock_recvfrom_into,
+    sock_sendall,
+    sock_sendto
+)
 from .loop_backend cimport (
     AIOFN_LOOP_BACKEND_CAPSULE_NAME,
     AIOFN_LOOP_BACKEND_MIN_SIZE,
@@ -1108,6 +1118,15 @@ cdef class LoopBase:
     sendfile = sendfile
     start_tls = start_tls
 
+    sock_accept = sock_accept
+    sock_connect = sock_connect
+    sock_recv = sock_recv
+    sock_recv_into = sock_recv_into
+    sock_recvfrom = sock_recvfrom
+    sock_recvfrom_into = sock_recvfrom_into
+    sock_sendall = sock_sendall
+    sock_sendto = sock_sendto
+
     def __init__(self, backend):
         cdef aiofn_loop_backend_t *backend_ptr
 
@@ -1576,27 +1595,6 @@ cdef class LoopBase:
         with self._proactor_wrap_socket(py_sock) as sock:
             await sock.async_connect(<const void *>&raw_address, raw_address_len)
 
-    async def _reactor_connect(self, py_sock, address):
-        # uv_tcp_open adopts an existing fd, while uv_tcp_connect creates a
-        # connection on a libuv-owned socket. Connect the Python socket first;
-        # the proactor then adopts it for subsequent read/write operations.
-        try:
-            py_sock.connect(address)
-            return
-        except (BlockingIOError, InterruptedError):
-            pass
-
-        future = self.create_future()
-        def ready():
-            error = py_sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-            self.remove_writer(py_sock)
-            if error:
-                future.set_exception(OSError(error, f"Connect call failed {address}"))
-            else:
-                future.set_result(None)
-        self.add_writer(py_sock, ready)
-        await future
-
     async def _proactor_recv(self, py_sock, n):
         if n == 0:
             return b""
@@ -1682,182 +1680,10 @@ cdef class LoopBase:
         with self._proactor_wrap_socket(py_sock) as sock:
             return await sock.async_sendto(view, <const void *>&view[0], len(view), raw_address, address_len)
 
-    async def _reactor_recv(self, py_sock, n):
-        future = self.create_future()
-        def ready():
-            try:
-                data = py_sock.recv(n)
-            except (BlockingIOError, InterruptedError):
-                return
-            except BaseException as exc:
-                self.remove_reader(py_sock)
-                future.set_exception(exc)
-            else:
-                self.remove_reader(py_sock)
-                future.set_result(data)
-        self.add_reader(py_sock, ready)
-        return await future
-
-    async def _reactor_recv_into(self, py_sock, buf):
-        future = self.create_future()
-        def ready():
-            try:
-                count = py_sock.recv_into(buf)
-            except (BlockingIOError, InterruptedError):
-                return
-            except BaseException as exc:
-                self.remove_reader(py_sock)
-                future.set_exception(exc)
-            else:
-                self.remove_reader(py_sock)
-                future.set_result(count)
-        self.add_reader(py_sock, ready)
-        return await future
-
-    async def _reactor_sendall(self, py_sock, data):
-        view = memoryview(data).cast("B")
-        future = self.create_future()
-        sent = 0
-        def ready():
-            nonlocal sent
-            try:
-                sent += py_sock.send(view[sent:])
-            except (BlockingIOError, InterruptedError):
-                return
-            except BaseException as exc:
-                self.remove_writer(py_sock)
-                future.set_exception(exc)
-                return
-            if sent == len(view):
-                self.remove_writer(py_sock)
-                future.set_result(None)
-        self.add_writer(py_sock, ready)
-        return await future
-
-    async def sock_connect(self, py_sock, address):
-        if self._proactor != NULL:
-            return await self._proactor_connect(py_sock, address)
-        if self._reactor != NULL:
-            return await self._reactor_connect(py_sock, address)
-        raise NotImplementedError("sock_connect requires a reactor or proactor backend")
-
-    async def sock_recv(self, py_sock, n):
-        if self._proactor != NULL:
-            return await self._proactor_recv(py_sock, n)
-        if self._reactor != NULL:
-            return await self._reactor_recv(py_sock, n)
-        raise NotImplementedError("sock_recv requires a reactor or proactor backend")
-
-    async def sock_recv_into(self, py_sock, buf):
-        if self._proactor != NULL:
-            return await self._proactor_recv_into(py_sock, buf)
-        if self._reactor != NULL:
-            return await self._reactor_recv_into(py_sock, buf)
-        raise NotImplementedError("sock_recv_into requires a reactor or proactor backend")
-
-    async def sock_recvfrom(self, py_sock, bufsize):
-        if self._proactor != NULL:
-            return await self._proactor_recvfrom(py_sock, bufsize)
-        if self._reactor != NULL:
-            return await self._reactor_recvfrom(py_sock, bufsize)
-        raise NotImplementedError("sock_recvfrom requires a reactor or proactor backend")
-
-    async def sock_recvfrom_into(self, py_sock, buf, nbytes=0):
-        if self._proactor != NULL:
-            return await self._proactor_recvfrom_into(py_sock, buf, nbytes)
-        if self._reactor != NULL:
-            return await self._reactor_recvfrom_into(py_sock, buf, nbytes)
-        raise NotImplementedError("sock_recvfrom_into requires a reactor or proactor backend")
-
-    async def sock_sendall(self, py_sock, data):
-        if self._proactor != NULL:
-            return await self._proactor_sendall(py_sock, data)
-        if self._reactor != NULL:
-            return await self._reactor_sendall(py_sock, data)
-        raise NotImplementedError("sock_sendall requires a reactor or proactor backend")
-
-    async def sock_sendto(self, py_sock, data, address):
-        if self._proactor != NULL:
-            return await self._proactor_sendto(py_sock, data, address)
-        if self._reactor != NULL:
-            return await self._reactor_sendto(py_sock, data, address)
-        raise NotImplementedError("sock_sendto requires a reactor or proactor backend")
-
     async def _proactor_accept(self, py_sock):
         cdef _ProactorSocket listener
         with self._proactor_wrap_socket(py_sock) as listener:
             return await listener.async_accept_activity()
-
-    async def sock_accept(self, py_sock):
-        if self._proactor != NULL and self._proactor.accept_start != NULL:
-            return await self._proactor_accept(py_sock)
-        if self._reactor == NULL:
-            raise NotImplementedError("sock_accept requires a reactor or proactor backend")
-        future = self.create_future()
-        def ready():
-            try:
-                conn, address = py_sock.accept()
-                conn.setblocking(False)
-            except (BlockingIOError, InterruptedError):
-                return
-            except BaseException as exc:
-                self.remove_reader(py_sock)
-                future.set_exception(exc)
-            else:
-                self.remove_reader(py_sock)
-                future.set_result((conn, address))
-        self.add_reader(py_sock, ready)
-        return await future
-
-    async def _reactor_recvfrom(self, py_sock, bufsize):
-        future = self.create_future()
-        def ready():
-            try:
-                result = py_sock.recvfrom(bufsize)
-            except (BlockingIOError, InterruptedError):
-                return
-            except BaseException as exc:
-                self.remove_reader(py_sock)
-                future.set_exception(exc)
-            else:
-                self.remove_reader(py_sock)
-                future.set_result(result)
-        self.add_reader(py_sock, ready)
-        return await future
-
-    async def _reactor_recvfrom_into(self, py_sock, buf, nbytes=0):
-        if not nbytes:
-            nbytes = len(buf)
-        future = self.create_future()
-        def ready():
-            try:
-                result = py_sock.recvfrom_into(buf, nbytes)
-            except (BlockingIOError, InterruptedError):
-                return
-            except BaseException as exc:
-                self.remove_reader(py_sock)
-                future.set_exception(exc)
-            else:
-                self.remove_reader(py_sock)
-                future.set_result(result)
-        self.add_reader(py_sock, ready)
-        return await future
-
-    async def _reactor_sendto(self, py_sock, data, address):
-        future = self.create_future()
-        def ready():
-            try:
-                result = py_sock.sendto(data, address)
-            except (BlockingIOError, InterruptedError):
-                return
-            except BaseException as exc:
-                self.remove_writer(py_sock)
-                future.set_exception(exc)
-            else:
-                self.remove_writer(py_sock)
-                future.set_result(result)
-        self.add_writer(py_sock, ready)
-        return await future
 
     def get_exception_handler(self):
         return self._exception_handler
