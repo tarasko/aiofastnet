@@ -502,7 +502,6 @@ cdef class _ProactorContext:
             result = <_ProactorSocket>_ProactorSocket.__new__(_ProactorSocket)
             result.context = self
             result.owner = None
-            result.read_in_progress = False
             result.write_in_progress = False
             result.backend_sock.fd = fd
             result.backend_sock.socktype = <int>sock.type
@@ -514,7 +513,7 @@ cdef class _ProactorContext:
         return result
 
     cdef inline NoResult unwrap_socket(self, _ProactorSocket sock) except NoResult.EXC:
-        if not sock.read_in_progress and not sock.write_in_progress and sock.backend_sock.backend_token != NULL:
+        if not sock.write_in_progress and sock.backend_sock.backend_token != NULL:
             self.check_status(self.proactor.unwrap_socket(self.backend.state, &sock.backend_sock))
             self.sockets.pop(sock.backend_sock.fd, None)
             sock.owner = None

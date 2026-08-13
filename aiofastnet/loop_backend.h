@@ -198,6 +198,8 @@ typedef struct aiofn_loop_proactor_op {
  * active stream read, one active datagram read, and one pending write; a read
  * and write may overlap. The shared allocation callback supplies data buffers;
  * datagram callbacks receive the source address from backend-owned storage.
+ * Initiating functions must not invoke completion, read, or accept callbacks
+ * inline; callbacks run only after control returns to the backend event loop.
  */
 typedef struct {
     size_t struct_size;

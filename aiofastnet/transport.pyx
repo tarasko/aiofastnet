@@ -116,8 +116,12 @@ cdef class Transport:
         if self._closing or self._read_paused:
             return
 
-        self._stop_reading()
         self._read_paused = True
+        try:
+            self._stop_reading()
+        except BaseException:
+            self._read_paused = False
+            raise
 
         if unlikely(self._is_debug):
             _logger.debug("%r pauses reading", self)
@@ -127,8 +131,12 @@ cdef class Transport:
         if self._closing or not self._read_paused:
             return
 
-        self._start_reading()
         self._read_paused = False
+        try:
+            self._start_reading()
+        except BaseException:
+            self._read_paused = True
+            raise
 
         if unlikely(self._is_debug):
             _logger.debug("%r resumes reading", self)
