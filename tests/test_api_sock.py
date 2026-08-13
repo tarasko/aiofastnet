@@ -111,16 +111,26 @@ async def TcpSocketPair():
 
 @asynccontextmanager
 async def UdpSocketPair():
-    if getattr(socket, "AF_UNIX", None) is None:
-        pytest.skip("UdpSocketPair requires socket.AF_UNIX and is not supported on current platform")
-
-    with tempfile.TemporaryDirectory(prefix="aiofn-", dir="/tmp") as tmpdir:
-        server = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    if hasattr(socket, "AF_UNIX"):
+        with tempfile.TemporaryDirectory(prefix="aiofn-", dir="/tmp") as tmpdir:
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            server.setblocking(False)
+            client.setblocking(False)
+            server.bind(os.path.join(tmpdir, "server.sock"))
+            client.bind(os.path.join(tmpdir, "client.sock"))
+            try:
+                yield server, client
+            finally:
+                server.close()
+                client.close()
+    else:
+        server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         server.setblocking(False)
         client.setblocking(False)
-        server.bind(os.path.join(tmpdir, "server.sock"))
-        client.bind(os.path.join(tmpdir, "client.sock"))
+        server.bind(("127.0.0.1", 0))
+        client.bind(("127.0.0.1", 0))
         try:
             yield server, client
         finally:
