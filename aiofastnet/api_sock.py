@@ -19,7 +19,7 @@ def _ensure_fd_no_transport(loop, py_sock):
     return fd
 
 
-def _wrap_sock_ready_handler(future, fn, *args):
+def _wrap_sock_ready_handler(future, fn):
     # This nice utility helps us to centralized error handling when socket readiness is reported.
     # We can unit-test this function, instead of trying to simulate various errors for each api
     # This greatly improves coverage
@@ -27,7 +27,7 @@ def _wrap_sock_ready_handler(future, fn, *args):
         return
 
     try:
-        fn(*args)
+        fn()
     except (BlockingIOError, InterruptedError):
         return
     except BaseException as exc:

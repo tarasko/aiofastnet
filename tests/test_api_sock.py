@@ -8,6 +8,63 @@ from contextlib import asynccontextmanager
 import pytest
 
 import aiofastnet
+from aiofastnet.api_sock import _wrap_sock_ready_handler
+
+
+async def test_wrap_sock_ready_handler_skips_done_future(selector_loop):
+    future = asyncio.get_running_loop().create_future()
+    future.set_result("already done")
+
+    def handler():
+        raise AssertionError("handler must not be called")
+
+    assert _wrap_sock_ready_handler(future, handler) is None
+    assert future.result() == "already done"
+
+
+async def test_wrap_sock_ready_handler_allows_handler_to_complete_future(selector_loop):
+    future = asyncio.get_running_loop().create_future()
+
+    def handler():
+        future.set_result("done")
+
+    assert _wrap_sock_ready_handler(future, handler) is None
+    assert future.result() == "done"
+
+
+@pytest.mark.parametrize("exc_type", [BlockingIOError, InterruptedError])
+async def test_wrap_sock_ready_handler_ignores_retryable_error(selector_loop, exc_type):
+    future = asyncio.get_running_loop().create_future()
+
+    def handler():
+        raise exc_type()
+
+    assert _wrap_sock_ready_handler(future, handler) is None
+    assert not future.done()
+
+
+@pytest.mark.parametrize("exc", [OSError("socket error"), asyncio.CancelledError()])
+async def test_wrap_sock_ready_handler_sets_exception(selector_loop, exc):
+    future = asyncio.get_running_loop().create_future()
+
+    def handler():
+        raise exc
+
+    assert _wrap_sock_ready_handler(future, handler) is None
+    assert future.done()
+    assert future.exception() is exc
+
+
+async def test_wrap_sock_ready_handler_rejects_error_after_completion(selector_loop):
+    future = asyncio.get_running_loop().create_future()
+
+    def handler():
+        future.set_result("done")
+        raise OSError("late error")
+
+    with pytest.raises(AssertionError):
+        _wrap_sock_ready_handler(future, handler)
+    assert future.result() == "done"
 
 
 @asynccontextmanager
