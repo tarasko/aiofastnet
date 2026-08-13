@@ -208,7 +208,7 @@ cdef class SSLTransportBase(Transport):
         self._server = server
 
         self._read_paused = False
-        self._connection_lost_scheduled = False
+        self._finalizing_close = False
         self._closed_write_count = 0
 
         self._write_backlog = []
@@ -293,7 +293,7 @@ cdef class SSLTransportBase(Transport):
         return self._extra.get(name, default)
 
     cpdef is_closing(self):
-        return self._connection_lost_scheduled or self._state in (
+        return self._finalizing_close or self._state in (
             SSLProtocolState.FLUSHING,
             SSLProtocolState.SHUTDOWN,
             SSLProtocolState.UNWRAPPED
@@ -376,7 +376,7 @@ cdef class SSLTransportBase(Transport):
         if unlikely(self._is_debug):
             _logger.debug("%r: _retry_ssl_read event", self)
 
-        if self._connection_lost_scheduled:
+        if self._finalizing_close:
             return
 
         try:
@@ -869,13 +869,19 @@ cdef class SSLTransportBase(Transport):
         except Exception as exc:
             self._fatal_error_no_close(exc, "user connection_made raised an exception")
 
-    cpdef _call_protocol_connection_lost(self, protocol, exc):
+    cpdef _call_protocol_connection_lost_callback(self, protocol, exc):
         try:
             protocol.connection_lost(exc)
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception as exc:
             self._fatal_error_no_close(exc, "user connection_lost raised an exception")
+
+    cdef NoResult _call_protocol_connection_lost(self, exc) except NoResult.EXC:
+        if self._protocol_connected:
+            self._protocol_connected = False
+            self._call_protocol_connection_lost_callback(self._protocol, exc)
+        return NoResult.OK
 
     cdef object _call_protocol_eof_received(self):
         keep_open = Transport._call_protocol_eof_received(self)
@@ -895,7 +901,7 @@ cdef class SSLTransportBase(Transport):
         self._write_backlog_size = 0
 
     cdef inline bint _is_protocol_ready(self) except -1:
-        if self._connection_lost_scheduled or self._state in (
+        if self._finalizing_close or self._state in (
             SSLProtocolState.FLUSHING,
             SSLProtocolState.SHUTDOWN,
             SSLProtocolState.UNWRAPPED
@@ -1152,7 +1158,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             _logger.debug("%r: _ensure_writer called", self)
 
         self._write_had_eagain = True
-        if self._connection_lost_scheduled or self._write_ready_registered:
+        if self._finalizing_close or self._write_ready_registered:
             return NoResult.OK
         self._write_ready_registered = True
         self._loop.add_writer(self._sock_fd_obj, self._write_ready)
@@ -1170,7 +1176,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         if unlikely(self._is_debug):
             _logger.debug("%r: _write_ready event", self)
 
-        if self._connection_lost_scheduled:
+        if self._finalizing_close:
             return
 
         # Reset _write_had_eagain
@@ -1234,7 +1240,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
         if unlikely(self._is_debug):
             _logger.debug("%r: _read_ready event", self)
 
-        if self._connection_lost_scheduled:
+        if self._finalizing_close:
             return NoResult.OK
 
         cdef:
@@ -1277,12 +1283,12 @@ cdef class SSLTransport_Socket(SSLTransportBase):
     cpdef _force_close(self, exc):
         if self._sock is None:
             return
-        self._connection_lost_scheduled = True
+        self._finalizing_close = True
         if self._write_backlog_size:
             self._clear_write_backlog(exc)
         self._drop_writer()
         self._loop.remove_reader(self._sock_fd_obj)
-        self._loop.call_soon(self._call_connection_lost, exc)
+        self._loop.call_soon(self._finalize_close, exc)
 
     cdef NoResult _maybe_pause_protocol(self) except NoResult.EXC:
         self._write_watermarks.maybe_pause_protocol(self, self._protocol, self.get_write_buffer_size())
@@ -1293,11 +1299,9 @@ cdef class SSLTransport_Socket(SSLTransportBase):
     cdef _is_closed(self):
         return self._sock is None
 
-    cpdef _call_connection_lost(self, exc):
+    cpdef _finalize_close(self, exc):
         try:
-            if self._protocol_connected:
-                self._protocol_connected = False
-                self._call_protocol_connection_lost(self._protocol, exc)
+            self._call_protocol_connection_lost(exc)
         finally:
             if self._sock is not None:
                 self._sock.close()
@@ -1430,14 +1434,14 @@ cdef class SSLTransport_Transport(SSLTransportBase):
         meaning a regular EOF is received or the connection was
         aborted or closed).
         """
-        self._connection_lost_scheduled = True
+        self._finalizing_close = True
         if self._write_backlog_size:
             self._clear_write_backlog(exc)
         self._ssl_engine.outgoing_bio_reset()
 
         if self._protocol_connected:
             # Force lookup of the Python cpdef wrapper instead of converting the C vtable entry.
-            self._loop.call_soon((<object> self)._call_protocol_connection_lost,
+            self._loop.call_soon((<object> self)._call_protocol_connection_lost_callback,
                                  self._protocol, exc)
             self._protocol_connected = False
         self._set_state(SSLProtocolState.UNWRAPPED)

@@ -73,8 +73,8 @@ cdef class Transport:
         self._extra = {}
 
         self._read_paused = False
-        self._connection_lost_scheduled = False
         self._closing = False
+        self._finalizing_close = False
 
     cdef inline NoResult _check_thread(self, meth) except NoResult.EXC:
         cdef unsigned long curr_thread_id = PyThread_get_thread_ident()
@@ -178,13 +178,13 @@ cdef class Transport:
         self._fatal_error(exc, message)
 
     cpdef _call_protocol_connection_made(self):
-        if self._protocol_connected or self._connection_lost_scheduled:
+        if self._protocol_connected or self._finalizing_close:
             return
 
         self._protocol_connected = True
         self._protocol.connection_made(self)
 
-    cdef inline NoResult _notify_protocol_connection_lost(self, exc) except NoResult.EXC:
+    cdef NoResult _call_protocol_connection_lost(self, exc) except NoResult.EXC:
         if self._protocol_connected:
             self._protocol_connected = False
             self._protocol.connection_lost(exc)
@@ -470,20 +470,20 @@ cdef class SelectorTransport(Transport):
     # May be used by create_connection/create_server
     # Keep cpdef
     cpdef _force_close(self, exc):
-        if self._connection_lost_scheduled:
+        if self._finalizing_close:
             return
         if not self._closing:
             self._closing = True
             self._loop.remove_reader(self._fileno_obj)
-        self._connection_lost_scheduled = True
-        self._loop.call_soon(self._call_connection_lost, exc)
+        self._finalizing_close = True
+        self._loop.call_soon(self._finalize_close, exc)
 
     def _read_ready(self):
         raise NotImplementedError()
 
-    def _call_connection_lost(self, exc):
+    def _finalize_close(self, exc):
         try:
-            self._notify_protocol_connection_lost(exc)
+            self._call_protocol_connection_lost(exc)
         finally:
             self._file.close()
             self._file = None
@@ -537,9 +537,9 @@ cdef class SelectorWritableTransport(SelectorTransport):
         self._closing = True
         self._loop.remove_reader(self._fileno_obj)
         if self._write_backlog_size == 0:
-            self._connection_lost_scheduled = True
+            self._finalizing_close = True
             self._drop_writer()
-            self._loop.call_soon(self._call_connection_lost, None)
+            self._loop.call_soon(self._finalize_close, None)
 
     cpdef get_write_buffer_size(self):
         self._check_thread("get_write_buffer_size")
@@ -562,9 +562,9 @@ cdef class SelectorWritableTransport(SelectorTransport):
     cdef inline NoResult _ensure_writer(self) except NoResult.EXC:
         if unlikely(self._is_debug):
             _logger.debug("%r: _ensure_writer called, conn_lost=%s, already_registered=%s",
-                          self, self._connection_lost_scheduled, self._write_ready_registered)
+                          self, self._finalizing_close, self._write_ready_registered)
 
-        if self._connection_lost_scheduled or self._write_ready_registered:
+        if self._finalizing_close or self._write_ready_registered:
             return NoResult.OK
         self._write_ready_registered = True
         self._loop.add_writer(self._fileno_obj, self._write_ready)
@@ -585,7 +585,7 @@ cdef class SelectorWritableTransport(SelectorTransport):
         return not isinstance(exc, OSError)
 
     cpdef _force_close(self, exc):
-        if self._connection_lost_scheduled:
+        if self._finalizing_close:
             return
         if self._write_backlog:
             self._clear_write_backlog(exc)
@@ -620,7 +620,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
         if not data:
             return
 
-        if unlikely(self._connection_lost_scheduled):
+        if unlikely(self._finalizing_close):
             if self._closed_write_count >= _log_threshold_for_connlost_writes:
                 _logger.warning('write() called after connection lost.')
             self._closed_write_count += 1
@@ -742,7 +742,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
         if self._eof:
             raise RuntimeError('Cannot call writelines() after write_eof()')
 
-        if unlikely(self._connection_lost_scheduled):
+        if unlikely(self._finalizing_close):
             if self._closed_write_count >= _log_threshold_for_connlost_writes:
                 _logger.warning('writelines() called after connection lost.')
             self._closed_write_count += 1
@@ -765,7 +765,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
         if sz <= 0:
             return NoResult.OK
 
-        if unlikely(self._connection_lost_scheduled):
+        if unlikely(self._finalizing_close):
             if self._closed_write_count >= _log_threshold_for_connlost_writes:
                 _logger.warning('write_c() called after connection lost.')
             self._closed_write_count += 1
@@ -877,7 +877,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
 
     def _write_ready(self):
         assert self._write_backlog, 'Data should not be empty'
-        if self._connection_lost_scheduled:
+        if self._finalizing_close:
             return
 
         try:
@@ -892,8 +892,8 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
             if self._write_backlog_size == 0:
                 self._drop_writer()
                 if self._closing:
-                    self._connection_lost_scheduled = True
-                    self._call_connection_lost(None)
+                    self._finalizing_close = True
+                    self._finalize_close(None)
                 elif self._eof:
                     self._write_eof_now()
 
@@ -908,7 +908,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
         if self._eof:
             raise RuntimeError('Cannot call sendfile() after write_eof()')
 
-        if self._closing or self._connection_lost_scheduled:
+        if self._closing or self._finalizing_close:
             raise RuntimeError("Transport is closing")
 
         cdef SendFileRequest req = _make_send_file_request(file, offset, count)
@@ -966,9 +966,9 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
             if self._server is not None:
                 self._server._detach(self)
 
-    def _call_connection_lost(self, exc):
+    def _finalize_close(self, exc):
         try:
-            SelectorTransport._call_connection_lost(self, exc)
+            SelectorTransport._finalize_close(self, exc)
         finally:
             server = self._server
             if server is not None:
@@ -993,7 +993,7 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
             Py_ssize_t total_bytes_read = 0
 
         while total_bytes_read < _max_read_bytes_per_cycle_hint:
-            if self._connection_lost_scheduled:
+            if self._finalizing_close:
                 return NoResult.OK
 
             if self._read_paused:
@@ -1032,7 +1032,7 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
             bytes data
 
         while total_bytes_read < _max_read_bytes_per_cycle_hint:
-            if self._connection_lost_scheduled:
+            if self._finalizing_close:
                 return NoResult.OK
 
             if self._read_paused:
@@ -1161,7 +1161,7 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
             Py_ssize_t bytes_read
             object data
 
-        if self._connection_lost_scheduled:
+        if self._finalizing_close:
             return
 
         if unlikely(self._read_paused):
@@ -1214,8 +1214,8 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
             if not self._write_backlog:
                 self._drop_writer()
                 if self._closing:
-                    self._connection_lost_scheduled = True
-                    self._call_connection_lost(None)
+                    self._finalizing_close = True
+                    self._finalize_close(None)
         except:
             self._drop_writer()
             self._handle_error('Fatal write error on datagram transport')
@@ -1235,7 +1235,7 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
             # Datagram endpoint creation resolves INET addresses; resolving here could block the event-loop thread.
             aiofn_pyaddr_to_sockaddr(self._family, addr, raw_addr, &raw_addr_len)
 
-        if unlikely(self._connection_lost_scheduled and self._address):
+        if unlikely(self._finalizing_close and self._address):
             if self._closed_write_count >= _log_threshold_for_connlost_writes:
                 _logger.warning('socket.send() raised exception.')
             self._closed_write_count += 1
