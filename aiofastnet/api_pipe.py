@@ -7,7 +7,7 @@
 import os
 
 from .api_utils import _logger, _wait_and_close_transport_on_exc
-from .transport import SelectorReadPipeTransport, SelectorWritePipeTransport
+from .selector_transport import SelectorReadPipeTransport, SelectorWritePipeTransport
 from .wrapped_transport import _get_original_loop_method, _WrappedProtocol
 
 

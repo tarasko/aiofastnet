@@ -9,7 +9,7 @@ import socket
 import stat
 
 from .api_utils import _ensure_resolved, _logger, _set_reuseport, _wait_and_close_transport_on_exc
-from .transport import SelectorDatagramTransport
+from .selector_transport import SelectorDatagramTransport
 from .wrapped_transport import _get_original_loop_method, _should_fallback_to_asyncio, _WrappedDatagramProtocol
 
 

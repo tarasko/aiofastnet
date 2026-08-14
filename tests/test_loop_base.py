@@ -402,7 +402,7 @@ async def test_proactor_socket_transport_abort_pending_write(libuv_loop):
 
 
 async def test_unix_socket_transport_uses_reactor(libuv_loop):
-    from aiofastnet.transport import SelectorSocketTransport
+    from aiofastnet.selector_transport import SelectorSocketTransport
 
     async with TestServer(ct=ConnectionType("unix")) as server:
         async with TestClient(server, ct=ConnectionType("unix")) as client:
