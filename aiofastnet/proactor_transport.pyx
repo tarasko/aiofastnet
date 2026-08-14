@@ -91,7 +91,7 @@ cdef class ProactorSocketTransport(Transport):
         self._write_backlog = collections.deque()
         self._write_backlog_size = 0
         self._write_submitted_size = 0
-        self._write_op.callback = _proactor_transport_write_callback
+        self._write_op.callback = _write_callback_trampoline
         self._write_op.callback_data = <void *>self
         self._write_op.backend_token = NULL
         self._write_op.status = AIOFN_LOOP_OK
@@ -146,8 +146,8 @@ cdef class ProactorSocketTransport(Transport):
         self._proactor_socket.context.check_status(self._proactor_socket.context.proactor.read_start(
             self._proactor_socket.context.backend.state,
             &self._proactor_socket.backend_sock,
-            _proactor_transport_read_alloc,
-            _proactor_transport_read_callback,
+            _read_alloc_trampoline,
+            _read_callback_trampoline,
             <void *>self,
         ))
 
@@ -178,11 +178,10 @@ cdef class ProactorSocketTransport(Transport):
         buffer_len[0] = <size_t>data_len
         return NoResult.OK
 
-    cdef inline NoResult _release_read_buffer(self) except NoResult.EXC:
+    cdef inline void _release_read_buffer(self) noexcept:
         Py_XDECREF(self._read_bytes)
         self._read_bytes = NULL
         self._read_buffer = None
-        return NoResult.OK
 
     cdef NoResult _read_completed(self, aiofn_loop_status status, size_t bytes_read) except NoResult.EXC:
         cdef:
@@ -236,25 +235,20 @@ cdef class ProactorSocketTransport(Transport):
 
     cdef inline NoResult _maybe_pause_protocol(self) except NoResult.EXC:
         self._write_watermarks.maybe_pause_protocol(self, self._protocol, self._get_write_buffer_size_nocheck())
-        return NoResult.OK
 
     cdef inline NoResult _maybe_resume_protocol(self) except NoResult.EXC:
         self._write_watermarks.maybe_resume_protocol(self, self._protocol, self._get_write_buffer_size_nocheck())
-        return NoResult.OK
 
     cdef inline NoResult _append_write_request(self, WriteRequest request) except NoResult.EXC:
         if request.size:
             self._write_backlog.append(request)
             self._write_backlog_size += request.size
-        return NoResult.OK
 
     cdef inline NoResult _append_write(self, object data) except NoResult.EXC:
         self._append_write_request(make_write_request(data))
-        return NoResult.OK
 
     cdef inline NoResult _append_write_tail(self, object data, char *ptr, Py_ssize_t size) except NoResult.EXC:
         self._append_write_request(make_write_request_tail(data, ptr, size))
-        return NoResult.OK
 
     cpdef write_nocheck(self, data):
         if self._eof:
@@ -571,7 +565,7 @@ cdef class ProactorSocketTransport(Transport):
                     self._server = None
 
 
-cdef void _proactor_transport_read_alloc(
+cdef void _read_alloc_trampoline(
     void *callback_data,
     size_t suggested_size,
     void **buffer,
@@ -589,7 +583,7 @@ cdef void _proactor_transport_read_alloc(
             transport._proactor_socket.context.backend_failed(exc)
 
 
-cdef void _proactor_transport_read_callback(
+cdef void _read_callback_trampoline(
     void *callback_data,
     aiofn_loop_status status,
     void *buffer,
@@ -605,7 +599,7 @@ cdef void _proactor_transport_read_callback(
             transport._proactor_socket.context.backend_failed(exc)
 
 
-cdef void _proactor_transport_write_callback(aiofn_loop_proactor_op_t *op) noexcept with gil:
+cdef void _write_callback_trampoline(aiofn_loop_proactor_op_t *op) noexcept with gil:
     cdef ProactorSocketTransport transport = <ProactorSocketTransport>op.callback_data
     try:
         transport._write_completed(op.status, op.transferred)
