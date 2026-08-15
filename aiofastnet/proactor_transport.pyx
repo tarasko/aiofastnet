@@ -1,14 +1,11 @@
 import logging
 import socket
 
-from asyncio.trsock import TransportSocket
 from libc.stdint cimport int64_t
 
 from . import constants
 from .loop_backend cimport (
     AIOFN_LOOP_OK,
-    aiofn_loop_buffer_init,
-    aiofn_loop_buffer_t,
     aiofn_loop_file_handle_t,
     aiofn_loop_proactor_op_t,
     aiofn_loop_status,
@@ -23,13 +20,12 @@ from .transport cimport (
     WriteRequest,
 )
 from .utils cimport (
+    AIOFN_MAX_IOVEC,
     NoResult,
     aiofn_allocate_bytes,
     aiofn_finalize_bytes,
     aiofn_pyaddr_to_sockaddr,
     aiofn_sendto,
-    aiofn_set_nodelay,
-    aiofn_set_socket_extra_info,
     aiofn_sockaddr_to_pyaddr,
     aiofn_unpack_simple_buffer,
     unlikely,
@@ -52,22 +48,17 @@ cdef class ProactorSocketTransport(StreamTransport):
 
     cdef:
         ProactorSocket _proactor_socket
-        object _server
 
         object _read_buffer
         PyObject *_read_bytes
 
         size_t _write_submitted_size
         aiofn_loop_proactor_op_t _write_op
-        aiofn_loop_buffer_t _write_buffers[256]
 
         object _close_exc
 
     def __init__(self, ProactorContext context, loop, sock, protocol, waiter=None, server=None):
-        aiofn_set_nodelay(sock)
-        self._server = server
-
-        StreamTransport.__init__(self, loop, sock)
+        StreamTransport.__init__(self, loop, sock, server)
         self._set_protocol(protocol)
 
         self._read_buffer = None
@@ -85,9 +76,6 @@ cdef class ProactorSocketTransport(StreamTransport):
         self._close_exc = None
         self._sendfile_compatible = context.proactor.sendfile != NULL
 
-        self._extra['socket'] = TransportSocket(sock)
-        aiofn_set_socket_extra_info(self._extra, sock)
-
         self._proactor_socket = context.wrap_socket(sock)
         assert self._proactor_socket.owner is None
         self._proactor_socket.owner = self
@@ -95,11 +83,6 @@ cdef class ProactorSocketTransport(StreamTransport):
         self._loop.call_soon((<object>self)._initialize)
         if waiter is not None:
             self._loop.call_soon(aiofn_set_result_unless_cancelled, waiter, None)
-
-    def __repr__(self):
-        info = self._get_fd_repr_info()
-        info.append(f'wbuf_size={self._write_backlog_size}')
-        return '[{}]'.format(' '.join(info))
 
     def __dealloc__(self):
         Py_XDECREF(self._read_bytes)
@@ -283,10 +266,11 @@ cdef class ProactorSocketTransport(StreamTransport):
 
             assert isinstance(request_obj, WriteRequest)
             request = <WriteRequest>request_obj
-            aiofn_loop_buffer_init(&self._write_buffers[buffer_count], request.ptr, <size_t>request.size)
+            self._write_buffers[buffer_count].iov_base = request.ptr
+            self._write_buffers[buffer_count].iov_len = request.size
             submitted_size += <size_t>request.size
             buffer_count += 1
-            if buffer_count == 256:
+            if buffer_count == AIOFN_MAX_IOVEC:
                 break
 
         self._write_submitted_size = submitted_size
@@ -310,7 +294,7 @@ cdef class ProactorSocketTransport(StreamTransport):
                     self._proactor_socket.context.backend.state,
                     &self._proactor_socket.backend_sock,
                     &self._write_op,
-                    &self._write_buffers[0],
+                    self._write_buffers,
                     buffer_count,
                 ))
         except BaseException:
@@ -429,9 +413,6 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         self._read_bytes = NULL
         # The scheduled initializer starts receiving and then delivers connection_made().
         self._read_paused = True
-
-        self._extra['socket'] = TransportSocket(sock)
-        aiofn_set_socket_extra_info(self._extra, sock)
 
         self._has_connection = self._extra['peername'] is not None
         self._send_pending = False

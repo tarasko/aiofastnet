@@ -68,13 +68,13 @@ cdef extern from *:
         return send((SOCKET)fd, (const char*)buf, aiofn_windows_io_len(len), 0);
     }
 
-    static inline Py_ssize_t aiofn_writev_sys(int fd, aiofn_iovec* iov, int iovcnt, int is_socket)
+    static inline Py_ssize_t aiofn_writev_sys(int fd, aiofn_loop_buffer_t* buffers, int buffer_count, int is_socket)
     {
         DWORD bytes_sent = 0;
         int rc;
 
         (void)is_socket;
-        rc = WSASend((SOCKET)fd, (LPWSABUF)iov, iovcnt, &bytes_sent, 0, NULL, NULL);
+        rc = WSASend((SOCKET)fd, (LPWSABUF)buffers, buffer_count, &bytes_sent, 0, NULL, NULL);
         return rc == SOCKET_ERROR ? -1 : (Py_ssize_t)bytes_sent;
     }
 
@@ -125,7 +125,7 @@ cdef extern from *:
             return write(fd, buf, len);
     }
 
-    static inline Py_ssize_t aiofn_writev_sys(int fd, aiofn_iovec* iov, int iovcnt, int is_socket)
+    static inline Py_ssize_t aiofn_writev_sys(int fd, aiofn_loop_buffer_t* buffers, int buffer_count, int is_socket)
     {
         if (is_socket)
         {
@@ -135,20 +135,20 @@ cdef extern from *:
             #endif
 
             /* send is slightly faster than sendmsg with iovec */
-            if (iovcnt == 1)
-                return send(fd, iov[0].iov_base, iov[0].iov_len, flags);
+            if (buffer_count == 1)
+                return send(fd, buffers[0].iov_base, buffers[0].iov_len, flags);
             else
             {
                 struct msghdr msg;
 
                 memset(&msg, 0, sizeof(msg));
-                msg.msg_iov = iov;
-                msg.msg_iovlen = iovcnt;
+                msg.msg_iov = buffers;
+                msg.msg_iovlen = buffer_count;
                 return sendmsg(fd, &msg, flags);
             }
         }
         else
-            return writev(fd, iov, iovcnt);
+            return writev(fd, buffers, buffer_count);
     }
 
     static inline void aiofn_set_exc_from_error(int err) {
@@ -307,7 +307,7 @@ cdef extern from *:
 
     Py_ssize_t aiofn_read_sys(int fd, void* buf, size_t len, bint is_socket)
     Py_ssize_t aiofn_write_sys(int fd, const void* buf, size_t len, bint is_socket)
-    Py_ssize_t aiofn_writev_sys(int fd, aiofn_iovec *iov, int iovcnt, bint is_socket)
+    Py_ssize_t aiofn_writev_sys(int fd, aiofn_loop_buffer_t *buffers, int buffer_count, bint is_socket)
     Py_ssize_t aiofn_recvfrom_sys(int fd, void* buf, size_t len, void* addr, unsigned int* addrlen)
     Py_ssize_t aiofn_sendto_sys(int fd, void* buf, size_t len, void* addr, unsigned int addrlen)
     int aiofn_set_ipv4_sockaddr(object pyaddr, const char* host, long port, void* addr, unsigned int* addrlen) noexcept
@@ -571,13 +571,18 @@ cdef Py_ssize_t aiofn_sendto(int sockfd, void* buf, Py_ssize_t len, void* raw_ad
         return -2
 
 
-cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* iov, Py_ssize_t iovcnt, bint is_socket) except -2:
+cdef Py_ssize_t aiofn_writev(
+    int sockfd,
+    aiofn_loop_buffer_t* buffers,
+    Py_ssize_t buffer_count,
+    bint is_socket,
+) except -2:
     cdef:
         Py_ssize_t bytes_sent
         int last_error
 
     while True:
-        bytes_sent = aiofn_writev_sys(sockfd, iov, iovcnt, is_socket)
+        bytes_sent = aiofn_writev_sys(sockfd, buffers, buffer_count, is_socket)
 
         if bytes_sent > 0:
             return bytes_sent

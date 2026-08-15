@@ -8,6 +8,7 @@ import socket
 import stat
 import sys
 import warnings
+from asyncio.trsock import TransportSocket
 from logging import getLogger
 
 import cython
@@ -284,6 +285,9 @@ cdef class FDTransport(Transport):
 
         if self._is_socket:
             file.setblocking(False)
+            aiofn_set_nodelay(file)
+            self._extra['socket'] = TransportSocket(file)
+            aiofn_set_socket_extra_info(self._extra, file)
         else:
             os.set_blocking(self._fileno_obj, False)
 
@@ -553,11 +557,24 @@ cdef class WritableTransport(FDTransport):
 cdef class StreamTransport(WritableTransport):
     """Transport base implementing ordered byte-stream write queues."""
 
-    def __init__(self, loop, file):
+    def __init__(self, loop, file, server=None):
         WritableTransport.__init__(self, loop, file)
 
+        self._server = server
         self._write_eof = False
         self._sendfile_compatible = False
+
+    def __repr__(self):
+        info = self._get_fd_repr_info()
+        info.append(f'wbuf_size={self._write_backlog_size}')
+        return '[{}]'.format(' '.join(info))
+
+    def __del__(self):
+        if self._file is not None:
+            warnings.warn(f"unclosed {self.__class__.__name__} for {self._file}", ResourceWarning, source=self)
+            self._file.close()
+            if self._server is not None:
+                self._server._detach(self)
 
     cpdef write_nocheck(self, data):
         if not self.__pre_write_check("write"):
@@ -706,8 +723,8 @@ cdef class StreamTransport(WritableTransport):
             if unlikely(data_len == 0):
                 continue
 
-            self._write_iovecs[index].iov_base = data_ptr
-            self._write_iovecs[index].iov_len = data_len
+            self._write_buffers[index].iov_base = data_ptr
+            self._write_buffers[index].iov_len = data_len
             bytes_to_send += data_len
             if index < AIOFN_MAX_IOVEC - 1:
                 index += 1
@@ -727,7 +744,7 @@ cdef class StreamTransport(WritableTransport):
         return bytes_sent == bytes_to_send
 
     cdef Py_ssize_t _flush_iovecs(self, Py_ssize_t iovecs_count, Py_ssize_t *total_bytes_sent) except -2:
-        cdef Py_ssize_t bytes_sent = aiofn_writev(self._fileno, self._write_iovecs, iovecs_count, self._is_socket)
+        cdef Py_ssize_t bytes_sent = aiofn_writev(self._fileno, self._write_buffers, iovecs_count, self._is_socket)
         if unlikely(self._is_debug):
             _logger.debug(
                 "%r: aiofn_writev(..., len(iovecs)=%d)=%d",

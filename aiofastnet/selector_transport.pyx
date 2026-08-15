@@ -9,9 +9,7 @@ import os
 import socket
 import stat
 import sys
-import warnings
 from logging import getLogger
-from asyncio.trsock import TransportSocket
 
 from cpython.bytes cimport *
 from cpython.ref cimport Py_XDECREF
@@ -44,16 +42,11 @@ cdef class SelectorStreamTransport(StreamTransport):
     cdef:
         bint _write_ready_registered
 
-    def __init__(self, loop, file, protocol):
-        StreamTransport.__init__(self, loop, file)
+    def __init__(self, loop, file, protocol, server=None):
+        StreamTransport.__init__(self, loop, file, server)
         self._set_protocol(protocol)
         self._write_ready_registered = False
         self._sendfile_compatible = False
-
-    def __repr__(self):
-        info = self._get_fd_repr_info()
-        info.append(f'wbuf_size={self._write_backlog_size}')
-        return '[{}]'.format(' '.join(info))
 
     cdef NoResult _stop_reading(self) except NoResult.EXC:
         self._loop.remove_reader(self._fileno_obj)
@@ -122,8 +115,8 @@ cdef class SelectorStreamTransport(StreamTransport):
 
             assert isinstance(item, WriteRequest)
             request = <WriteRequest>item
-            self._write_iovecs[iovecs_count].iov_base = request.ptr
-            self._write_iovecs[iovecs_count].iov_len = request.size
+            self._write_buffers[iovecs_count].iov_base = request.ptr
+            self._write_buffers[iovecs_count].iov_len = request.size
             bytes_to_send += request.size
             iovecs_count += 1
 
@@ -265,15 +258,8 @@ cdef class SelectorStreamTransport(StreamTransport):
 cdef class SelectorSocketTransport(SelectorStreamTransport):
     """Provide bidirectional stream transport behavior for a socket."""
 
-    cdef:
-        object _server
-
     def __init__(self, loop, sock, protocol, waiter=None, server=None):
-        aiofn_set_nodelay(sock)
-        SelectorStreamTransport.__init__(self, loop, sock, protocol)
-        self._server = server
-        self._extra['socket'] = TransportSocket(sock)
-        aiofn_set_socket_extra_info(self._extra, sock)
+        SelectorStreamTransport.__init__(self, loop, sock, protocol, server)
         self._sendfile_compatible = os.name != 'nt'
 
         self._loop.call_soon((<object>self)._call_protocol_connection_made)
@@ -283,13 +269,6 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
         if waiter is not None:
             # only wake up the waiter when connection_made() has been called
             self._loop.call_soon(_set_result_unless_cancelled_callback, waiter, None)
-
-    def __del__(self):
-        if self._file is not None:
-            warnings.warn(f"unclosed {self.__class__.__name__} for {self._file}", ResourceWarning, source=self)
-            self._file.close()
-            if self._server is not None:
-                self._server._detach(self)
 
     def _finalize_close(self, exc):
         try:
@@ -429,9 +408,6 @@ cdef class SelectorDatagramTransport(DatagramTransport):
         self._write_ready_registered = False
 
         self._set_protocol(protocol)
-
-        self._extra['socket'] = TransportSocket(sock)
-        aiofn_set_socket_extra_info(self._extra, sock)
         self._has_connection = self._extra['peername'] is not None
 
         self._loop.call_soon((<object>self)._call_protocol_connection_made)
@@ -475,6 +451,7 @@ cdef class SelectorDatagramTransport(DatagramTransport):
         if not self._closing:
             self._closing = True
             self._loop.remove_reader(self._fileno_obj)
+
         self._finalizing_close = True
         self._loop.call_soon(self._finalize_close, exc)
 
