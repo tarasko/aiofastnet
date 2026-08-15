@@ -34,6 +34,7 @@ from .transport cimport (
     StreamWriter,
     Transport,
     WriteRequest,
+    make_sendfile_request,
 )
 from .utils cimport *
 
@@ -46,22 +47,6 @@ cdef:
     Py_ssize_t _data_received_max_size = constants.DATA_RECEIVED_MAX_SIZE
     Py_ssize_t _datagram_received_max_size = constants.DATAGRAM_RECEIVED_MAX_SIZE
     Py_ssize_t _max_read_bytes_per_cycle_hint = constants.MAX_READ_BYTES_PER_CYCLE_HINT
-
-
-cdef SendFileRequest _make_send_file_request(file, offset, count):
-    cdef SendFileRequest req = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
-    req.file = file
-    req.fd = file.fileno()
-    req.native_handle = req.fd
-    req.offset = offset
-
-    if count is None:
-        req.count = max(0, os.fstat(req.fd).st_size - offset)
-    else:
-        req.count = count
-
-    req.waiter = None
-    return req
 
 
 cdef class SelectorTransport(Transport):
@@ -328,7 +313,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
         if self._closing or self._finalizing_close:
             raise RuntimeError("Transport is closing")
 
-        cdef SendFileRequest req = _make_send_file_request(file, offset, count)
+        cdef SendFileRequest req = make_sendfile_request(file, offset, count)
 
         try:
             if not self._writer.backlog:

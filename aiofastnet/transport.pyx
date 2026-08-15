@@ -2,6 +2,9 @@
 
 import asyncio
 import collections
+import io
+import os
+import stat
 import sys
 from logging import getLogger
 
@@ -13,6 +16,12 @@ from cpython.pythread cimport PyThread_get_thread_ident
 
 from . import constants
 from .utils cimport *
+
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    msvcrt = None
 
 
 cdef:
@@ -286,6 +295,60 @@ cdef class SendFileRequest:
 
     def __len__(self):
         return self.count
+
+
+cdef SendFileRequest make_sendfile_request(file, offset, count):
+    cdef:
+        int fd
+        object file_stat
+        object available
+        SendFileRequest request
+
+    if "b" not in getattr(file, "mode", "b"):
+        raise ValueError("file should be opened in binary mode")
+
+    if not isinstance(offset, int):
+        raise TypeError(f"offset must be a non-negative integer (got {offset!r})")
+    if offset < 0:
+        raise ValueError(f"offset must be a non-negative integer (got {offset!r})")
+
+    if count is not None:
+        if not isinstance(count, int):
+            raise TypeError(f"count must be a positive integer (got {count!r})")
+        if count <= 0:
+            raise ValueError(f"count must be a positive integer (got {count!r})")
+
+    try:
+        fd = file.fileno()
+    except (AttributeError, io.UnsupportedOperation) as exc:
+        raise asyncio.SendfileNotAvailableError("not a regular file") from exc
+
+    try:
+        file_stat = os.fstat(fd)
+    except OSError as exc:
+        raise asyncio.SendfileNotAvailableError("not a regular file") from exc
+
+    if not stat.S_ISREG(file_stat.st_mode):
+        raise asyncio.SendfileNotAvailableError("not a regular file")
+
+    available = max(0, file_stat.st_size - offset)
+    if count is not None:
+        available = min(count, available)
+
+    request = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
+    request.file = file
+    request.fd = fd
+
+    if sys.platform == "win32":
+        # The proactor ABI uses a Windows HANDLE, not Python's CRT descriptor.
+        request.native_handle = msvcrt.get_osfhandle(fd)
+    else:
+        request.native_handle = fd
+
+    request.offset = offset
+    request.count = available
+    request.waiter = None
+    return request
 
 
 cdef WriteRequest make_write_request(object data):

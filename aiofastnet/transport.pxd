@@ -114,6 +114,7 @@ cdef class SendFileRequest:
 cdef WriteRequest make_write_request(object data)
 cdef WriteRequest make_write_request_from_ptr(char *ptr, Py_ssize_t size)
 cdef WriteRequest make_write_request_tail(object data, char *ptr, Py_ssize_t size)
+cdef SendFileRequest make_sendfile_request(file, offset, count)
 
 
 cdef class WriteWatermarks:

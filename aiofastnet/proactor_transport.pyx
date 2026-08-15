@@ -1,5 +1,4 @@
 import logging
-import os
 import socket
 import warnings
 
@@ -22,6 +21,7 @@ from .transport cimport (
     StreamWriter,
     Transport,
     WriteRequest,
+    make_sendfile_request,
 )
 from .utils cimport (
     NoResult,
@@ -41,33 +41,6 @@ from cpython.ref cimport Py_XDECREF
 cdef:
     object _logger = logging.getLogger("asyncio")
     Py_ssize_t _data_received_max_size = constants.DATA_RECEIVED_MAX_SIZE
-
-
-cdef SendFileRequest make_sendfile_request(file, offset, count):
-
-    cdef:
-        int64_t native_offset = offset
-        Py_ssize_t native_count
-        SendFileRequest request
-
-    if native_offset < 0:
-        raise ValueError("offset must be non-negative")
-
-    if count is None:
-        native_count = max(0, os.fstat(file.fileno()).st_size - offset)
-    else:
-        if count < 0:
-            raise ValueError("count must be non-negative")
-        native_count = count
-
-    request = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
-    request.file = file
-    request.fd = file.fileno()
-    request.native_handle = request.fd
-    request.offset = native_offset
-    request.count = native_count
-    request.waiter = None
-    return request
 
 
 cdef class ProactorSocketTransport(Transport):

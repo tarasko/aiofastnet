@@ -1,5 +1,4 @@
 import asyncio
-import os
 import ssl
 import sys
 import warnings
@@ -13,7 +12,6 @@ from cpython.object cimport PyObject
 from cpython.buffer cimport PyBUF_WRITE
 from cpython.memoryview cimport PyMemoryView_FromMemory
 from cpython.ref cimport Py_XDECREF
-from posix.types cimport off_t
 
 from . import constants
 from .utils cimport (
@@ -31,7 +29,7 @@ from .utils cimport (
     aiofn_add_info_and_reraise,
     unlikely
 )
-from .transport cimport Protocol, SendFileRequest, Transport, WriteWatermarks
+from .transport cimport Protocol, SendFileRequest, Transport, WriteWatermarks, make_sendfile_request
 from .openssl_compat import OPENSSL_DYN_LIBS, create_transport_context
 from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
 
@@ -50,34 +48,6 @@ cdef:
 
 def _ssl_socket_post_handshake_test_hook(transport):
     pass
-
-
-cdef SendFileRequest _make_send_file_request(file, offset, count):
-    cdef:
-        int c_fd = file.fileno()
-        off_t c_offset = offset
-
-    if c_offset < 0:
-        raise ValueError("offset must be non-negative")
-
-    cdef:
-        Py_ssize_t size = os.fstat(c_fd).st_size
-        Py_ssize_t available = max(0, size - offset)
-        size_t c_count
-
-    if count is None:
-        c_count = available
-    else:
-        c_count = min(<Py_ssize_t> count, available)
-
-    cdef SendFileRequest self = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
-    self.file = file
-    self.fd = c_fd
-    self.native_handle = c_fd
-    self.offset = c_offset
-    self.count = c_count
-    self.waiter = None
-    return self
 
 
 cdef class SSLTransportBase(Transport):
@@ -698,7 +668,7 @@ cdef class SSLTransportBase(Transport):
         if not self._is_protocol_ready():
             raise RuntimeError("Transport is closing")
 
-        cdef SendFileRequest req = _make_send_file_request(file, offset, count)
+        cdef SendFileRequest req = make_sendfile_request(file, offset, count)
 
         try:
             if self._write_backlog_size == 0:
@@ -1215,6 +1185,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             req.count -= bytes_written
 
             if ssl_error == SSLError.SSL_ERROR_NONE:
+                req.count = 0
                 return True
 
             if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:

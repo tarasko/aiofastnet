@@ -383,6 +383,28 @@ async def test_proactor_socket_transport_sendfile(libuv_loop):
                 assert await client.readn(len(expected)) == expected
 
 
+async def test_proactor_socket_transport_sendfile_validates_request(libuv_loop):
+    async with TestServer(ct=ConnectionType("tcp")) as server:
+        async with TestClient(server) as client:
+            with tempfile.TemporaryFile() as file:
+                with pytest.raises(TypeError, match="offset must be a non-negative integer"):
+                    client.transport.sendfile(file, 1.5, 1)
+                with pytest.raises(ValueError, match="offset must be a non-negative integer"):
+                    client.transport.sendfile(file, -1, 1)
+                with pytest.raises(TypeError, match="count must be a positive integer"):
+                    client.transport.sendfile(file, 0, 1.5)
+                with pytest.raises(ValueError, match="count must be a positive integer"):
+                    client.transport.sendfile(file, 0, 0)
+
+            with tempfile.TemporaryFile(mode="w+") as file:
+                with pytest.raises(ValueError, match="file should be opened in binary mode"):
+                    client.transport.sendfile(file, 0, 1)
+
+            with open(os.devnull, "rb") as file:  # noqa: ASYNC230 - opening the local null device cannot block.
+                with pytest.raises(asyncio.SendfileNotAvailableError, match="not a regular file"):
+                    client.transport.sendfile(file, 0, 1)
+
+
 async def test_proactor_socket_transport_ssl_layer(libuv_loop):
     from aiofastnet.ssl_transport import SSLTransport_Transport
 
