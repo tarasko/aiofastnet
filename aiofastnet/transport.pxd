@@ -1,3 +1,5 @@
+from libc.stdint cimport int64_t, intptr_t
+
 from .utils cimport NoResult, aiofn_iovec
 
 
@@ -97,8 +99,16 @@ cdef class WriteRequest:
         Py_ssize_t size
 
 
-cdef class SendFileRequestBase:
-    cdef object waiter
+cdef class SendFileRequest:
+    cdef:
+        object file
+        int fd
+        intptr_t native_handle
+
+        int64_t offset
+        Py_ssize_t count
+
+        object waiter
 
 
 cdef WriteRequest make_write_request(object data)

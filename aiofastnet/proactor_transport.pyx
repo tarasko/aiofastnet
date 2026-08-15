@@ -18,7 +18,7 @@ from .loop_backend cimport (
 from .loop_base cimport ProactorContext, ProactorSocket
 from .transport cimport (
     FlowControlledWriter,
-    SendFileRequestBase,
+    SendFileRequest,
     StreamWriter,
     Transport,
     WriteRequest,
@@ -43,38 +43,27 @@ cdef:
     Py_ssize_t _data_received_max_size = constants.DATA_RECEIVED_MAX_SIZE
 
 
-cdef class SendFileRequest(SendFileRequestBase):
-    """Own one file transfer and its remaining byte range."""
-
-    cdef:
-        object file
-        aiofn_loop_file_handle_t handle
-        int64_t offset
-        Py_ssize_t count
-
-
 cdef SendFileRequest make_sendfile_request(file, offset, count):
 
     cdef:
         int64_t native_offset = offset
-        Py_ssize_t available
         Py_ssize_t native_count
         SendFileRequest request
 
     if native_offset < 0:
         raise ValueError("offset must be non-negative")
 
-    available = max(0, os.fstat(file.fileno()).st_size - offset)
     if count is None:
-        native_count = available
+        native_count = max(0, os.fstat(file.fileno()).st_size - offset)
     else:
         if count < 0:
             raise ValueError("count must be non-negative")
-        native_count = min(count, available)
+        native_count = count
 
     request = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
     request.file = file
-    request.handle = <aiofn_loop_file_handle_t>file.fileno()
+    request.fd = file.fileno()
+    request.native_handle = request.fd
     request.offset = native_offset
     request.count = native_count
     request.waiter = None
@@ -460,7 +449,7 @@ cdef class ProactorStreamWriter(StreamWriter):
                     transport._proactor_socket.context.backend.state,
                     &transport._proactor_socket.backend_sock,
                     &self.op,
-                    request.handle,
+                    <aiofn_loop_file_handle_t>request.native_handle,
                     request.offset,
                     <size_t>request.count,
                 ))

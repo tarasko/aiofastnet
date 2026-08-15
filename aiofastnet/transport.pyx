@@ -281,8 +281,11 @@ cdef class WriteRequest:
     """Own an immutable write buffer and its current unsent memory range."""
 
 
-cdef class SendFileRequestBase:
-    """Common state for file transfers queued by flow-controlled writers."""
+cdef class SendFileRequest:
+    """Mutable progress state for a file transfer queued with writes."""
+
+    def __len__(self):
+        return self.count
 
 
 cdef WriteRequest make_write_request(object data):
@@ -410,11 +413,11 @@ cdef class FlowControlledWriter:
             self.transport, self.transport._protocol, self.get_write_buffer_size())
 
     cdef NoResult clear(self, object exc) except NoResult.EXC:
-        cdef SendFileRequestBase request
+        cdef SendFileRequest request
 
         for item in self.backlog:
-            if isinstance(item, SendFileRequestBase):
-                request = <SendFileRequestBase>item
+            if isinstance(item, SendFileRequest):
+                request = <SendFileRequest>item
                 if request.waiter is not None and not request.waiter.done():
                     if exc is None:
                         request.waiter.cancel()

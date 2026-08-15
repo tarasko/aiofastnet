@@ -374,7 +374,7 @@ async def test_proactor_socket_transport_sendfile(libuv_loop):
         async with TestServer(ct=ConnectionType("tcp")) as server:
             async with TestClient(server) as client:
                 client.write(header)
-                waiter = client.transport.sendfile(file, 2, len(payload) - 2)
+                waiter = client.transport.sendfile(file, 2, len(payload) * 2)
                 assert waiter is not None
                 client.write(tail)
                 await waiter

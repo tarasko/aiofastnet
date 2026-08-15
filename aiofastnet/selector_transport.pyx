@@ -30,7 +30,7 @@ from . import constants
 from .transport cimport (
     DatagramWriter,
     FlowControlledWriter,
-    SendFileRequestBase,
+    SendFileRequest,
     StreamWriter,
     Transport,
     WriteRequest,
@@ -48,23 +48,18 @@ cdef:
     Py_ssize_t _max_read_bytes_per_cycle_hint = constants.MAX_READ_BYTES_PER_CYCLE_HINT
 
 
-cdef class SendFileRequest(SendFileRequestBase):
-    """Mutable progress state for a sendfile operation queued with writes."""
-
-    cdef:
-        object fileno
-        object offset
-        object count
-
-
 cdef SendFileRequest _make_send_file_request(file, offset, count):
     cdef SendFileRequest req = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
-    req.fileno = file.fileno()
+    req.file = file
+    req.fd = file.fileno()
+    req.native_handle = req.fd
     req.offset = offset
+
     if count is None:
-        req.count = max(0, os.fstat(file.fileno()).st_size - offset)
+        req.count = max(0, os.fstat(req.fd).st_size - offset)
     else:
         req.count = count
+
     req.waiter = None
     return req
 
@@ -566,7 +561,7 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
 
         try:
             while req.count:
-                bytes_sent = _os_sendfile(self._fileno_obj, req.fileno,
+                bytes_sent = _os_sendfile(self._fileno_obj, req.fd,
                                           req.offset, req.count)
                 if unlikely(self._is_debug):
                     _logger.debug("%r: os.sendfile(offset=%d,count=%d)=%d",

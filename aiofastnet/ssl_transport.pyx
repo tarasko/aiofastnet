@@ -31,7 +31,7 @@ from .utils cimport (
     aiofn_add_info_and_reraise,
     unlikely
 )
-from .transport cimport Transport, Protocol, WriteWatermarks
+from .transport cimport Protocol, SendFileRequest, Transport, WriteWatermarks
 from .openssl_compat import OPENSSL_DYN_LIBS, create_transport_context
 from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
 
@@ -52,17 +52,6 @@ def _ssl_socket_post_handshake_test_hook(transport):
     pass
 
 
-cdef class SendFileRequest:
-    cdef:
-        int fd
-        off_t offset
-        Py_ssize_t count
-        object waiter
-
-    def __len__(self):
-        return self.count
-
-
 cdef SendFileRequest _make_send_file_request(file, offset, count):
     cdef:
         int c_fd = file.fileno()
@@ -72,7 +61,7 @@ cdef SendFileRequest _make_send_file_request(file, offset, count):
         raise ValueError("offset must be non-negative")
 
     cdef:
-        Py_ssize_t size = os.fstat(file.fileno()).st_size
+        Py_ssize_t size = os.fstat(c_fd).st_size
         Py_ssize_t available = max(0, size - offset)
         size_t c_count
 
@@ -82,7 +71,9 @@ cdef SendFileRequest _make_send_file_request(file, offset, count):
         c_count = min(<Py_ssize_t> count, available)
 
     cdef SendFileRequest self = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
+    self.file = file
     self.fd = c_fd
+    self.native_handle = c_fd
     self.offset = c_offset
     self.count = c_count
     self.waiter = None
