@@ -519,6 +519,16 @@ cdef class WritableTransport(FDTransport):
         self._write_backlog_size = 0
         self._closed_write_count = 0
 
+    cpdef close(self):
+        self._check_thread("close")
+        if self._closing:
+            return
+
+        self._closing = True
+        self._pause_reading()
+        if self._write_backlog_size == 0:
+            self._schedule_finalize_close(None)
+
     cpdef Py_ssize_t get_write_buffer_size(self) except -1:
         self._check_thread("get_write_buffer_size")
         return self._get_write_buffer_size_nocheck()
@@ -590,16 +600,6 @@ cdef class StreamTransport(WritableTransport):
             self._file.close()
             if self._server is not None:
                 self._server._detach(self)
-
-    cpdef close(self):
-        self._check_thread("close")
-        if self._closing:
-            return
-
-        self._pause_reading()
-        self._closing = True
-        if self._write_backlog_size == 0:
-            self._schedule_finalize_close(None)
 
     cdef NoResult _release_backend_resources(self) except NoResult.EXC:
         return NoResult.OK

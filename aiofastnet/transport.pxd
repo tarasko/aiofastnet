@@ -158,6 +158,7 @@ cdef class WritableTransport(FDTransport):
         Py_ssize_t _write_backlog_size
         size_t _closed_write_count
 
+    cpdef close(self)
     cpdef Py_ssize_t get_write_buffer_size(self) except -1
     cpdef tuple get_write_buffer_limits(self)
     cpdef set_write_buffer_limits(self, high=*, low=*)

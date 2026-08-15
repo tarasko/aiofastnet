@@ -143,6 +143,16 @@ cdef class SelectorStreamTransport(StreamTransport):
         self._write_ready_registered = True
         self._loop.add_writer(self._fileno_obj, self._write_ready)
 
+    cdef NoResult _stop_write_ready(self) except NoResult.EXC:
+        if unlikely(self._is_debug):
+            _logger.debug("%r: stop write-ready notifications", self)
+
+        if not self._write_ready_registered:
+            return NoResult.OK
+
+        self._write_ready_registered = False
+        self._loop.remove_writer(self._fileno_obj)
+
     cdef bint _try_sendfile(self, SendFileRequest request) except -1:
         """Return whether the request completed without waiting for write readiness."""
         if _os_sendfile is None:
@@ -177,16 +187,6 @@ cdef class SelectorStreamTransport(StreamTransport):
             if sys.platform == "darwin" and exc.errno == 57:
                 raise ConnectionResetError()
             raise
-
-    cdef NoResult _stop_write_ready(self) except NoResult.EXC:
-        if unlikely(self._is_debug):
-            _logger.debug("%r: stop write-ready notifications", self)
-
-        if not self._write_ready_registered:
-            return NoResult.OK
-
-        self._write_ready_registered = False
-        self._loop.remove_writer(self._fileno_obj)
 
 
 cdef class SelectorSocketTransport(SelectorStreamTransport):
@@ -252,8 +252,6 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
             if not self._protocol_buffered:
                 return NoResult.OK
 
-        return NoResult.OK
-
     cdef inline NoResult _read_ready__data_received(self) except NoResult.EXC:
         cdef:
             Py_ssize_t bytes_read
@@ -289,8 +287,6 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
             # Protocol may have been switched from simple to buffered
             if self._protocol_buffered:
                 return NoResult.OK
-
-        return NoResult.OK
 
     cdef inline NoResult _read_ready__on_eof(self) except NoResult.EXC:
         if self._loop.get_debug():
@@ -354,17 +350,6 @@ cdef class SelectorDatagramTransport(DatagramTransport):
     cdef NoResult _start_reading(self) except NoResult.EXC:
         self._loop.add_reader(self._fileno_obj, self._read_ready)
 
-    cpdef close(self):
-        self._check_thread("close")
-        if self._closing:
-            return
-
-        self._closing = True
-        self._loop.remove_reader(self._fileno_obj)
-        if self._write_backlog_size == 0:
-            self._stop_write_ready()
-            self._schedule_finalize_close(None)
-
     cdef bint _should_report_fatal_error(self, exc) except -1:
         return not isinstance(exc, OSError)
 
@@ -372,12 +357,10 @@ cdef class SelectorDatagramTransport(DatagramTransport):
         if self._finalizing_close:
             return
 
+        self._closing = True
+        self._pause_reading()
         self._stop_write_ready()
         self._clear_write_backlog(exc)
-        if not self._closing:
-            self._closing = True
-            self._loop.remove_reader(self._fileno_obj)
-
         self._schedule_finalize_close(exc)
 
     cpdef _finalize_close(self, exc):
@@ -491,7 +474,6 @@ cdef class SelectorDatagramTransport(DatagramTransport):
 
         self._write_ready_registered = True
         self._loop.add_writer(self._fileno_obj, self._write_ready)
-        return NoResult.OK
 
     cdef NoResult _stop_write_ready(self) except NoResult.EXC:
         if unlikely(self._is_debug):
@@ -502,7 +484,6 @@ cdef class SelectorDatagramTransport(DatagramTransport):
 
         self._write_ready_registered = False
         self._loop.remove_writer(self._fileno_obj)
-        return NoResult.OK
 
     def _write_ready(self):
         try:

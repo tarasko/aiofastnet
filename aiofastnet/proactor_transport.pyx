@@ -192,8 +192,8 @@ cdef class ProactorSocketTransport(StreamTransport):
         if self._finalizing_close:
             return
 
-        self._pause_reading()
         self._closing = True
+        self._pause_reading()
         self._finalizing_close = True
         self._close_exc = exc
 
@@ -495,17 +495,6 @@ cdef class ProactorDatagramTransport(DatagramTransport):
 
     cpdef write_eof(self):
         raise NotImplementedError()
-
-    cpdef close(self):
-        self._check_thread("close")
-        if self._closing:
-            return
-
-        self.pause_reading()
-        self._closing = True
-        if self._write_backlog_size == 0:
-            assert not self._send_pending
-            self._schedule_finalize_close(None)
 
     cpdef _force_close(self, exc):
         if self._finalizing_close:
