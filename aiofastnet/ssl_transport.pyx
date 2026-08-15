@@ -1243,14 +1243,13 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             self._handle_error("Error occurred during read")
 
     cpdef _force_close(self, exc):
-        if self._sock is None:
+        if self._sock is None or self._finalizing_close:
             return
-        self._finalizing_close = True
         if self._write_backlog_size:
             self._clear_write_backlog(exc)
         self._drop_writer()
         self._loop.remove_reader(self._sock_fd_obj)
-        self._loop.call_soon(self._finalize_close, exc)
+        self._schedule_finalize_close(exc)
 
     cdef NoResult _maybe_pause_protocol(self) except NoResult.EXC:
         self._write_watermarks.maybe_pause_protocol(self, self._protocol, self.get_write_buffer_size())

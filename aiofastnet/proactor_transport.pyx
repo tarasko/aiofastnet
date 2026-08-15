@@ -505,8 +505,7 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         self._closing = True
         if self._write_backlog_size == 0:
             assert not self._send_pending
-            self._finalizing_close = True
-            self._schedule_finalize_close()
+            self._schedule_finalize_close(None)
 
     cpdef _force_close(self, exc):
         if self._finalizing_close:
@@ -519,12 +518,9 @@ cdef class ProactorDatagramTransport(DatagramTransport):
 
         if not self._send_pending:
             self._clear_write_backlog(exc)
-            self._schedule_finalize_close()
+            self._schedule_finalize_close(exc)
 
-    cdef inline NoResult _schedule_finalize_close(self) except NoResult.EXC:
-        self._loop.call_soon((<object>self)._finalize_close, self._close_exc)
-
-    def _finalize_close(self, exc):
+    cpdef _finalize_close(self, exc):
         assert self._read_paused
         assert not self._send_pending
         try:
@@ -642,7 +638,7 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         if self._finalizing_close:
             self._send_pending = False
             self._clear_write_backlog(self._close_exc)
-            self._schedule_finalize_close()
+            self._schedule_finalize_close(self._close_exc)
             return NoResult.OK
 
         if status != AIOFN_LOOP_OK:
@@ -670,9 +666,8 @@ cdef class ProactorDatagramTransport(DatagramTransport):
             self._ensure_progress()
 
         self._maybe_resume_protocol()
-        if self._write_backlog_size == 0 and self._closing:
-            self._finalizing_close = True
-            self._schedule_finalize_close()
+        if self._write_backlog_size == 0 and self._closing and not self._finalizing_close:
+            self._schedule_finalize_close(self._close_exc)
         return NoResult.OK
 
     cdef NoResult _clear_write_backlog(self, object exc) except NoResult.EXC:

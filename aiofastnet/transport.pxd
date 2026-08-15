@@ -65,6 +65,8 @@ cdef class Transport:
     cdef inline NoResult _pause_reading(self) except NoResult.EXC
 
     cpdef _force_close(self, exc)
+    cpdef _finalize_close(self, exc)
+    cdef inline NoResult _schedule_finalize_close(self, exc) except NoResult.EXC
 
     cdef NoResult _fatal_error(self, exc, message=*) except NoResult.EXC
     cdef NoResult _report_protocol_exception(self, exc, message) except NoResult.EXC
@@ -185,8 +187,6 @@ cdef class StreamTransport(WritableTransport):
     cpdef write_nocheck(self, data)
     cpdef writelines_nocheck(self, list_of_data)
     cdef NoResult write_c(self, char *ptr, Py_ssize_t size) except NoResult.EXC
-
-    cdef inline NoResult _schedule_finalize_close(self, exc) except NoResult.EXC
 
     cdef inline WriteRequest _try_write(self, object data, char *ptr, Py_ssize_t size)
     cdef inline bint _try_writelines(self, object list_of_data, Py_ssize_t *total_bytes_sent) except -1

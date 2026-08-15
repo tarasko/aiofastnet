@@ -27,7 +27,9 @@ Read README.md for project description.
   callers must ignore the return value. Use a meaningful return type instead
   when callers consume the result. Helpers that are passed to Python APIs as
   callbacks should instead be untyped `cpdef` functions so Cython provides the
-  normal Python-callable wrapper.
+  normal Python-callable wrapper. Do not write `return NoResult.OK` as the last
+  statement of a function; let the function fall through because Cython already
+  returns that value. Keep explicit `return NoResult.OK` for early returns.
 * Add a concise comment for compatibility checks or defensive-looking logic
   whose necessity is not apparent from the code. Explain the concrete platform,
   runtime, or implementation behavior being handled, especially when using

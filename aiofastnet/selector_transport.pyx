@@ -62,6 +62,7 @@ cdef class SelectorStreamTransport(StreamTransport):
             return
 
         self._pause_reading()
+        self._stop_write_ready()
         self._clear_write_backlog(exc)
         self._closing = True
         self._schedule_finalize_close(exc)
@@ -223,11 +224,6 @@ cdef class SelectorStreamTransport(StreamTransport):
 
         self._write_ready_registered = False
         self._loop.remove_writer(self._fileno_obj)
-
-    cdef NoResult _clear_write_backlog(self, object exc) except NoResult.EXC:
-        self._stop_write_ready()
-        WritableTransport._clear_write_backlog(self, exc)
-        return NoResult.OK
 
 
 cdef class SelectorSocketTransport(SelectorStreamTransport):
@@ -403,9 +399,8 @@ cdef class SelectorDatagramTransport(DatagramTransport):
         self._closing = True
         self._loop.remove_reader(self._fileno_obj)
         if self._write_backlog_size == 0:
-            self._finalizing_close = True
-            self._clear_write_backlog(None)
-            self._loop.call_soon(self._finalize_close, None)
+            self._stop_write_ready()
+            self._schedule_finalize_close(None)
 
     cdef bint _should_report_fatal_error(self, exc) except -1:
         return not isinstance(exc, OSError)
@@ -414,15 +409,15 @@ cdef class SelectorDatagramTransport(DatagramTransport):
         if self._finalizing_close:
             return
 
+        self._stop_write_ready()
         self._clear_write_backlog(exc)
         if not self._closing:
             self._closing = True
             self._loop.remove_reader(self._fileno_obj)
 
-        self._finalizing_close = True
-        self._loop.call_soon(self._finalize_close, exc)
+        self._schedule_finalize_close(exc)
 
-    def _finalize_close(self, exc):
+    cpdef _finalize_close(self, exc):
         try:
             self._call_protocol_connection_lost(exc)
         finally:
@@ -560,19 +555,17 @@ cdef class SelectorDatagramTransport(DatagramTransport):
                 self._write_backlog_size -= len(data) + self._datagram_header_size
 
             self._maybe_resume_protocol()
+
             if self._write_backlog_size == 0:
                 self._stop_write_ready()
-                if self._closing:
-                    self._finalizing_close = True
-                    self._finalize_close(None)
+
+                # A reentrant close from resume_writing() may already have
+                # scheduled finalization.
+                if self._closing and not self._finalizing_close:
+                    self._schedule_finalize_close(None)
         except:
             self._stop_write_ready()
             self._handle_error('Fatal write error on datagram transport')
-
-    cdef NoResult _clear_write_backlog(self, object exc) except NoResult.EXC:
-        self._stop_write_ready()
-        WritableTransport._clear_write_backlog(self, exc)
-        return NoResult.OK
 
 
 cdef class SelectorReadPipeTransport(FDTransport):
@@ -612,8 +605,7 @@ cdef class SelectorReadPipeTransport(FDTransport):
         if not self._closing:
             self._closing = True
             self._loop.remove_reader(self._fileno_obj)
-        self._finalizing_close = True
-        self._loop.call_soon(self._finalize_close, exc)
+        self._schedule_finalize_close(exc)
 
     def _read_ready(self):
         cdef:
@@ -640,7 +632,7 @@ cdef class SelectorReadPipeTransport(FDTransport):
     cdef bint _should_report_fatal_error(self, exc) except -1:
         return not (isinstance(exc, OSError) and exc.errno == errno.EIO)
 
-    def _finalize_close(self, exc):
+    cpdef _finalize_close(self, exc):
         try:
             self._call_protocol_connection_lost(exc)
         finally:

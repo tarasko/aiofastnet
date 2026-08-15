@@ -138,6 +138,13 @@ cdef class Transport:
     cpdef _force_close(self, exc):
         raise NotImplementedError()
 
+    cdef inline NoResult _schedule_finalize_close(self, exc) except NoResult.EXC:
+        self._finalizing_close = True
+        self._loop.call_soon((<object>self)._finalize_close, exc)
+
+    cpdef _finalize_close(self, exc):
+        raise NotImplementedError()
+
     cdef NoResult _fatal_error(self, exc, message='Fatal error on transport') except NoResult.EXC:
         if self._should_report_fatal_error(exc):
             self._report_protocol_exception(exc, message)
@@ -593,10 +600,6 @@ cdef class StreamTransport(WritableTransport):
         if self._write_backlog_size == 0:
             self._schedule_finalize_close(None)
 
-    cdef inline NoResult _schedule_finalize_close(self, exc) except NoResult.EXC:
-        self._finalizing_close = True
-        self._loop.call_soon((<object>self)._finalize_close, exc)
-
     cdef NoResult _release_backend_resources(self) except NoResult.EXC:
         return NoResult.OK
 
@@ -821,7 +824,6 @@ cdef class StreamTransport(WritableTransport):
                 request.ptr += bytes_sent
                 request.size -= bytes_sent
                 bytes_sent = 0
-        return NoResult.OK
 
     cdef inline bint __pre_write_check(self, str meth) except -1:
         if self._write_eof:
@@ -855,7 +857,6 @@ cdef class StreamTransport(WritableTransport):
                 bytes_sent = 0
             elif data_len:
                 self.__append_request(make_write_request(data))
-
 
 
 cdef class DatagramTransport(WritableTransport):
