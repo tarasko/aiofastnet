@@ -4,8 +4,10 @@ import asyncio
 import collections
 import io
 import os
+import socket
 import stat
 import sys
+import warnings
 from logging import getLogger
 
 import cython
@@ -269,6 +271,39 @@ cdef class Transport:
         raise NotImplementedError()
 
 
+cdef class FDTransport(Transport):
+    """Base for transports that own a nonblocking file descriptor."""
+
+    def __init__(self, loop, file):
+        Transport.__init__(self, loop)
+
+        self._file = file
+        self._fileno_obj = file.fileno()
+        self._fileno = self._fileno_obj
+        self._is_socket = isinstance(file, socket.socket)
+
+        if self._is_socket:
+            file.setblocking(False)
+        else:
+            os.set_blocking(self._fileno_obj, False)
+
+    cdef inline list _get_fd_repr_info(self):
+        info = [f'fd={self._fileno_obj}', self.__class__.__name__]
+        if self._file is None:
+            info.append('closed')
+        elif self._closing:
+            info.append('closing')
+        return info
+
+    def __repr__(self):
+        return '[{}]'.format(' '.join(self._get_fd_repr_info()))
+
+    def __del__(self):
+        if self._file is not None:
+            warnings.warn(f"unclosed {self.__class__.__name__} for {self._file}", ResourceWarning, source=self)
+            self._file.close()
+
+
 cdef class Protocol:
     """Optional Cython protocol interface for avoiding Python method dispatch."""
 
@@ -454,11 +489,11 @@ cdef class WriteWatermarks:
         self._low_water = low
 
 
-cdef class WritableTransport(Transport):
+cdef class WritableTransport(FDTransport):
     """Transport base with write buffering and protocol flow control."""
 
-    def __init__(self, loop):
-        Transport.__init__(self, loop)
+    def __init__(self, loop, file):
+        FDTransport.__init__(self, loop, file)
         self._watermarks = WriteWatermarks(loop)
 
         self._write_backlog = collections.deque()
@@ -518,12 +553,11 @@ cdef class WritableTransport(Transport):
 cdef class StreamTransport(WritableTransport):
     """Transport base implementing ordered byte-stream write queues."""
 
-    def __init__(self, loop, int fd, bint is_socket):
-        WritableTransport.__init__(self, loop)
+    def __init__(self, loop, file):
+        WritableTransport.__init__(self, loop, file)
 
-        self._write_fd = fd
-        self._write_is_socket = is_socket
         self._write_eof = False
+        self._sendfile_compatible = False
 
     cpdef write_nocheck(self, data):
         if not self.__pre_write_check("write"):
@@ -594,7 +628,14 @@ cdef class StreamTransport(WritableTransport):
         except:
             self._handle_error('Fatal write error on transport')
 
-    cdef object _sendfile(self, file, offset, count):
+    def sendfile(self, file, offset, count):
+        self._check_thread("sendfile")
+
+        # This private asyncio flag is also used by third-party libraries to
+        # disable native sendfile and select their fallback implementation.
+        if not self._sendfile_compatible:
+            raise NotImplementedError()
+
         if self._write_eof:
             raise RuntimeError('Cannot call sendfile() after write_eof()')
 
@@ -636,7 +677,7 @@ cdef class StreamTransport(WritableTransport):
         char *ptr,
         Py_ssize_t size
     ):
-        cdef Py_ssize_t bytes_sent = aiofn_write(self._write_fd, ptr, size, self._write_is_socket)
+        cdef Py_ssize_t bytes_sent = aiofn_write(self._fileno, ptr, size, self._is_socket)
         if unlikely(self._is_debug):
             _logger.debug("%r: aiofn_write(..., len=%d)=%d", self, size, bytes_sent)
 
@@ -686,7 +727,7 @@ cdef class StreamTransport(WritableTransport):
         return bytes_sent == bytes_to_send
 
     cdef Py_ssize_t _flush_iovecs(self, Py_ssize_t iovecs_count, Py_ssize_t *total_bytes_sent) except -2:
-        cdef Py_ssize_t bytes_sent = aiofn_writev(self._write_fd, self._write_iovecs, iovecs_count, self._write_is_socket)
+        cdef Py_ssize_t bytes_sent = aiofn_writev(self._fileno, self._write_iovecs, iovecs_count, self._is_socket)
         if unlikely(self._is_debug):
             _logger.debug(
                 "%r: aiofn_writev(..., len(iovecs)=%d)=%d",
@@ -762,10 +803,11 @@ cdef class DatagramTransport(WritableTransport):
     def __init__(
         self,
         loop,
+        file,
         object address,
         Py_ssize_t header_size,
     ):
-        WritableTransport.__init__(self, loop)
+        WritableTransport.__init__(self, loop, file)
 
         self._address = address or None
         self._datagram_header_size = header_size

@@ -1,6 +1,5 @@
 import logging
 import socket
-import warnings
 
 from asyncio.trsock import TransportSocket
 from libc.stdint cimport int64_t
@@ -53,8 +52,6 @@ cdef class ProactorSocketTransport(StreamTransport):
 
     cdef:
         ProactorSocket _proactor_socket
-        object _file
-        int _fileno
         object _server
 
         object _read_buffer
@@ -65,17 +62,12 @@ cdef class ProactorSocketTransport(StreamTransport):
         aiofn_loop_buffer_t _write_buffers[256]
 
         object _close_exc
-        public bint _sendfile_compatible
 
     def __init__(self, ProactorContext context, loop, sock, protocol, waiter=None, server=None):
         aiofn_set_nodelay(sock)
-        sock.setblocking(False)
-
-        self._file = sock
-        self._fileno = sock.fileno()
         self._server = server
 
-        StreamTransport.__init__(self, loop, self._fileno, True)
+        StreamTransport.__init__(self, loop, sock)
         self._set_protocol(protocol)
 
         self._read_buffer = None
@@ -105,18 +97,9 @@ cdef class ProactorSocketTransport(StreamTransport):
             self._loop.call_soon(aiofn_set_result_unless_cancelled, waiter, None)
 
     def __repr__(self):
-        info = [f'fd={self._fileno}', self.__class__.__name__]
-        if self._file is None:
-            info.append('closed')
-        elif self._closing:
-            info.append('closing')
+        info = self._get_fd_repr_info()
         info.append(f'wbuf_size={self._write_backlog_size}')
         return '[{}]'.format(' '.join(info))
-
-    def __del__(self):
-        if self._file is not None:
-            warnings.warn(f"unclosed {self.__class__.__name__} for {self._file}", ResourceWarning, source=self)
-            self._file.close()
 
     def __dealloc__(self):
         Py_XDECREF(self._read_bytes)
@@ -204,16 +187,6 @@ cdef class ProactorSocketTransport(StreamTransport):
             data = aiofn_finalize_bytes(bytes_obj, <Py_ssize_t>bytes_read)
             self._call_protocol_data_received(data)
         return NoResult.OK
-
-    def sendfile(self, file, offset, count):
-        self._check_thread("sendfile")
-
-        # Some third-party tests use this private asyncio flag to disable the
-        # native path and exercise their fallback implementation.
-        if not self._sendfile_compatible:
-            raise NotImplementedError()
-
-        return self._sendfile(file, offset, count)
 
     cpdef can_write_eof(self):
         return True
@@ -437,8 +410,6 @@ cdef class ProactorDatagramTransport(DatagramTransport):
 
     cdef:
         ProactorSocket _proactor_socket
-        object _file
-        int _fileno
         int _family
         bint _has_connection
 
@@ -450,13 +421,9 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         object _close_exc
 
     def __init__(self, ProactorContext context, loop, sock, protocol, address, waiter=None):
-        sock.setblocking(False)
-
-        self._file = sock
-        self._fileno = sock.fileno()
         self._family = sock.family
 
-        DatagramTransport.__init__(self, loop, address, 8)
+        DatagramTransport.__init__(self, loop, sock, address, 8)
         self._set_protocol(protocol)
 
         self._read_bytes = NULL
@@ -485,18 +452,9 @@ cdef class ProactorDatagramTransport(DatagramTransport):
             self._loop.call_soon(aiofn_set_result_unless_cancelled, waiter, None)
 
     def __repr__(self):
-        info = [f'fd={self._fileno}', self.__class__.__name__]
-        if self._file is None:
-            info.append('closed')
-        elif self._closing:
-            info.append('closing')
+        info = self._get_fd_repr_info()
         info.append(f'wbuf_size={self._write_backlog_size}')
         return '[{}]'.format(' '.join(info))
-
-    def __del__(self):
-        if self._file is not None:
-            warnings.warn(f"unclosed {self.__class__.__name__} for {self._file}", ResourceWarning, source=self)
-            self._file.close()
 
     def __dealloc__(self):
         Py_XDECREF(self._read_bytes)

@@ -81,6 +81,16 @@ cdef class Transport:
     cdef inline NoResult _call_protocol_error_received(self, exc) except NoResult.EXC
 
 
+cdef class FDTransport(Transport):
+    cdef:
+        object _file
+        object _fileno_obj
+        int _fileno
+        bint _is_socket
+
+    cdef inline list _get_fd_repr_info(self)
+
+
 cdef class Protocol:
     cpdef is_buffered_protocol(self)
 
@@ -136,7 +146,7 @@ cdef class WriteWatermarks:
     cdef inline NoResult _set_write_buffer_limits(self, high, low) except NoResult.EXC
 
 
-cdef class WritableTransport(Transport):
+cdef class WritableTransport(FDTransport):
     cdef:
         WriteWatermarks _watermarks
 
@@ -159,10 +169,9 @@ cdef class WritableTransport(Transport):
 
 cdef class StreamTransport(WritableTransport):
     cdef:
-        int _write_fd
-        bint _write_is_socket
         bint _write_eof
         aiofn_iovec _write_iovecs[256]
+        public bint _sendfile_compatible
 
     # Implement in concrete transport.
     cdef bint _try_sendfile(self, SendFileRequest request) except -1
@@ -170,7 +179,6 @@ cdef class StreamTransport(WritableTransport):
     cpdef write_nocheck(self, data)
     cpdef writelines_nocheck(self, list_of_data)
     cdef NoResult write_c(self, char *ptr, Py_ssize_t size) except NoResult.EXC
-    cdef object _sendfile(self, file, offset, count)
 
     cdef inline WriteRequest _try_write(self, object data, char *ptr, Py_ssize_t size)
     cdef inline bint _try_writelines(self, object list_of_data, Py_ssize_t *total_bytes_sent) except -1

@@ -4,7 +4,6 @@ Writable selector transports inherit the shared stream/datagram transport
 bases directly.
 """
 
-import asyncio
 import errno
 import os
 import socket
@@ -12,8 +11,6 @@ import stat
 import sys
 import warnings
 from logging import getLogger
-from typing import Optional
-
 from asyncio.trsock import TransportSocket
 
 from cpython.bytes cimport *
@@ -22,9 +19,9 @@ from cpython.ref cimport Py_XDECREF
 from . import constants
 from .transport cimport (
     DatagramTransport,
+    FDTransport,
     SendFileRequest,
     StreamTransport,
-    Transport,
     WritableTransport,
     WriteRequest,
 )
@@ -45,47 +42,18 @@ cdef class SelectorStreamTransport(StreamTransport):
     """Implement ordered byte-stream writes, writev, EOF, and sendfile queues."""
 
     cdef:
-        object _file
-        object _fileno_obj
-        int _fileno
-        bint _is_socket
-
         bint _write_ready_registered
-        public bint _sendfile_compatible
 
     def __init__(self, loop, file, protocol):
-        self._fileno_obj = file.fileno()
-        self._fileno = self._fileno_obj
-        self._is_socket = isinstance(file, socket.socket)
-
-        StreamTransport.__init__(self, loop, self._fileno, self._is_socket)
-        self._file = file
-        if self._is_socket:
-            file.setblocking(False)
-        else:
-            os.set_blocking(self._fileno_obj, False)
-
+        StreamTransport.__init__(self, loop, file)
         self._set_protocol(protocol)
         self._write_ready_registered = False
         self._sendfile_compatible = False
 
-    cdef inline list _get_repr_info(self):
-        info = [f'fd={self._fileno_obj}', self.__class__.__name__]
-        if self._file is None:
-            info.append('closed')
-        elif self._closing:
-            info.append('closing')
-        return info
-
     def __repr__(self):
-        info = self._get_repr_info()
+        info = self._get_fd_repr_info()
         info.append(f'wbuf_size={self._write_backlog_size}')
         return '[{}]'.format(' '.join(info))
-
-    def __del__(self):
-        if self._file is not None:
-            warnings.warn(f"unclosed {self.__class__.__name__} for {self._file}", ResourceWarning, source=self)
-            self._file.close()
 
     cdef NoResult _stop_reading(self) except NoResult.EXC:
         self._loop.remove_reader(self._fileno_obj)
@@ -228,16 +196,6 @@ cdef class SelectorStreamTransport(StreamTransport):
                     self._write_eof_now()
         return NoResult.OK
 
-    def sendfile(self, file, offset, count) -> Optional[asyncio.Future[None]]:
-        self._check_thread("sendfile")
-
-        # This is an undocumented feature in asyncio and uvloop
-        # Some 3rdparty tests use it to disable native sendfile (for example aiohttp tests)
-        if not self._sendfile_compatible:
-            raise NotImplementedError()
-
-        return self._sendfile(file, offset, count)
-
     cdef NoResult _ensure_progress(self) except NoResult.EXC:
         if unlikely(self._is_debug):
             _logger.debug(
@@ -260,7 +218,7 @@ cdef class SelectorStreamTransport(StreamTransport):
 
         try:
             while request.count:
-                bytes_sent = _os_sendfile(self._write_fd, request.fd, request.offset, request.count)
+                bytes_sent = _os_sendfile(self._fileno, request.fd, request.offset, request.count)
                 if unlikely(self._is_debug):
                     _logger.debug(
                         "%r: os.sendfile(offset=%d,count=%d)=%d",
@@ -453,9 +411,6 @@ cdef class SelectorDatagramTransport(DatagramTransport):
     """Provide message-oriented send and receive behavior for a datagram socket."""
 
     cdef:
-        object _file
-        object _fileno_obj
-        int _fileno
         int _family
         bint _has_connection
         bint _write_ready_registered
@@ -469,14 +424,10 @@ cdef class SelectorDatagramTransport(DatagramTransport):
         if address is not None:
             aiofn_pyaddr_to_sockaddr(family, address, raw_addr, &raw_addr_len)
 
-        DatagramTransport.__init__(self, loop, address, 8)
-        self._file = sock
-        self._fileno_obj = sock.fileno()
-        self._fileno = self._fileno_obj
+        DatagramTransport.__init__(self, loop, sock, address, 8)
         self._family = family
         self._write_ready_registered = False
 
-        sock.setblocking(False)
         self._set_protocol(protocol)
 
         self._extra['socket'] = TransportSocket(sock)
@@ -491,18 +442,9 @@ cdef class SelectorDatagramTransport(DatagramTransport):
         self._loop.call_soon(_set_result_unless_cancelled_callback, waiter, None)
 
     def __repr__(self):
-        info = [f'fd={self._fileno_obj}', self.__class__.__name__]
-        if self._file is None:
-            info.append('closed')
-        elif self._closing:
-            info.append('closing')
+        info = self._get_fd_repr_info()
         info.append(f'wbuf_size={self._write_backlog_size}')
         return '[{}]'.format(' '.join(info))
-
-    def __del__(self):
-        if self._file is not None:
-            warnings.warn(f"unclosed {self.__class__.__name__} for {self._file}", ResourceWarning, source=self)
-            self._file.close()
 
     cdef NoResult _stop_reading(self) except NoResult.EXC:
         self._loop.remove_reader(self._fileno_obj)
@@ -689,13 +631,8 @@ cdef class SelectorDatagramTransport(DatagramTransport):
         return NoResult.OK
 
 
-cdef class SelectorReadPipeTransport(Transport):
+cdef class SelectorReadPipeTransport(FDTransport):
     """Provide the read side of a unidirectional pipe transport."""
-
-    cdef:
-        object _file
-        object _fileno_obj
-        int _fileno
 
     def __init__(self, loop, pipe, protocol, waiter):
         mode = os.fstat(pipe.fileno()).st_mode
@@ -704,15 +641,7 @@ cdef class SelectorReadPipeTransport(Transport):
                 stat.S_ISCHR(mode)):
             raise ValueError("Pipe transport is for pipes/sockets only.")
 
-        Transport.__init__(self, loop)
-        self._file = pipe
-        self._fileno_obj = pipe.fileno()
-        self._fileno = self._fileno_obj
-        if isinstance(pipe, socket.socket):
-            pipe.setblocking(False)
-        else:
-            os.set_blocking(self._fileno_obj, False)
-
+        FDTransport.__init__(self, loop, pipe)
         self._set_protocol(protocol)
         self._extra['pipe'] = pipe
 
@@ -722,19 +651,6 @@ cdef class SelectorReadPipeTransport(Transport):
                              self._fileno_obj, self._read_ready)
         # only wake up the waiter when connection_made() has been called
         self._loop.call_soon(_set_result_unless_cancelled_callback, waiter, None)
-
-    def __repr__(self):
-        info = [f'fd={self._fileno_obj}', self.__class__.__name__]
-        if self._file is None:
-            info.append('closed')
-        elif self._closing:
-            info.append('closing')
-        return '[{}]'.format(' '.join(info))
-
-    def __del__(self):
-        if self._file is not None:
-            warnings.warn(f"unclosed {self.__class__.__name__} for {self._file}", ResourceWarning, source=self)
-            self._file.close()
 
     cdef NoResult _stop_reading(self) except NoResult.EXC:
         self._loop.remove_reader(self._fileno_obj)
@@ -805,7 +721,6 @@ cdef class SelectorWritePipeTransport(SelectorStreamTransport):
         SelectorStreamTransport.__init__(self, loop, pipe, protocol)
         self._extra['pipe'] = pipe
         self._is_socket = False
-        self._write_is_socket = False
 
         self._loop.call_soon((<object>self)._call_protocol_connection_made)
 
