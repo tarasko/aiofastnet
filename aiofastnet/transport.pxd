@@ -97,6 +97,10 @@ cdef class WriteRequest:
         Py_ssize_t size
 
 
+cdef class SendFileRequestBase:
+    cdef object waiter
+
+
 cdef WriteRequest make_write_request(object data)
 cdef WriteRequest make_write_request_from_ptr(char *ptr, Py_ssize_t size)
 cdef WriteRequest make_write_request_tail(object data, char *ptr, Py_ssize_t size)

@@ -119,6 +119,12 @@ typedef struct {
     void *backend_token;
 } aiofn_loop_proactor_socket_t;
 
+/*
+ * Platform-native file handle used by proactor file operations. It contains a
+ * POSIX file descriptor on Unix and a Windows HANDLE cast through intptr_t.
+ */
+typedef intptr_t aiofn_loop_file_handle_t;
+
 
 typedef struct aiofn_loop_proactor_op aiofn_loop_proactor_op_t;
 
@@ -195,11 +201,12 @@ typedef struct aiofn_loop_proactor_op {
 /*
  * Proactor interface. Each operation is called from the loop thread, just
  * like the common backend interface. A socket may have at most one
- * active stream read, one active datagram read, and one pending write; a read
- * and write may overlap. The shared allocation callback supplies data buffers;
- * datagram callbacks receive the source address from backend-owned storage.
- * Initiating functions must not invoke completion, read, or accept callbacks
- * inline; callbacks run only after control returns to the backend event loop.
+ * active stream read, one active datagram read, and one pending output
+ * operation (write, sendto, or sendfile); an input and output operation may
+ * overlap. The shared allocation callback supplies data buffers; datagram
+ * callbacks receive the source address from backend-owned storage. Initiating
+ * functions must not invoke completion, read, or accept callbacks inline;
+ * callbacks run only after control returns to the backend event loop.
  */
 typedef struct {
     size_t struct_size;
@@ -251,7 +258,7 @@ typedef struct {
         size_t buffer_count
     );
 
-    /* Cancel one pending connect, write, or sendto operation. */
+    /* Cancel one pending connect, write, sendto, or sendfile operation. */
     aiofn_loop_status (*cancel)(void *state, aiofn_loop_proactor_op_t *op);
 
     /*
@@ -299,6 +306,23 @@ typedef struct {
     aiofn_loop_status (*accept_stop)(
         void *state,
         aiofn_loop_proactor_socket_t *listener
+    );
+
+    /*
+     * Start one asynchronous file transfer on a stream socket. The frontend
+     * keeps file valid until completion. The backend must not close it, change
+     * its file position, or transfer more than count bytes. A successful
+     * completion may be partial; op->transferred reports the number of bytes
+     * sent. The frontend supplies a positive count and an explicit nonnegative
+     * offset.
+     */
+    aiofn_loop_status (*sendfile)(
+        void *state,
+        aiofn_loop_proactor_socket_t *socket,
+        aiofn_loop_proactor_op_t *op,
+        aiofn_loop_file_handle_t file,
+        int64_t offset,
+        size_t count
     );
 } aiofn_proactor_backend_t;
 
@@ -453,7 +477,7 @@ typedef struct {
     ((proactor)->struct_size >= AIOFN_PROACTOR_BACKEND_FIELD_END(field))
 
 #define AIOFN_PROACTOR_BACKEND_MIN_SIZE AIOFN_PROACTOR_BACKEND_FIELD_END(cancel)
-#define AIOFN_PROACTOR_BACKEND_CURRENT_SIZE AIOFN_PROACTOR_BACKEND_FIELD_END(accept_stop)
+#define AIOFN_PROACTOR_BACKEND_CURRENT_SIZE AIOFN_PROACTOR_BACKEND_FIELD_END(sendfile)
 
 #define AIOFN_LOOP_BACKEND_MIN_SIZE AIOFN_LOOP_BACKEND_FIELD_END(signal_unwatch)
 #define AIOFN_LOOP_BACKEND_CURRENT_SIZE AIOFN_LOOP_BACKEND_FIELD_END(signal_unwatch)

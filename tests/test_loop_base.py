@@ -4,6 +4,7 @@ import os
 import signal
 import socket
 import sys
+import tempfile
 import threading
 
 import pytest
@@ -359,6 +360,27 @@ async def test_proactor_socket_transport_stream_io(libuv_loop, buffered):
             data = b"proactor transport" * 32_768
             client.write_in_lines(data, 300)
             assert await client.readn(len(data)) == data
+
+
+async def test_proactor_socket_transport_sendfile(libuv_loop):
+    header = b"h" * (256 * 1024)
+    payload = b"p" * (1024 * 1024)
+    tail = b"t" * (256 * 1024)
+
+    with tempfile.TemporaryFile() as file:
+        file.write(payload)
+        file.flush()
+
+        async with TestServer(ct=ConnectionType("tcp")) as server:
+            async with TestClient(server) as client:
+                client.write(header)
+                waiter = client.transport.sendfile(file, 2, len(payload) - 2)
+                assert waiter is not None
+                client.write(tail)
+                await waiter
+
+                expected = header + payload[2:] + tail
+                assert await client.readn(len(expected)) == expected
 
 
 async def test_proactor_socket_transport_ssl_layer(libuv_loop):

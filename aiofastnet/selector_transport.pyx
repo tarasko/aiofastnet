@@ -30,6 +30,7 @@ from . import constants
 from .transport cimport (
     DatagramWriter,
     FlowControlledWriter,
+    SendFileRequestBase,
     StreamWriter,
     Transport,
     WriteRequest,
@@ -47,14 +48,13 @@ cdef:
     Py_ssize_t _max_read_bytes_per_cycle_hint = constants.MAX_READ_BYTES_PER_CYCLE_HINT
 
 
-cdef class SendFileRequest:
+cdef class SendFileRequest(SendFileRequestBase):
     """Mutable progress state for a sendfile operation queued with writes."""
 
     cdef:
         object fileno
         object offset
         object count
-        object waiter
 
 
 cdef SendFileRequest _make_send_file_request(file, offset, count):
@@ -403,14 +403,6 @@ cdef class SelectorStreamWriter(StreamWriter):
         self.transport._loop.remove_writer(self.fileobj)
 
     cdef NoResult clear(self, object exc) except NoResult.EXC:
-        cdef SendFileRequest request
-
-        for item in self.backlog:
-            if isinstance(item, SendFileRequest):
-                request = <SendFileRequest>item
-                if request.waiter is not None and not request.waiter.done():
-                    request.waiter.set_exception(exc)
-
         self.drop_writer()
         FlowControlledWriter.clear(self, exc)
         return NoResult.OK

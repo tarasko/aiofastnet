@@ -29,6 +29,9 @@ typedef struct {
     aiofn_loop_proactor_op_t *write_op;
     size_t write_transferred;
 
+    uv_fs_t sendfile_request;
+    aiofn_loop_proactor_op_t *sendfile_op;
+
     uv_udp_send_t sendto_request;
     aiofn_loop_proactor_op_t *sendto_op;
     size_t sendto_transferred;
@@ -470,6 +473,60 @@ static aiofn_loop_status aiofn_libuv_write(void *data, aiofn_loop_proactor_socke
 }
 
 
+static void aiofn_libuv_on_sendfile(uv_fs_t *request) {
+    aiofn_libuv_socket_t *socket = request->data;
+    aiofn_libuv_state_t *state = request->loop->data;
+    aiofn_loop_proactor_op_t *op = socket->sendfile_op;
+    ssize_t result = request->result;
+
+    socket->sendfile_op = NULL;
+    uv_fs_req_cleanup(request);
+
+    if (result >= 0) {
+        aiofn_libuv_complete(op, AIOFN_LOOP_OK, (size_t)result);
+    } else {
+        aiofn_libuv_set_error(state, "uv_fs_sendfile", (int)result);
+        aiofn_libuv_complete(op, AIOFN_LOOP_ERROR, 0);
+    }
+}
+
+
+static aiofn_loop_status aiofn_libuv_sendfile(
+    void *data,
+    aiofn_loop_proactor_socket_t *frontend,
+    aiofn_loop_proactor_op_t *op,
+    aiofn_loop_file_handle_t file,
+    int64_t offset,
+    size_t count
+) {
+    aiofn_libuv_state_t *state = data;
+    aiofn_libuv_socket_t *socket = frontend->backend_token;
+    int result;
+
+    socket->sendfile_op = op;
+    op->backend_token = socket;
+    socket->sendfile_request.data = socket;
+
+    result = uv_fs_sendfile(
+        &state->loop,
+        &socket->sendfile_request,
+        frontend->fd,
+        (uv_file)file,
+        offset,
+        count,
+        aiofn_libuv_on_sendfile
+    );
+    if (result != 0) {
+        socket->sendfile_op = NULL;
+        op->backend_token = NULL;
+        uv_fs_req_cleanup(&socket->sendfile_request);
+        aiofn_libuv_set_error(state, "uv_fs_sendfile", result);
+        return AIOFN_LOOP_ERROR;
+    }
+    return AIOFN_LOOP_OK;
+}
+
+
 static void aiofn_libuv_on_sendto(uv_udp_send_t *request, int status) {
     aiofn_libuv_socket_t *socket = request->data;
     aiofn_loop_proactor_op_t *op = socket->sendto_op;
@@ -724,6 +781,14 @@ static aiofn_loop_status aiofn_libuv_cancel_proactor(void *data, aiofn_loop_proa
         }
         return AIOFN_LOOP_OK;
     }
+    if (socket->sendfile_op == op) {
+        result = uv_cancel((uv_req_t *)&socket->sendfile_request);
+        if (result != 0) {
+            aiofn_libuv_set_error(state, "uv_cancel(sendfile)", result);
+            return AIOFN_LOOP_ERROR;
+        }
+        return AIOFN_LOOP_OK;
+    }
     if (socket->connect_op == op) {
         result = uv_cancel((uv_req_t *)&socket->connect_request);
         if (result != 0) {
@@ -952,6 +1017,7 @@ aiofn_loop_backend_t *aiofn_libuv_backend_new(void) {
     state->proactor.sendto = aiofn_libuv_sendto;
     state->proactor.accept_start = aiofn_libuv_accept_start;
     state->proactor.accept_stop = aiofn_libuv_accept_stop;
+    state->proactor.sendfile = aiofn_libuv_sendfile;
     state->backend.proactor = &state->proactor;
 
     state->backend.last_error = aiofn_libuv_last_error;

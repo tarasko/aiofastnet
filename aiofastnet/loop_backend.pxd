@@ -1,5 +1,5 @@
 from libc.stddef cimport size_t
-from libc.stdint cimport int32_t, uint32_t, uint64_t
+from libc.stdint cimport int32_t, int64_t, intptr_t, uint32_t, uint64_t
 
 
 cdef extern from "loop_backend.h":
@@ -61,6 +61,8 @@ cdef extern from "loop_backend.h":
         int socktype
         void *backend_token
 
+    ctypedef intptr_t aiofn_loop_file_handle_t
+
     ctypedef struct aiofn_loop_proactor_op_t
 
     ctypedef void (*aiofn_loop_proactor_callback_fn)(aiofn_loop_proactor_op_t *) noexcept nogil
@@ -94,6 +96,14 @@ cdef extern from "loop_backend.h":
         aiofn_loop_status (*sendto)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_proactor_op_t *, const void *, size_t, const void *, size_t) noexcept nogil
         aiofn_loop_status (*accept_start)(void *, aiofn_loop_proactor_socket_t *, aiofn_loop_accept_callback_fn, void *) noexcept nogil
         aiofn_loop_status (*accept_stop)(void *, aiofn_loop_proactor_socket_t *) noexcept nogil
+        aiofn_loop_status (*sendfile)(
+            void *,
+            aiofn_loop_proactor_socket_t *,
+            aiofn_loop_proactor_op_t *,
+            aiofn_loop_file_handle_t,
+            int64_t,
+            size_t,
+        ) noexcept nogil
 
     ctypedef struct aiofn_loop_backend_t:
         size_t struct_size

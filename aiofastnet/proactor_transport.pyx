@@ -1,20 +1,24 @@
 import logging
+import os
 import socket
 import warnings
 
 from asyncio.trsock import TransportSocket
+from libc.stdint cimport int64_t
 
 from . import constants
 from .loop_backend cimport (
     AIOFN_LOOP_OK,
     aiofn_loop_buffer_init,
     aiofn_loop_buffer_t,
+    aiofn_loop_file_handle_t,
     aiofn_loop_proactor_op_t,
     aiofn_loop_status,
 )
 from .loop_base cimport ProactorContext, ProactorSocket
 from .transport cimport (
     FlowControlledWriter,
+    SendFileRequestBase,
     StreamWriter,
     Transport,
     WriteRequest,
@@ -37,6 +41,44 @@ from cpython.ref cimport Py_XDECREF
 cdef:
     object _logger = logging.getLogger("asyncio")
     Py_ssize_t _data_received_max_size = constants.DATA_RECEIVED_MAX_SIZE
+
+
+cdef class SendFileRequest(SendFileRequestBase):
+    """Own one file transfer and its remaining byte range."""
+
+    cdef:
+        object file
+        aiofn_loop_file_handle_t handle
+        int64_t offset
+        Py_ssize_t count
+
+
+cdef SendFileRequest make_sendfile_request(file, offset, count):
+
+    cdef:
+        int64_t native_offset = offset
+        Py_ssize_t available
+        Py_ssize_t native_count
+        SendFileRequest request
+
+    if native_offset < 0:
+        raise ValueError("offset must be non-negative")
+
+    available = max(0, os.fstat(file.fileno()).st_size - offset)
+    if count is None:
+        native_count = available
+    else:
+        if count < 0:
+            raise ValueError("count must be non-negative")
+        native_count = min(count, available)
+
+    request = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
+    request.file = file
+    request.handle = <aiofn_loop_file_handle_t>file.fileno()
+    request.offset = native_offset
+    request.count = native_count
+    request.waiter = None
+    return request
 
 
 cdef class ProactorSocketTransport(Transport):
@@ -74,7 +116,7 @@ cdef class ProactorSocketTransport(Transport):
         self._writer = ProactorStreamWriter(self, self._fileno, True)
 
         self._close_exc = None
-        self._sendfile_compatible = False
+        self._sendfile_compatible = context.proactor.sendfile != NULL
 
         self._extra['socket'] = TransportSocket(sock)
         aiofn_set_socket_extra_info(self._extra, sock)
@@ -209,6 +251,44 @@ cdef class ProactorSocketTransport(Transport):
     cdef NoResult write_c(self, char *ptr, Py_ssize_t size) except NoResult.EXC:
         self._writer.write_c(ptr, size)
 
+    def sendfile(self, file, offset, count):
+        cdef:
+            ProactorStreamWriter writer = <ProactorStreamWriter>self._writer
+            SendFileRequest request
+
+        self._check_thread("sendfile")
+
+        # Some third-party tests use this private asyncio flag to disable the
+        # native path and exercise their fallback implementation.
+        if not self._sendfile_compatible:
+            raise NotImplementedError()
+
+        if writer.eof:
+            raise RuntimeError('Cannot call sendfile() after write_eof()')
+        if self._closing or self._finalizing_close:
+            raise RuntimeError("Transport is closing")
+
+        request = make_sendfile_request(file, offset, count)
+        if request.count == 0:
+            return None
+
+        try:
+            if unlikely(self._is_debug):
+                _logger.debug("%r: enqueue SendFileRequest(offset=%d,count=%d)", self, request.offset, request.count)
+
+            writer.backlog.append(request)
+            writer.backlog_size += request.count
+            writer._ensure_progress()
+            writer.maybe_pause_protocol()
+
+            # Backend callbacks are never invoked from the initiating call, so
+            # the waiter can be allocated after successful submission.
+            request.waiter = self._loop.create_future()
+            return request.waiter
+        except:
+            self._handle_error('Fatal sendfile error on proactor socket transport')
+            raise
+
     cpdef can_write_eof(self):
         return True
 
@@ -305,7 +385,10 @@ cdef class ProactorStreamWriter(StreamWriter):
         cdef ProactorSocketTransport transport = <ProactorSocketTransport>self.transport
 
         if self.submitted_size == 0:
-            self._submit_write(transport)
+            if isinstance(self.backlog[0], SendFileRequest):
+                self._submit_sendfile(transport)
+            else:
+                self._submit_write(transport)
         return NoResult.OK
 
     cdef NoResult _submit_write(self, ProactorSocketTransport transport) except NoResult.EXC:
@@ -318,6 +401,10 @@ cdef class ProactorStreamWriter(StreamWriter):
         assert self.backlog
 
         for request_obj in self.backlog:
+            if isinstance(request_obj, SendFileRequest):
+                break
+
+            assert isinstance(request_obj, WriteRequest)
             request = <WriteRequest>request_obj
             aiofn_loop_buffer_init(&self.buffers[buffer_count], request.ptr, <size_t>request.size)
             submitted_size += <size_t>request.size
@@ -330,6 +417,17 @@ cdef class ProactorStreamWriter(StreamWriter):
         self.op.status = AIOFN_LOOP_OK
         self.op.transferred = 0
         try:
+            if unlikely(transport._is_debug):
+                if buffer_count == 1:
+                    _logger.debug("%r: async_write(..., len=%d)", transport, submitted_size)
+                else:
+                    _logger.debug(
+                        "%r: async_writev(..., len(iovecs)=%d, len=%d)",
+                        transport,
+                        buffer_count,
+                        submitted_size,
+                    )
+
             transport._proactor_socket.context.check_status(
                 transport._proactor_socket.context.proactor.write(
                     transport._proactor_socket.context.backend.state,
@@ -343,10 +441,43 @@ cdef class ProactorStreamWriter(StreamWriter):
             raise
         return NoResult.OK
 
+    cdef NoResult _submit_sendfile(self, ProactorSocketTransport transport) except NoResult.EXC:
+        cdef SendFileRequest request = <SendFileRequest>self.backlog[0]
+
+        assert self.submitted_size == 0
+        assert request.count > 0
+
+        self.submitted_size = <size_t>request.count
+        self.op.backend_token = NULL
+        self.op.status = AIOFN_LOOP_OK
+        self.op.transferred = 0
+        try:
+            if unlikely(transport._is_debug):
+                _logger.debug("%r: async_sendfile(offset=%d, count=%d)", transport, request.offset, request.count)
+
+            transport._proactor_socket.context.check_status(
+                transport._proactor_socket.context.proactor.sendfile(
+                    transport._proactor_socket.context.backend.state,
+                    &transport._proactor_socket.backend_sock,
+                    &self.op,
+                    request.handle,
+                    request.offset,
+                    <size_t>request.count,
+                ))
+        except BaseException:
+            self.submitted_size = 0
+            raise
+        return NoResult.OK
+
     cdef NoResult _write_completed(self, aiofn_loop_status status, size_t bytes_sent) except NoResult.EXC:
-        cdef ProactorSocketTransport transport = <ProactorSocketTransport>self.transport
+        cdef:
+            ProactorSocketTransport transport = <ProactorSocketTransport>self.transport
+            SendFileRequest sendfile_request
 
         assert self.submitted_size > 0
+
+        if unlikely(transport._is_debug):
+            _logger.debug("%r: write_completed(error_code=%d, transferred=%d)", transport, status, bytes_sent)
 
         if transport._finalizing_close:
             self.submitted_size = 0
@@ -358,8 +489,26 @@ cdef class ProactorStreamWriter(StreamWriter):
             self.submitted_size = 0
             transport._proactor_socket.context.check_status(status)
 
-        assert 0 < bytes_sent <= self.submitted_size
-        self.consume(<Py_ssize_t>bytes_sent)
+        assert bytes_sent <= self.submitted_size
+
+        if isinstance(self.backlog[0], SendFileRequest):
+            sendfile_request = <SendFileRequest>self.backlog[0]
+            if bytes_sent == 0:
+                self.backlog_size -= sendfile_request.count
+                sendfile_request.count = 0
+            else:
+                sendfile_request.offset += <int64_t>bytes_sent
+                sendfile_request.count -= <Py_ssize_t>bytes_sent
+                self.backlog_size -= <Py_ssize_t>bytes_sent
+
+            if sendfile_request.count == 0:
+                self.backlog.popleft()
+                if not sendfile_request.waiter.done():
+                    sendfile_request.waiter.set_result(None)
+        else:
+            assert bytes_sent > 0
+            self.consume(<Py_ssize_t>bytes_sent)
+
         self.submitted_size = 0
 
         if self.backlog:
