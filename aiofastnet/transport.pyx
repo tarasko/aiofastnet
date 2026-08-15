@@ -760,16 +760,27 @@ cdef class StreamTransport(WritableTransport):
 
     cdef bint _try_writelines(self, object list_of_data, Py_ssize_t *total_bytes_sent) except -1:
         cdef:
+            WriteRequest request
+            bint from_write_backlog = list_of_data is self._write_backlog
             char *data_ptr
             Py_ssize_t data_len
             Py_ssize_t bytes_sent = 0
             Py_ssize_t bytes_to_send = 0
             Py_ssize_t index = 0
 
-        for data in list_of_data:
-            aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
-            if unlikely(data_len == 0):
-                continue
+        for item in list_of_data:
+            if from_write_backlog:
+                if isinstance(item, SendFileRequest):
+                    break
+
+                assert isinstance(item, WriteRequest)
+                request = <WriteRequest>item
+                data_ptr = request.ptr
+                data_len = request.size
+            else:
+                aiofn_unpack_simple_buffer(item, &data_ptr, &data_len, 0)
+                if unlikely(data_len == 0):
+                    continue
 
             self._write_buffers[index].iov_base = data_ptr
             self._write_buffers[index].iov_len = data_len

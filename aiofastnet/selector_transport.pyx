@@ -98,7 +98,7 @@ cdef class SelectorStreamTransport(StreamTransport):
                     all_sent = self._try_sendfile_from_backlog_top()
                 else:
                     bytes_sent = 0
-                    all_sent = self._try_write_backlog(&bytes_sent)
+                    all_sent = self._try_writelines(self._write_backlog, &bytes_sent)
                     self._consume_write_backlog(bytes_sent)
         except:
             self._handle_error('Fatal write error on transport')
@@ -112,40 +112,6 @@ cdef class SelectorStreamTransport(StreamTransport):
                         self._schedule_finalize_close(None)
                 elif self._write_eof:
                     self._write_eof_now()
-
-    cdef bint _try_write_backlog(self, Py_ssize_t *total_bytes_sent) except -1:
-        cdef:
-            WriteRequest request
-            Py_ssize_t bytes_sent = 0
-            Py_ssize_t bytes_to_send = 0
-            Py_ssize_t iovecs_count = 0
-
-        for item in self._write_backlog:
-            if isinstance(item, SendFileRequest):
-                break
-
-            assert isinstance(item, WriteRequest)
-            request = <WriteRequest>item
-            self._write_buffers[iovecs_count].iov_base = request.ptr
-            self._write_buffers[iovecs_count].iov_len = request.size
-            bytes_to_send += request.size
-            iovecs_count += 1
-
-            if iovecs_count < AIOFN_MAX_IOVEC:
-                continue
-
-            bytes_sent = self._flush_iovecs(iovecs_count, total_bytes_sent)
-            if bytes_sent != bytes_to_send:
-                return False
-
-            iovecs_count = 0
-            bytes_to_send = 0
-            bytes_sent = 0
-
-        if iovecs_count:
-            bytes_sent = self._flush_iovecs(iovecs_count, total_bytes_sent)
-
-        return bytes_sent == bytes_to_send
 
     cdef inline bint _try_sendfile_from_backlog_top(self) except -1:
         cdef SendFileRequest sendfile_req = <SendFileRequest>self._write_backlog[0]
