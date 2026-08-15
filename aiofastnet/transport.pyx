@@ -573,6 +573,42 @@ cdef class StreamWriter(FlowControlledWriter):
         except:
             self.transport._handle_error('Fatal write error on transport')
 
+    cdef object sendfile(self, file, offset, count):
+        if self.eof:
+            raise RuntimeError('Cannot call sendfile() after write_eof()')
+
+        if self.transport._closing or self.transport._finalizing_close:
+            raise RuntimeError("Transport is closing")
+
+        cdef SendFileRequest request = make_sendfile_request(file, offset, count)
+        if request.count == 0:
+            return None
+
+        try:
+            if not self.backlog and self._try_sendfile(request):
+                return None
+
+            if unlikely(self.transport._is_debug):
+                _logger.debug(
+                    "%r: enqueue SendFileRequest(offset=%d,count=%d)",
+                    self.transport,
+                    request.offset,
+                    request.count,
+                )
+
+            self.backlog.append(request)
+            self.backlog_size += request.count
+            self._ensure_progress()
+            self.maybe_pause_protocol()
+
+            # I/O drivers never complete an operation from its initiating call,
+            # so the waiter can be allocated after progress has been scheduled.
+            request.waiter = self.transport._loop.create_future()
+            return request.waiter
+        except:
+            self.transport._handle_error('Fatal sendfile error on transport')
+            raise
+
     cdef NoResult append_request(self, WriteRequest request) except NoResult.EXC:
         self.backlog.append(request)
         self.backlog_size += request.size
@@ -660,6 +696,9 @@ cdef class StreamWriter(FlowControlledWriter):
             total_bytes_sent[0] += bytes_sent
 
         return bytes_sent
+
+    cdef bint _try_sendfile(self, SendFileRequest request) except -1:
+        raise NotImplementedError()
 
     cdef NoResult consume(self, Py_ssize_t bytes_sent) except NoResult.EXC:
         cdef:

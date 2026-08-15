@@ -164,6 +164,7 @@ cdef class StreamWriter(FlowControlledWriter):
     cdef NoResult write_nocheck(self, object data) except NoResult.EXC
     cdef NoResult writelines_nocheck(self, object list_of_data) except NoResult.EXC
     cdef NoResult write_c(self, char *ptr, Py_ssize_t size) except NoResult.EXC
+    cdef object sendfile(self, file, offset, count)
 
     cdef inline NoResult append_request(self, WriteRequest request) except NoResult.EXC
     cdef inline NoResult append_lines_tail(self, object list_of_data, Py_ssize_t bytes_sent) except NoResult.EXC
@@ -171,6 +172,7 @@ cdef class StreamWriter(FlowControlledWriter):
     cdef inline WriteRequest try_write(self, object data, char *ptr, Py_ssize_t size)
     cdef inline bint try_writelines(self, object list_of_data, Py_ssize_t *total_bytes_sent) except -1
     cdef inline Py_ssize_t flush_iovecs(self, Py_ssize_t iovecs_count, Py_ssize_t *total_bytes_sent) except -2
+    cdef bint _try_sendfile(self, SendFileRequest request) except -1
     cdef NoResult consume(self, Py_ssize_t bytes_sent) except NoResult.EXC
 
     cdef inline bint _pre_write_check(self, str meth) except -1

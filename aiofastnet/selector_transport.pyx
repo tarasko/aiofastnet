@@ -34,7 +34,6 @@ from .transport cimport (
     StreamWriter,
     Transport,
     WriteRequest,
-    make_sendfile_request,
 )
 from .utils cimport *
 
@@ -250,7 +249,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
 
         orig_req_size = sendfile_req.count
 
-        cdef bint all_sent = self._try_sendfile(sendfile_req)
+        cdef bint all_sent = (<StreamWriter>self._writer)._try_sendfile(sendfile_req)
         if all_sent:
             self._writer.backlog.popleft()
             if not sendfile_req.waiter.done():
@@ -298,8 +297,6 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
         return NoResult.OK
 
     def sendfile(self, file, offset, count) -> Optional[asyncio.Future[None]]:
-        cdef StreamWriter writer = <StreamWriter>self._writer
-
         self._check_thread("sendfile")
 
         # This is an undocumented feature in asyncio and uvloop
@@ -307,36 +304,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
         if not self._sendfile_compatible:
             raise NotImplementedError()
 
-        if writer.eof:
-            raise RuntimeError('Cannot call sendfile() after write_eof()')
-
-        if self._closing or self._finalizing_close:
-            raise RuntimeError("Transport is closing")
-
-        cdef SendFileRequest req = make_sendfile_request(file, offset, count)
-
-        try:
-            if not self._writer.backlog:
-                if self._try_sendfile(req):
-                    return None
-
-            if unlikely(self._is_debug):
-                _logger.debug("%r: enqueue SendFileRequest(offset=%d,count=%d)",
-                              self, req.offset, req.count)
-
-            self._writer.backlog.append(req)
-            self._writer.backlog_size += <Py_ssize_t>req.count
-            self._writer._ensure_progress()
-            self._writer.maybe_pause_protocol()
-
-            req.waiter = self._loop.create_future()
-            return req.waiter
-        except:
-            self._handle_error('Fatal sendfile error on transport')
-            raise
-
-    cdef bint _try_sendfile(self, SendFileRequest req) except -1:
-        raise NotImplementedError()
+        return (<StreamWriter>self._writer).sendfile(file, offset, count)
 
 
 cdef class SelectorStreamWriter(StreamWriter):
@@ -371,6 +339,41 @@ cdef class SelectorStreamWriter(StreamWriter):
         self.write_ready_registered = True
         self.transport._loop.add_writer(
             self.fileobj, (<SelectorStreamTransport>self.transport)._write_ready)
+
+    cdef bint _try_sendfile(self, SendFileRequest request) except -1:
+        """Return whether the request completed without waiting for write readiness."""
+        if _os_sendfile is None:
+            raise NotImplementedError()
+
+        try:
+            while request.count:
+                bytes_sent = _os_sendfile(self.fd, request.fd, request.offset, request.count)
+                if unlikely(self.transport._is_debug):
+                    _logger.debug(
+                        "%r: os.sendfile(offset=%d,count=%d)=%d",
+                        self.transport,
+                        request.offset,
+                        request.count,
+                        bytes_sent,
+                    )
+
+                if bytes_sent == 0:
+                    request.count = 0
+                    break
+
+                request.offset += bytes_sent
+                request.count -= bytes_sent
+
+            return True
+        except BlockingIOError:
+            return False
+        except ConnectionResetError:
+            raise
+        except OSError as exc:
+            # macOS reports a reset socket as ENOTCONN instead of ECONNRESET.
+            if sys.platform == "darwin" and exc.errno == 57:
+                raise ConnectionResetError()
+            raise
 
     cdef NoResult drop_writer(self) except NoResult.EXC:
         if unlikely(self.transport._is_debug):
@@ -532,43 +535,6 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
         self._file.shutdown(socket.SHUT_WR)
         if unlikely(self._is_debug):
             _logger.debug("%r: shutdown(SHUT_WR) done", self)
-
-    cdef bint _try_sendfile(self, SendFileRequest req) except -1:
-        """
-        Return True if finished, False if must wait for write ready event.
-
-        Caller is always responsible for:
-        * handling exceptions, including closing the transport when appropriate;
-        * completing req.waiter when the request finishes or fails.
-        """
-        if _os_sendfile is None:
-            raise NotImplementedError()
-
-        try:
-            while req.count:
-                bytes_sent = _os_sendfile(self._fileno_obj, req.fd,
-                                          req.offset, req.count)
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: os.sendfile(offset=%d,count=%d)=%d",
-                                  self, req.offset, req.count, bytes_sent)
-                if bytes_sent == 0:
-                    req.count = 0
-                    break
-                req.offset += bytes_sent
-                req.count -= bytes_sent
-
-            return True
-        except BlockingIOError:
-            return False
-        except ConnectionResetError:
-            raise
-        except OSError as exc:
-            # Patch MacOS error code
-            if sys.platform == "darwin" and exc.errno == 57:
-                raise ConnectionResetError()
-            else:
-                raise
-
 
 cdef class SelectorDatagramTransport(SelectorWritableTransport):
     """Provide message-oriented send and receive behavior for a datagram socket."""

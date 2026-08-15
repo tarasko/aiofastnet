@@ -21,7 +21,6 @@ from .transport cimport (
     StreamWriter,
     Transport,
     WriteRequest,
-    make_sendfile_request,
 )
 from .utils cimport (
     NoResult,
@@ -214,10 +213,6 @@ cdef class ProactorSocketTransport(Transport):
         self._writer.write_c(ptr, size)
 
     def sendfile(self, file, offset, count):
-        cdef:
-            ProactorStreamWriter writer = <ProactorStreamWriter>self._writer
-            SendFileRequest request
-
         self._check_thread("sendfile")
 
         # Some third-party tests use this private asyncio flag to disable the
@@ -225,31 +220,7 @@ cdef class ProactorSocketTransport(Transport):
         if not self._sendfile_compatible:
             raise NotImplementedError()
 
-        if writer.eof:
-            raise RuntimeError('Cannot call sendfile() after write_eof()')
-        if self._closing or self._finalizing_close:
-            raise RuntimeError("Transport is closing")
-
-        request = make_sendfile_request(file, offset, count)
-        if request.count == 0:
-            return None
-
-        try:
-            if unlikely(self._is_debug):
-                _logger.debug("%r: enqueue SendFileRequest(offset=%d,count=%d)", self, request.offset, request.count)
-
-            writer.backlog.append(request)
-            writer.backlog_size += request.count
-            writer._ensure_progress()
-            writer.maybe_pause_protocol()
-
-            # Backend callbacks are never invoked from the initiating call, so
-            # the waiter can be allocated after successful submission.
-            request.waiter = self._loop.create_future()
-            return request.waiter
-        except:
-            self._handle_error('Fatal sendfile error on proactor socket transport')
-            raise
+        return self._writer.sendfile(file, offset, count)
 
     cpdef can_write_eof(self):
         return True
@@ -352,6 +323,9 @@ cdef class ProactorStreamWriter(StreamWriter):
             else:
                 self._submit_write(transport)
         return NoResult.OK
+
+    cdef bint _try_sendfile(self, SendFileRequest request) except -1:
+        return False
 
     cdef NoResult _submit_write(self, ProactorSocketTransport transport) except NoResult.EXC:
         cdef:
