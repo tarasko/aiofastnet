@@ -1,4 +1,4 @@
-from .utils cimport NoResult
+from .utils cimport NoResult, aiofn_iovec
 
 
 cdef class Transport:
@@ -117,6 +117,59 @@ cdef class WriteWatermarks:
     cpdef maybe_resume_protocol(self, transport, app_protocol, Py_ssize_t write_buffer_size)
 
     cdef inline NoResult _set_write_buffer_limits(self, high, low) except NoResult.EXC
+
+
+cdef class FlowControlledWriter:
+    cdef:
+        Transport transport
+        WriteWatermarks _watermarks
+
+        object backlog
+        Py_ssize_t backlog_size
+        size_t closed_write_count
+
+    cdef Py_ssize_t get_write_buffer_size(self) except -1
+    cdef tuple get_write_buffer_limits(self)
+    cdef NoResult set_write_buffer_limits(self, high, low) except NoResult.EXC
+    cdef inline NoResult maybe_pause_protocol(self) except NoResult.EXC
+    cdef inline NoResult maybe_resume_protocol(self) except NoResult.EXC
+    cdef NoResult clear(self, object exc) except NoResult.EXC
+
+    cdef NoResult _ensure_progress(self) except NoResult.EXC
+
+
+cdef class StreamWriter(FlowControlledWriter):
+    cdef:
+        aiofn_iovec iovecs[256]
+
+        int fd
+        bint is_socket
+        bint eof
+
+    cdef NoResult write_nocheck(self, object data) except NoResult.EXC
+    cdef NoResult writelines_nocheck(self, object list_of_data) except NoResult.EXC
+    cdef NoResult write_c(self, char *ptr, Py_ssize_t size) except NoResult.EXC
+
+    cdef inline NoResult append_request(self, WriteRequest request) except NoResult.EXC
+    cdef inline NoResult append_lines_tail(self, object list_of_data, Py_ssize_t bytes_sent) except NoResult.EXC
+
+    cdef inline WriteRequest try_write(self, object data, char *ptr, Py_ssize_t size)
+    cdef inline bint try_writelines(self, object list_of_data, Py_ssize_t *total_bytes_sent) except -1
+    cdef inline Py_ssize_t flush_iovecs(self, Py_ssize_t iovecs_count, Py_ssize_t *total_bytes_sent) except -2
+    cdef NoResult consume(self, Py_ssize_t bytes_sent) except NoResult.EXC
+
+    cdef inline bint _pre_write_check(self, str meth) except -1
+
+
+cdef class DatagramWriter(FlowControlledWriter):
+    cdef:
+        object address
+        Py_ssize_t header_size
+
+    cdef NoResult sendto_nocheck(self, object data, object addr) except NoResult.EXC
+
+    cdef object _validate_address(self, object addr)
+    cdef bint _try_sendto(self, object data, object addr) except -1
 
 
 cpdef aiofn_is_buffered_protocol(protocol)

@@ -1,4 +1,3 @@
-import collections
 import logging
 import socket
 import warnings
@@ -15,24 +14,17 @@ from .loop_backend cimport (
 )
 from .loop_base cimport ProactorContext, ProactorSocket
 from .transport cimport (
-    Protocol,
+    FlowControlledWriter,
+    StreamWriter,
     Transport,
     WriteRequest,
-    WriteWatermarks,
-    make_write_request,
-    make_write_request_from_ptr,
-    make_write_request_tail,
 )
 from .utils cimport (
     NoResult,
     aiofn_allocate_bytes,
     aiofn_finalize_bytes,
-    aiofn_iovec,
     aiofn_set_nodelay,
     aiofn_set_socket_extra_info,
-    aiofn_unpack_simple_buffer,
-    aiofn_write,
-    aiofn_writev,
     unlikely,
 )
 
@@ -45,7 +37,6 @@ from cpython.ref cimport Py_XDECREF
 cdef:
     object _logger = logging.getLogger("asyncio")
     Py_ssize_t _data_received_max_size = constants.DATA_RECEIVED_MAX_SIZE
-    size_t _log_threshold_for_connlost_writes = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
 
 
 cdef class ProactorSocketTransport(Transport):
@@ -60,15 +51,8 @@ cdef class ProactorSocketTransport(Transport):
         object _read_buffer
         PyObject *_read_bytes
 
-        WriteWatermarks _write_watermarks
-        object _write_backlog
-        Py_ssize_t _write_backlog_size
-        size_t _write_submitted_size
-        aiofn_loop_proactor_op_t _write_op
-        aiofn_loop_buffer_t _write_buffers[256]
+        StreamWriter _writer
 
-        bint _eof
-        size_t _closed_write_count
         object _close_exc
         public bint _sendfile_compatible
 
@@ -87,18 +71,8 @@ cdef class ProactorSocketTransport(Transport):
         # The scheduled initializer starts reading and then delivers connection_made().
         self._read_paused = True
 
-        self._write_watermarks = WriteWatermarks(loop)
-        self._write_backlog = collections.deque()
-        self._write_backlog_size = 0
-        self._write_submitted_size = 0
-        self._write_op.callback = _write_callback_trampoline
-        self._write_op.callback_data = <void *>self
-        self._write_op.backend_token = NULL
-        self._write_op.status = AIOFN_LOOP_OK
-        self._write_op.transferred = 0
+        self._writer = ProactorStreamWriter(self, self._fileno, True)
 
-        self._eof = False
-        self._closed_write_count = 0
         self._close_exc = None
         self._sendfile_compatible = False
 
@@ -119,7 +93,7 @@ cdef class ProactorSocketTransport(Transport):
             info.append('closed')
         elif self._closing:
             info.append('closing')
-        info.append(f'wbuf_size={self._write_backlog_size}')
+        info.append(f'wbuf_size={self._writer.backlog_size}')
         return '[{}]'.format(' '.join(info))
 
     def __del__(self):
@@ -216,295 +190,34 @@ cdef class ProactorSocketTransport(Transport):
 
     cpdef tuple get_write_buffer_limits(self):
         self._check_thread("get_write_buffer_limits")
-        return self._write_watermarks.get_write_buffer_limits()
+        return self._writer.get_write_buffer_limits()
 
     cpdef set_write_buffer_limits(self, high=None, low=None):
         self._check_thread("set_write_buffer_limits")
-        self._write_watermarks.set_write_buffer_limits(
-            self, self._protocol, self._get_write_buffer_size_nocheck(), high, low)
+        self._writer.set_write_buffer_limits(high, low)
 
     cpdef get_write_buffer_size(self):
         self._check_thread("get_write_buffer_size")
-        return self._get_write_buffer_size_nocheck()
-
-    cdef inline Py_ssize_t _get_write_buffer_size_nocheck(self) except -1:
-        cdef Py_ssize_t total = self._write_backlog_size
-        if self._protocol_aiofn:
-            total += (<Protocol>self._protocol).get_local_write_buffer_size()
-        return total
-
-    cdef inline NoResult _maybe_pause_protocol(self) except NoResult.EXC:
-        self._write_watermarks.maybe_pause_protocol(self, self._protocol, self._get_write_buffer_size_nocheck())
-
-    cdef inline NoResult _maybe_resume_protocol(self) except NoResult.EXC:
-        self._write_watermarks.maybe_resume_protocol(self, self._protocol, self._get_write_buffer_size_nocheck())
-
-    cdef inline NoResult _append_write_request(self, WriteRequest request) except NoResult.EXC:
-        if request.size:
-            self._write_backlog.append(request)
-            self._write_backlog_size += request.size
-
-    cdef inline NoResult _append_write(self, object data) except NoResult.EXC:
-        self._append_write_request(make_write_request(data))
-
-    cdef inline NoResult _append_write_tail(self, object data, char *ptr, Py_ssize_t size) except NoResult.EXC:
-        self._append_write_request(make_write_request_tail(data, ptr, size))
+        return self._writer.get_write_buffer_size()
 
     cpdef write_nocheck(self, data):
-        if self._eof:
-            raise RuntimeError('Cannot call write() after write_eof()')
-        if not data:
-            return
-
-        if unlikely(self._finalizing_close):
-            if self._closed_write_count >= _log_threshold_for_connlost_writes:
-                _logger.warning('write() called after connection lost.')
-            self._closed_write_count += 1
-            return
-
-        cdef:
-            char *data_ptr
-            Py_ssize_t data_len
-            Py_ssize_t bytes_sent = 0
-
-        try:
-            if self._write_backlog_size == 0:
-                assert self._write_submitted_size == 0
-                aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
-                bytes_sent = aiofn_write(self._fileno, data_ptr, data_len, True)
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: aiofn_write(..., len=%d)=%d", self, data_len, bytes_sent)
-                if bytes_sent == data_len:
-                    return
-                if bytes_sent < 0:
-                    bytes_sent = 0
-
-                self._append_write_tail(data, data_ptr + bytes_sent, data_len - bytes_sent)
-            else:
-                self._append_write(data)
-
-            if self._write_submitted_size == 0:
-                self._submit_write()
-            self._maybe_pause_protocol()
-        except:
-            self._handle_error('Fatal write error on proactor socket transport')
-
-    cdef inline Py_ssize_t _writev(self, size_t buffer_count) except -2:
-        cdef Py_ssize_t bytes_sent = aiofn_writev(
-            self._fileno,
-            <aiofn_iovec *>&self._write_buffers[0],
-            <Py_ssize_t>buffer_count,
-            True,
-        )
-        if unlikely(self._is_debug):
-            _logger.debug("%r: aiofn_writev(..., len(iovecs)=%d)=%d", self, buffer_count, bytes_sent)
-        return bytes_sent
-
-    cdef inline bint _try_write_lines(self, object list_of_data, Py_ssize_t *total_bytes_sent) except -1:
-        cdef:
-            char *data_ptr
-            Py_ssize_t data_len
-            Py_ssize_t bytes_sent = 0
-            Py_ssize_t bytes_to_send = 0
-            size_t buffer_count = 0
-
-        for data in list_of_data:
-            aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
-            if unlikely(data_len == 0):
-                continue
-
-            aiofn_loop_buffer_init(&self._write_buffers[buffer_count], data_ptr, <size_t>data_len)
-            bytes_to_send += data_len
-            buffer_count += 1
-            if buffer_count < 256:
-                continue
-
-            bytes_sent = self._writev(buffer_count)
-            if bytes_sent > 0:
-                total_bytes_sent[0] += bytes_sent
-            if bytes_sent != bytes_to_send:
-                return False
-
-            bytes_sent = 0
-            bytes_to_send = 0
-            buffer_count = 0
-
-        if buffer_count:
-            bytes_sent = self._writev(buffer_count)
-            if bytes_sent > 0:
-                total_bytes_sent[0] += bytes_sent
-
-        return bytes_sent == bytes_to_send
-
-    cdef inline NoResult _append_write_lines_tail(
-        self,
-        object list_of_data,
-        Py_ssize_t total_bytes_sent,
-    ) except NoResult.EXC:
-        cdef:
-            char *data_ptr
-            Py_ssize_t data_len
-
-        for data in list_of_data:
-            aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
-            if data_len <= total_bytes_sent:
-                total_bytes_sent -= data_len
-                continue
-            if total_bytes_sent:
-                self._append_write_tail(data, data_ptr + total_bytes_sent, data_len - total_bytes_sent)
-                total_bytes_sent = 0
-            elif data_len:
-                self._append_write(data)
-        return NoResult.OK
+        self._writer.write_nocheck(data)
 
     cpdef writelines_nocheck(self, list_of_data):
-        if self._eof:
-            raise RuntimeError('Cannot call writelines() after write_eof()')
-
-        if unlikely(self._finalizing_close):
-            if self._closed_write_count >= _log_threshold_for_connlost_writes:
-                _logger.warning('writelines() called after connection lost.')
-            self._closed_write_count += 1
-            return
-
-        cdef Py_ssize_t total_bytes_sent = 0
-
-        try:
-            if self._write_backlog_size == 0:
-                assert self._write_submitted_size == 0
-                if self._try_write_lines(list_of_data, &total_bytes_sent):
-                    return
-
-            self._append_write_lines_tail(list_of_data, total_bytes_sent)
-            if self._write_backlog and self._write_submitted_size == 0:
-                self._submit_write()
-            self._maybe_pause_protocol()
-        except:
-            self._handle_error('Fatal write error on proactor socket transport')
+        self._writer.writelines_nocheck(list_of_data)
 
     cdef NoResult write_c(self, char *ptr, Py_ssize_t size) except NoResult.EXC:
-        if size <= 0:
-            return NoResult.OK
-
-        if unlikely(self._finalizing_close):
-            if self._closed_write_count >= _log_threshold_for_connlost_writes:
-                _logger.warning('write_c() called after connection lost.')
-            self._closed_write_count += 1
-            return NoResult.OK
-
-        cdef Py_ssize_t bytes_sent = 0
-
-        try:
-            if self._write_backlog_size == 0:
-                assert self._write_submitted_size == 0
-                bytes_sent = aiofn_write(self._fileno, ptr, size, True)
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: aiofn_write(..., len=%d)=%d", self, size, bytes_sent)
-                if bytes_sent == size:
-                    return NoResult.OK
-                if bytes_sent < 0:
-                    bytes_sent = 0
-
-            self._append_write_request(make_write_request_from_ptr(ptr + bytes_sent, size - bytes_sent))
-            if self._write_submitted_size == 0:
-                self._submit_write()
-            self._maybe_pause_protocol()
-        except:
-            self._handle_error('Fatal write error on proactor socket transport')
-        return NoResult.OK
-
-    cdef NoResult _submit_write(self) except NoResult.EXC:
-        cdef:
-            WriteRequest request
-            size_t buffer_count = 0
-            size_t submitted_size = 0
-
-        assert self._write_submitted_size == 0
-        assert self._write_backlog
-
-        for request_obj in self._write_backlog:
-            request = <WriteRequest>request_obj
-            aiofn_loop_buffer_init(&self._write_buffers[buffer_count], request.ptr, <size_t>request.size)
-            submitted_size += <size_t>request.size
-            buffer_count += 1
-            if buffer_count == 256:
-                break
-
-        self._write_submitted_size = submitted_size
-        self._write_op.backend_token = NULL
-        self._write_op.status = AIOFN_LOOP_OK
-        self._write_op.transferred = 0
-        try:
-            self._proactor_socket.context.check_status(self._proactor_socket.context.proactor.write(
-                self._proactor_socket.context.backend.state,
-                &self._proactor_socket.backend_sock,
-                &self._write_op,
-                &self._write_buffers[0],
-                buffer_count,
-            ))
-        except BaseException:
-            self._write_submitted_size = 0
-            raise
-        return NoResult.OK
-
-    cdef inline NoResult _adjust_write_backlog(self, size_t bytes_sent) except NoResult.EXC:
-        cdef WriteRequest request
-
-        assert 0 < bytes_sent <= self._write_submitted_size
-        self._write_backlog_size -= <Py_ssize_t>bytes_sent
-        while bytes_sent:
-            request = <WriteRequest>self._write_backlog[0]
-            if <size_t>request.size <= bytes_sent:
-                bytes_sent -= <size_t>request.size
-                self._write_backlog.popleft()
-            else:
-                request.ptr += bytes_sent
-                request.size -= <Py_ssize_t>bytes_sent
-                bytes_sent = 0
-        self._write_submitted_size = 0
-        return NoResult.OK
-
-    cdef NoResult _write_completed(self, aiofn_loop_status status, size_t bytes_sent) except NoResult.EXC:
-        assert self._write_submitted_size > 0
-
-        if self._finalizing_close:
-            self._write_submitted_size = 0
-            self._clear_write_backlog()
-            self._schedule_finalize_close()
-            return NoResult.OK
-
-        if status != AIOFN_LOOP_OK:
-            self._write_submitted_size = 0
-            self._proactor_socket.context.check_status(status)
-
-        self._adjust_write_backlog(bytes_sent)
-        if self._write_backlog:
-            self._submit_write()
-
-        self._maybe_resume_protocol()
-        if not self._write_backlog:
-            if self._closing:
-                self._finalizing_close = True
-                self._schedule_finalize_close()
-            elif self._eof:
-                self._write_eof_now()
-        return NoResult.OK
-
-    cdef inline NoResult _clear_write_backlog(self) except NoResult.EXC:
-        assert self._write_submitted_size == 0
-        self._write_backlog.clear()
-        self._write_backlog_size = 0
-        return NoResult.OK
+        self._writer.write_c(ptr, size)
 
     cpdef can_write_eof(self):
         return True
 
     cpdef write_eof(self):
         self._check_thread("write_eof")
-        if self._closing or self._eof:
+        if self._closing or self._writer.eof:
             return
-        self._eof = True
-        if not self._write_backlog:
+        self._writer.eof = True
+        if not self._writer.backlog:
             self._write_eof_now()
 
     cdef NoResult _write_eof_now(self) except NoResult.EXC:
@@ -514,18 +227,22 @@ cdef class ProactorSocketTransport(Transport):
         return NoResult.OK
 
     cpdef close(self):
+        cdef ProactorStreamWriter writer = <ProactorStreamWriter>self._writer
+
         self._check_thread("close")
         if self._closing:
             return
 
         self.pause_reading()
         self._closing = True
-        if not self._write_backlog:
-            assert self._write_submitted_size == 0
+        if not writer.backlog:
+            assert writer.submitted_size == 0
             self._finalizing_close = True
             self._schedule_finalize_close()
 
     cpdef _force_close(self, exc):
+        cdef ProactorStreamWriter writer = <ProactorStreamWriter>self._writer
+
         if self._finalizing_close:
             return
 
@@ -534,18 +251,20 @@ cdef class ProactorSocketTransport(Transport):
         self._finalizing_close = True
         self._close_exc = exc
 
-        if self._write_submitted_size == 0:
-            self._clear_write_backlog()
+        if writer.submitted_size == 0:
+            writer.clear(exc)
             self._schedule_finalize_close()
 
     cdef inline NoResult _schedule_finalize_close(self) except NoResult.EXC:
         self._loop.call_soon((<object>self)._finalize_close, self._close_exc)
 
     def _finalize_close(self, exc):
-        cdef object server
+        cdef:
+            ProactorStreamWriter writer = <ProactorStreamWriter>self._writer
+            object server
 
         assert self._read_paused
-        assert self._write_submitted_size == 0
+        assert writer.submitted_size == 0
         try:
             self._call_protocol_connection_lost(exc)
         finally:
@@ -563,6 +282,102 @@ cdef class ProactorSocketTransport(Transport):
                 if server is not None:
                     server._detach(self)
                     self._server = None
+
+
+cdef class ProactorStreamWriter(StreamWriter):
+
+    cdef:
+        size_t submitted_size
+        aiofn_loop_proactor_op_t op
+        aiofn_loop_buffer_t buffers[256]
+
+    def __init__(self, Transport transport, int fd, bint is_socket):
+        StreamWriter.__init__(self, transport, fd, is_socket)
+
+        self.submitted_size = 0
+        self.op.callback = _write_callback_trampoline
+        self.op.callback_data = <void *>self
+        self.op.backend_token = NULL
+        self.op.status = AIOFN_LOOP_OK
+        self.op.transferred = 0
+
+    cdef NoResult _ensure_progress(self) except NoResult.EXC:
+        cdef ProactorSocketTransport transport = <ProactorSocketTransport>self.transport
+
+        if self.submitted_size == 0:
+            self._submit_write(transport)
+        return NoResult.OK
+
+    cdef NoResult _submit_write(self, ProactorSocketTransport transport) except NoResult.EXC:
+        cdef:
+            WriteRequest request
+            size_t buffer_count = 0
+            size_t submitted_size = 0
+
+        assert self.submitted_size == 0
+        assert self.backlog
+
+        for request_obj in self.backlog:
+            request = <WriteRequest>request_obj
+            aiofn_loop_buffer_init(&self.buffers[buffer_count], request.ptr, <size_t>request.size)
+            submitted_size += <size_t>request.size
+            buffer_count += 1
+            if buffer_count == 256:
+                break
+
+        self.submitted_size = submitted_size
+        self.op.backend_token = NULL
+        self.op.status = AIOFN_LOOP_OK
+        self.op.transferred = 0
+        try:
+            transport._proactor_socket.context.check_status(
+                transport._proactor_socket.context.proactor.write(
+                    transport._proactor_socket.context.backend.state,
+                    &transport._proactor_socket.backend_sock,
+                    &self.op,
+                    &self.buffers[0],
+                    buffer_count,
+                ))
+        except BaseException:
+            self.submitted_size = 0
+            raise
+        return NoResult.OK
+
+    cdef NoResult _write_completed(self, aiofn_loop_status status, size_t bytes_sent) except NoResult.EXC:
+        cdef ProactorSocketTransport transport = <ProactorSocketTransport>self.transport
+
+        assert self.submitted_size > 0
+
+        if transport._finalizing_close:
+            self.submitted_size = 0
+            self.clear(transport._close_exc)
+            transport._schedule_finalize_close()
+            return NoResult.OK
+
+        if status != AIOFN_LOOP_OK:
+            self.submitted_size = 0
+            transport._proactor_socket.context.check_status(status)
+
+        assert 0 < bytes_sent <= self.submitted_size
+        self.consume(<Py_ssize_t>bytes_sent)
+        self.submitted_size = 0
+
+        if self.backlog:
+            self._ensure_progress()
+
+        self.maybe_resume_protocol()
+        if not self.backlog:
+            if transport._closing:
+                transport._finalizing_close = True
+                transport._schedule_finalize_close()
+            elif self.eof:
+                transport._write_eof_now()
+        return NoResult.OK
+
+    cdef NoResult clear(self, object exc) except NoResult.EXC:
+        assert self.submitted_size == 0
+        FlowControlledWriter.clear(self, exc)
+        return NoResult.OK
 
 
 cdef void _read_alloc_trampoline(
@@ -600,9 +415,12 @@ cdef void _read_callback_trampoline(
 
 
 cdef void _write_callback_trampoline(aiofn_loop_proactor_op_t *op) noexcept with gil:
-    cdef ProactorSocketTransport transport = <ProactorSocketTransport>op.callback_data
+    cdef:
+        ProactorStreamWriter writer = <ProactorStreamWriter>op.callback_data
+        ProactorSocketTransport transport = <ProactorSocketTransport>writer.transport
+
     try:
-        transport._write_completed(op.status, op.transferred)
+        writer._write_completed(op.status, op.transferred)
     except BaseException:
         try:
             transport._handle_error('Fatal write error on proactor socket transport')

@@ -72,7 +72,7 @@ from cpython.pythread cimport (
 )
 from libc.errno cimport EAGAIN, EINTR, errno
 from libc.stdint cimport uint32_t, uint64_t, uint8_t
-from posix.unistd cimport close as posix_close, dup as posix_dup, read as posix_read, write as posix_write
+from posix.unistd cimport close as posix_close, read as posix_read, write as posix_write
 
 cdef:
     const char *_CAPSULE_NAME = AIOFN_LOOP_BACKEND_CAPSULE_NAME

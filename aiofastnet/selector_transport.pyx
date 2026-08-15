@@ -12,7 +12,6 @@ The hierarchy is:
 """
 
 import asyncio
-import collections
 import errno
 import os
 import socket
@@ -29,13 +28,11 @@ from cpython.ref cimport Py_XDECREF
 
 from . import constants
 from .transport cimport (
-    Protocol,
+    DatagramWriter,
+    FlowControlledWriter,
+    StreamWriter,
     Transport,
     WriteRequest,
-    WriteWatermarks,
-    make_write_request,
-    make_write_request_from_ptr,
-    make_write_request_tail,
 )
 from .utils cimport *
 
@@ -48,7 +45,6 @@ cdef:
     Py_ssize_t _data_received_max_size = constants.DATA_RECEIVED_MAX_SIZE
     Py_ssize_t _datagram_received_max_size = constants.DATAGRAM_RECEIVED_MAX_SIZE
     Py_ssize_t _max_read_bytes_per_cycle_hint = constants.MAX_READ_BYTES_PER_CYCLE_HINT
-    size_t _log_threshold_for_connlost_writes = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
 
 
 cdef class SendFileRequest:
@@ -145,44 +141,26 @@ cdef class SelectorTransport(Transport):
 
 
 cdef class SelectorWritableTransport(SelectorTransport):
-    """Manage write backlog, readiness, flow control, and close state.
+    """Manage transport lifecycle around a composed flow-controlled writer."""
 
-    Subclasses provide the actual stream write or datagram send operations.
-    """
-
-    cdef:
-        WriteWatermarks _write_watermarks
-
-        object _write_backlog
-        Py_ssize_t _write_backlog_size
-        bint _write_ready_registered
-        size_t _closed_write_count
-
-        public bint _sendfile_compatible
+    cdef FlowControlledWriter _writer
 
     def __init__(self, loop, file, protocol):
         SelectorTransport.__init__(self, loop, file, protocol)
-        self._write_backlog = collections.deque()
-        self._write_backlog_size = 0
-        self._write_ready_registered = False
-        self._closed_write_count = 0
-
-        self._write_watermarks = WriteWatermarks(loop)
-        self._sendfile_compatible = False
+        self._writer = None
 
     def __repr__(self):
         info = self._get_repr_info()
-        info.append(f'wbuf_size={self._write_backlog_size}')
+        info.append(f'wbuf_size={self._writer.backlog_size}')
         return '[{}]'.format(' '.join(info))
 
     cpdef tuple get_write_buffer_limits(self):
         self._check_thread("get_write_buffer_limits")
-        return self._write_watermarks.get_write_buffer_limits()
+        return self._writer.get_write_buffer_limits()
 
     cpdef set_write_buffer_limits(self, high=None, low=None):
         self._check_thread("set_write_buffer_limits")
-        self._write_watermarks.set_write_buffer_limits(
-            self, self._protocol, self.get_write_buffer_size(), high, low)
+        self._writer.set_write_buffer_limits(high, low)
 
     cpdef close(self):
         self._check_thread("close")
@@ -190,50 +168,14 @@ cdef class SelectorWritableTransport(SelectorTransport):
             return
         self._closing = True
         self._loop.remove_reader(self._fileno_obj)
-        if self._write_backlog_size == 0:
+        if not self._writer.backlog:
             self._finalizing_close = True
-            self._drop_writer()
+            self._writer.clear(None)
             self._loop.call_soon(self._finalize_close, None)
 
     cpdef get_write_buffer_size(self):
         self._check_thread("get_write_buffer_size")
-        return self._get_write_buffer_size_nocheck()
-
-    cdef inline Py_ssize_t _get_write_buffer_size_nocheck(self) except -1:
-        cdef Py_ssize_t total = self._write_backlog_size
-
-        if self._protocol_aiofn:
-            total += (<Protocol>self._protocol).get_local_write_buffer_size()
-
-        return total
-
-    cdef inline NoResult _maybe_pause_protocol(self) except NoResult.EXC:
-        self._write_watermarks.maybe_pause_protocol(self, self._protocol, self._get_write_buffer_size_nocheck())
-
-    cdef inline NoResult _maybe_resume_protocol(self) except NoResult.EXC:
-        self._write_watermarks.maybe_resume_protocol(self, self._protocol, self._get_write_buffer_size_nocheck())
-
-    cdef inline NoResult _ensure_writer(self) except NoResult.EXC:
-        if unlikely(self._is_debug):
-            _logger.debug("%r: _ensure_writer called, conn_lost=%s, already_registered=%s",
-                          self, self._finalizing_close, self._write_ready_registered)
-
-        if self._finalizing_close or self._write_ready_registered:
-            return NoResult.OK
-        self._write_ready_registered = True
-        self._loop.add_writer(self._fileno_obj, self._write_ready)
-
-    cdef inline NoResult _drop_writer(self) except NoResult.EXC:
-        if unlikely(self._is_debug):
-            _logger.debug("%r: _drop_writer called", self)
-
-        if not self._write_ready_registered:
-            return NoResult.OK
-        self._write_ready_registered = False
-        self._loop.remove_writer(self._fileno_obj)
-
-    def _write_ready(self):
-        raise NotImplementedError()
+        return self._writer.get_write_buffer_size()
 
     cdef bint _should_report_fatal_error(self, exc) except -1:
         return not isinstance(exc, OSError)
@@ -241,278 +183,99 @@ cdef class SelectorWritableTransport(SelectorTransport):
     cpdef _force_close(self, exc):
         if self._finalizing_close:
             return
-        if self._write_backlog:
-            self._clear_write_backlog(exc)
-            self._drop_writer()
+        self._writer.clear(exc)
         SelectorTransport._force_close(self, exc)
-
-    cdef inline NoResult _clear_write_backlog(self, exc) except NoResult.EXC:
-        cdef SendFileRequest req
-        for data in self._write_backlog:
-            if isinstance(data, SendFileRequest):
-                req = <SendFileRequest>data
-                if req.waiter is not None and not req.waiter.done():
-                    req.waiter.set_exception(exc)
-        self._write_backlog.clear()
-        self._write_backlog_size = 0
 
 
 cdef class SelectorStreamTransport(SelectorWritableTransport):
     """Implement ordered byte-stream writes, writev, EOF, and sendfile queues."""
 
-    cdef:
-        bint _eof
-        aiofn_iovec _iovecs[256]
+    cdef public bint _sendfile_compatible
 
     def __init__(self, loop, file, protocol):
         SelectorWritableTransport.__init__(self, loop, file, protocol)
-        self._eof = False
+        self._writer = SelectorStreamWriter(
+            self,
+            self._fileno,
+            self._is_socket,
+            self._fileno_obj,
+        )
+        self._sendfile_compatible = False
 
     cpdef write_nocheck(self, data):
-        if self._eof:
-            raise RuntimeError('Cannot call write() after write_eof()')
-        if not data:
-            return
-
-        if unlikely(self._finalizing_close):
-            if self._closed_write_count >= _log_threshold_for_connlost_writes:
-                _logger.warning('write() called after connection lost.')
-            self._closed_write_count += 1
-            return
-
-        cdef:
-            char* data_ptr
-            Py_ssize_t data_len
-            WriteRequest req
-
-        try:
-            if self._write_backlog_size == 0:
-                aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
-                req = self._write_one(data, data_ptr, data_len)
-                if req is None:
-                    return
-
-                # Not all was written; register write handler.
-                self._ensure_writer()
-            else:
-                req = make_write_request(data)
-
-            self._write_backlog.append(req)
-            self._write_backlog_size += req.size
-            self._maybe_pause_protocol()
-        except:
-            self._handle_error('Fatal write error on transport')
-
-    cdef inline Py_ssize_t _flush_iovecs(self, Py_ssize_t num_iovecs, Py_ssize_t* total_bytes_sent) except -2:
-        cdef Py_ssize_t bytes_sent = aiofn_writev(self._fileno, self._iovecs, num_iovecs, self._is_socket)
-        if unlikely(self._is_debug):
-            _logger.debug("%r: aiofn_writev(..., len(iovecs)=%d)=%d", self, num_iovecs, bytes_sent)
-        if bytes_sent > 0:
-            total_bytes_sent[0] += bytes_sent
-        return bytes_sent
-
-    cdef inline bint _try_write_list_of_data(self, list_of_data, Py_ssize_t* total_bytes_sent) except -1:
-        """
-        Send as much data as possible from list_of_data, store actual number of bytes sent into total_bytes_sent.
-        Return True if all data from list_of_data were sent or False otherwise.
-        list_of_data may contain SendFileRequest object. If this is the case it will be treated as the actual end 
-        of the list. If all data before SendFileRequest is successfully sent then True is returned.
-        """
-
-        cdef:
-            char* data_ptr
-            Py_ssize_t data_len
-            Py_ssize_t bytes_sent = 0
-            Py_ssize_t bytes_to_send = 0
-            Py_ssize_t idx = 0
-
-        for data in list_of_data:
-            # Optimization: if it is a direct write from writelines than do not do somewhat expensive testing
-            # for data types. Just do aiofn_unpack_simple_buffer.
-            if list_of_data is self._write_backlog:
-                if isinstance(data, WriteRequest):
-                    data_ptr = (<WriteRequest>data).ptr
-                    data_len = (<WriteRequest>data).size
-                elif isinstance(data, SendFileRequest):
-                    break
-                else:
-                    assert False, "unsupported type in the _write_backlog, must be either SendFileRequest or WriteRequest"
-            else:
-                aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
-
-            if unlikely(data_len == 0):
-                continue
-
-            self._iovecs[idx].iov_base = data_ptr
-            self._iovecs[idx].iov_len = data_len
-            bytes_to_send += data_len
-            if idx < AIOFN_MAX_IOVEC - 1:
-                idx += 1
-                continue
-
-            # Intermediate flush, because we ran out of iovecs
-            bytes_sent = self._flush_iovecs(idx + 1, total_bytes_sent)
-            if bytes_sent != bytes_to_send:
-                return False
-
-            idx = 0
-            bytes_to_send = 0
-            bytes_sent = 0
-
-        # Final flush
-        if idx > 0:
-            bytes_sent = self._flush_iovecs(idx, total_bytes_sent)
-
-        return bytes_sent == bytes_to_send
-
-    cdef inline NoResult _add_list_of_data_tail_to_backlog(self, list_of_data, Py_ssize_t total_bytes_sent) except NoResult.EXC:
-        cdef:
-            char* data_ptr
-            Py_ssize_t data_len
-            WriteRequest req
-
-        for data in list_of_data:
-            aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
-            if data_len <= total_bytes_sent:
-                total_bytes_sent -= data_len
-                continue
-            elif total_bytes_sent <= 0:
-                req = make_write_request(data)
-                self._write_backlog.append(req)
-                self._write_backlog_size += req.size
-            else:
-                data_ptr += total_bytes_sent
-                data_len -= total_bytes_sent
-                total_bytes_sent = 0
-                req = make_write_request_tail(data, data_ptr, data_len)
-                self._write_backlog.append(req)
-                self._write_backlog_size += req.size
-
-        if self._write_backlog_size > 0:
-            self._ensure_writer()
-            self._maybe_pause_protocol()
+        (<StreamWriter>self._writer).write_nocheck(data)
 
     cpdef writelines_nocheck(self, list_of_data):
-        if self._eof:
-            raise RuntimeError('Cannot call writelines() after write_eof()')
+        (<StreamWriter>self._writer).writelines_nocheck(list_of_data)
 
-        if unlikely(self._finalizing_close):
-            if self._closed_write_count >= _log_threshold_for_connlost_writes:
-                _logger.warning('writelines() called after connection lost.')
-            self._closed_write_count += 1
-            return
-
-        cdef Py_ssize_t total_bytes_sent = 0
-
-        try:
-            if self._write_backlog_size == 0:
-                if self._try_write_list_of_data(list_of_data, &total_bytes_sent):
-                    return
-
-            self._add_list_of_data_tail_to_backlog(list_of_data, total_bytes_sent)
-        except:
-            self._handle_error('Fatal write error on transport')
-
-    cdef NoResult write_c(self, char* ptr, Py_ssize_t sz) except NoResult.EXC:
-        cdef WriteRequest req
-
-        if sz <= 0:
-            return NoResult.OK
-
-        if unlikely(self._finalizing_close):
-            if self._closed_write_count >= _log_threshold_for_connlost_writes:
-                _logger.warning('write_c() called after connection lost.')
-            self._closed_write_count += 1
-            return NoResult.OK
-
-        try:
-            if self._write_backlog_size == 0:
-                req = self._write_one(None, ptr, sz)
-                if req is None:
-                    return NoResult.OK
-
-                # Not all was written; register write handler.
-                self._ensure_writer()
-            else:
-                req = make_write_request_from_ptr(ptr, sz)
-
-            self._write_backlog.append(req)
-            self._write_backlog_size += req.size
-            self._maybe_pause_protocol()
-        except:
-            self._handle_error('Fatal write error on transport')
+    cdef NoResult write_c(self, char *ptr, Py_ssize_t size) except NoResult.EXC:
+        (<StreamWriter>self._writer).write_c(ptr, size)
 
     cpdef can_write_eof(self):
         return True
 
     cpdef write_eof(self):
+        cdef StreamWriter writer = <StreamWriter>self._writer
+
         self._check_thread("write_eof")
-        if self._closing or self._eof:
+        if self._closing or writer.eof:
             return
-        self._eof = True
-        if self._write_backlog_size == 0:
+        writer.eof = True
+        if not writer.backlog:
             self._write_eof_now()
 
     cdef NoResult _write_eof_now(self) except NoResult.EXC:
         raise NotImplementedError()
 
-    cdef inline WriteRequest _write_one(self, object data, char* data_ptr, Py_ssize_t data_len):
-        """
-        Returns None if all data has been sent, or remaining data
-        """
-        cdef Py_ssize_t bytes_sent
-
-        bytes_sent = aiofn_write(self._fileno, data_ptr, data_len, self._is_socket)
-        if unlikely(self._is_debug):
-            _logger.debug("%r aiofn_write(...,len=%d)=%d", self,
-                          data_len, bytes_sent)
-
-        if bytes_sent == data_len:
-            return None
-
-        if bytes_sent > 0:
-            data_ptr += bytes_sent
-            data_len -= bytes_sent
-
-        if data is None:
-            return make_write_request_from_ptr(data_ptr, data_len)
-        else:
-            return make_write_request_tail(data, data_ptr, data_len)
-
-    cdef inline NoResult _adjust_write_backlog(self, Py_ssize_t bytes_sent) except NoResult.EXC:
+    cdef bint _try_write_backlog(self, Py_ssize_t *total_bytes_sent) except -1:
         cdef:
-            Py_ssize_t data_len
-            WriteRequest req
+            StreamWriter writer = <StreamWriter>self._writer
+            WriteRequest request
+            Py_ssize_t bytes_sent = 0
+            Py_ssize_t bytes_to_send = 0
+            Py_ssize_t iovecs_count = 0
 
-        if bytes_sent > 0:
-            self._write_backlog_size -= bytes_sent
-
-        while bytes_sent > 0:
-            req = <WriteRequest>self._write_backlog[0]
-            data_len = req.size
-            if data_len <= bytes_sent:
-                bytes_sent -= data_len
-                self._write_backlog.popleft()
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: wrote backlog item of %d bytes", self, data_len)
-            else:
-                req.ptr += bytes_sent
-                req.size -= bytes_sent
-                if unlikely(self._is_debug):
-                    _logger.debug("%r: partially wrote backlog item of %d bytes", self, bytes_sent)
+        for item in writer.backlog:
+            if isinstance(item, SendFileRequest):
                 break
 
+            assert isinstance(item, WriteRequest)
+            request = <WriteRequest>item
+            writer.iovecs[iovecs_count].iov_base = request.ptr
+            writer.iovecs[iovecs_count].iov_len = request.size
+            bytes_to_send += request.size
+            iovecs_count += 1
+
+            if iovecs_count < AIOFN_MAX_IOVEC:
+                continue
+
+            bytes_sent = writer.flush_iovecs(iovecs_count, total_bytes_sent)
+            if bytes_sent != bytes_to_send:
+                return False
+
+            iovecs_count = 0
+            bytes_to_send = 0
+            bytes_sent = 0
+
+        if iovecs_count:
+            bytes_sent = writer.flush_iovecs(iovecs_count, total_bytes_sent)
+
+        return bytes_sent == bytes_to_send
+
+    cdef inline NoResult _adjust_write_backlog(self, Py_ssize_t bytes_sent) except NoResult.EXC:
+        (<StreamWriter>self._writer).consume(bytes_sent)
+
     cdef inline bint _try_sendfile_from_backlog_top(self) except -1:
-        cdef SendFileRequest sendfile_req = <SendFileRequest>self._write_backlog[0]
+        cdef SendFileRequest sendfile_req = <SendFileRequest>self._writer.backlog[0]
 
         orig_req_size = sendfile_req.count
 
         cdef bint all_sent = self._try_sendfile(sendfile_req)
         if all_sent:
-            self._write_backlog.popleft()
+            self._writer.backlog.popleft()
             if not sendfile_req.waiter.done():
                 sendfile_req.waiter.set_result(None)
-        self._write_backlog_size -= <Py_ssize_t>(orig_req_size - sendfile_req.count)
+        self._writer.backlog_size -= <Py_ssize_t>(orig_req_size - sendfile_req.count)
 
         return all_sent
 
@@ -521,16 +284,18 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
             Py_ssize_t bytes_sent
             bint all_sent = True
 
-        while self._write_backlog_size != 0 and all_sent:
-            if isinstance(self._write_backlog[0], SendFileRequest):
+        while self._writer.backlog and all_sent:
+            if isinstance(self._writer.backlog[0], SendFileRequest):
                 all_sent = self._try_sendfile_from_backlog_top()
             else:
                 bytes_sent = 0
-                all_sent = self._try_write_list_of_data(self._write_backlog, &bytes_sent)
+                all_sent = self._try_write_backlog(&bytes_sent)
                 self._adjust_write_backlog(bytes_sent)
 
     def _write_ready(self):
-        assert self._write_backlog, 'Data should not be empty'
+        cdef StreamWriter writer = <StreamWriter>self._writer
+
+        assert self._writer.backlog, 'Data should not be empty'
         if self._finalizing_close:
             return
 
@@ -539,20 +304,22 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
                 _logger.debug("%r write_ready event, resume writing from backlog", self)
             self._flush_write_backlog()
         except:
-            self._drop_writer()
+            (<SelectorStreamWriter>self._writer).drop_writer()
             self._handle_error('Fatal write error on transport')
         else:
-            self._maybe_resume_protocol()
-            if self._write_backlog_size == 0:
-                self._drop_writer()
+            self._writer.maybe_resume_protocol()
+            if not self._writer.backlog:
+                (<SelectorStreamWriter>self._writer).drop_writer()
                 if self._closing:
                     self._finalizing_close = True
                     self._finalize_close(None)
-                elif self._eof:
+                elif writer.eof:
                     self._write_eof_now()
         return NoResult.OK
 
     def sendfile(self, file, offset, count) -> Optional[asyncio.Future[None]]:
+        cdef StreamWriter writer = <StreamWriter>self._writer
+
         self._check_thread("sendfile")
 
         # This is an undocumented feature in asyncio and uvloop
@@ -560,7 +327,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
         if not self._sendfile_compatible:
             raise NotImplementedError()
 
-        if self._eof:
+        if writer.eof:
             raise RuntimeError('Cannot call sendfile() after write_eof()')
 
         if self._closing or self._finalizing_close:
@@ -569,7 +336,7 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
         cdef SendFileRequest req = _make_send_file_request(file, offset, count)
 
         try:
-            if self._write_backlog_size == 0:
+            if not self._writer.backlog:
                 if self._try_sendfile(req):
                     return None
 
@@ -577,10 +344,10 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
                 _logger.debug("%r: enqueue SendFileRequest(offset=%d,count=%d)",
                               self, req.offset, req.count)
 
-            self._write_backlog.append(req)
-            self._write_backlog_size += <Py_ssize_t>req.count
-            self._ensure_writer()
-            self._maybe_pause_protocol()
+            self._writer.backlog.append(req)
+            self._writer.backlog_size += <Py_ssize_t>req.count
+            self._writer._ensure_progress()
+            self._writer.maybe_pause_protocol()
 
             req.waiter = self._loop.create_future()
             return req.waiter
@@ -590,6 +357,63 @@ cdef class SelectorStreamTransport(SelectorWritableTransport):
 
     cdef bint _try_sendfile(self, SendFileRequest req) except -1:
         raise NotImplementedError()
+
+
+cdef class SelectorStreamWriter(StreamWriter):
+
+    cdef:
+        object fileobj
+        bint write_ready_registered
+
+    def __init__(
+        self,
+        Transport transport,
+        int fd,
+        bint is_socket,
+        object fileobj,
+    ):
+        StreamWriter.__init__(self, transport, fd, is_socket)
+        self.fileobj = fileobj
+        self.write_ready_registered = False
+
+    cdef NoResult _ensure_progress(self) except NoResult.EXC:
+        if unlikely(self.transport._is_debug):
+            _logger.debug(
+                "%r: _ensure_progress called, conn_lost=%s, already_registered=%s",
+                self.transport,
+                self.transport._finalizing_close,
+                self.write_ready_registered,
+            )
+
+        if self.transport._finalizing_close or self.write_ready_registered:
+            return NoResult.OK
+
+        self.write_ready_registered = True
+        self.transport._loop.add_writer(
+            self.fileobj, (<SelectorStreamTransport>self.transport)._write_ready)
+
+    cdef NoResult drop_writer(self) except NoResult.EXC:
+        if unlikely(self.transport._is_debug):
+            _logger.debug("%r: drop_writer called", self.transport)
+
+        if not self.write_ready_registered:
+            return NoResult.OK
+
+        self.write_ready_registered = False
+        self.transport._loop.remove_writer(self.fileobj)
+
+    cdef NoResult clear(self, object exc) except NoResult.EXC:
+        cdef SendFileRequest request
+
+        for item in self.backlog:
+            if isinstance(item, SendFileRequest):
+                request = <SendFileRequest>item
+                if request.waiter is not None and not request.waiter.done():
+                    request.waiter.set_exception(exc)
+
+        self.drop_writer()
+        FlowControlledWriter.clear(self, exc)
+        return NoResult.OK
 
 
 cdef class SelectorSocketTransport(SelectorStreamTransport):
@@ -777,28 +601,28 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
 cdef class SelectorDatagramTransport(SelectorWritableTransport):
     """Provide message-oriented send and receive behavior for a datagram socket."""
 
-    cdef:
-        object _address
-        Py_ssize_t _header_size
-        bint _has_connection
-        int _family
-
     def __init__(self, loop, sock, protocol, address, waiter):
         cdef:
             char raw_addr[256]
             unsigned int raw_addr_len = 0
+            int family = sock.family
 
-        self._family = sock.family
         if address is not None:
-            aiofn_pyaddr_to_sockaddr(self._family, address, raw_addr, &raw_addr_len)
+            aiofn_pyaddr_to_sockaddr(family, address, raw_addr, &raw_addr_len)
 
         SelectorWritableTransport.__init__(self, loop, sock, protocol)
+
         self._extra['socket'] = TransportSocket(sock)
         aiofn_set_socket_extra_info(self._extra, sock)
 
-        self._address = address or None
-        self._header_size = 8
-        self._has_connection = self._extra['peername'] is not None
+        self._writer = SelectorDatagramWriter(
+            self,
+            self._fileno,
+            self._fileno_obj,
+            family,
+            self._extra['peername'] is not None,
+            address,
+        )
 
         self._loop.call_soon((<object>self)._call_protocol_connection_made)
         # only start reading when connection_made() has been called
@@ -852,96 +676,14 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
 
         self._call_protocol_datagram_received(data, addr)
 
-    def _write_ready(self):
-        try:
-            if unlikely(self._is_debug):
-                _logger.debug("%r write_ready event, resume writing from backlog", self)
-
-            while self._write_backlog:
-                data, addr = self._write_backlog[0]
-                if not self._sendto_impl(data, addr):
-                    break
-
-                self._write_backlog.popleft()
-                self._write_backlog_size -= len(data) + self._header_size
-
-            self._maybe_resume_protocol()
-            if not self._write_backlog:
-                self._drop_writer()
-                if self._closing:
-                    self._finalizing_close = True
-                    self._finalize_close(None)
-        except:
-            self._drop_writer()
-            self._handle_error('Fatal write error on datagram transport')
-
     cpdef sendto_nocheck(self, data, addr):
-        cdef:
-            char raw_addr[256]
-            unsigned int raw_addr_len = 0
-
-        if self._address is not None:
-            if addr is not None and addr != self._address:
-                raise ValueError(
-                    f'Invalid address: must be None or {self._address}')
-            addr = self._address
-
-        if not self._has_connection:
-            # Datagram endpoint creation resolves INET addresses; resolving here could block the event-loop thread.
-            aiofn_pyaddr_to_sockaddr(self._family, addr, raw_addr, &raw_addr_len)
-
-        if unlikely(self._finalizing_close and self._address):
-            if self._closed_write_count >= _log_threshold_for_connlost_writes:
-                _logger.warning('socket.send() raised exception.')
-            self._closed_write_count += 1
-            return
-
-        try:
-            if self._write_backlog_size == 0:
-                if self._sendto_impl(data, addr):
-                    return
-
-            # Ensure that what we buffer is immutable.
-            self._write_backlog.append((aiofn_maybe_copy_buffer(data), addr))
-            self._write_backlog_size += len(data) + self._header_size
-            self._ensure_writer()
-            self._maybe_pause_protocol()
-        except:
-            self._handle_error('Fatal write error on datagram transport')
+        (<DatagramWriter>self._writer).sendto_nocheck(data, addr)
 
     cpdef can_write_eof(self):
         return False
 
     cpdef write_eof(self):
         raise NotImplementedError()
-
-    cdef inline bint _sendto_impl(self, data, addr) except -1:
-        cdef:
-            char* buf_ptr
-            Py_ssize_t buf_len
-            Py_ssize_t bytes_sent
-            char raw_addr[256]
-            unsigned int raw_addr_len = 0
-            void* raw_addr_ptr = NULL
-
-        try:
-            aiofn_unpack_simple_buffer(data, &buf_ptr, &buf_len, 0)
-            if not self._has_connection:
-                aiofn_pyaddr_to_sockaddr(self._family, addr, raw_addr, &raw_addr_len)
-                raw_addr_ptr = raw_addr
-
-            bytes_sent = aiofn_sendto(self._fileno, buf_ptr, buf_len, raw_addr_ptr, raw_addr_len)
-            if unlikely(self._is_debug):
-                _logger.debug("%r: aiofn_sendto(...,len=%d)=%d", self, buf_len, bytes_sent)
-            if bytes_sent == -1:
-                return False
-
-            return True
-        except (BlockingIOError, InterruptedError):
-            return False
-        except OSError as exc:
-            self._call_protocol_error_received(exc)
-            return True
 
     cdef inline NoResult _call_protocol_datagram_received(self, data, addr) except NoResult.EXC:
         try:
@@ -960,6 +702,129 @@ cdef class SelectorDatagramTransport(SelectorWritableTransport):
         except BaseException as exc:
             self._report_protocol_exception(
                 exc, 'Fatal error: protocol.error_received() call failed.')
+
+
+cdef class SelectorDatagramWriter(DatagramWriter):
+
+    cdef:
+        object fileobj
+        int fd
+        int family
+        bint has_connection
+        bint write_ready_registered
+
+    def __init__(
+        self,
+        Transport transport,
+        int fd,
+        object fileobj,
+        int family,
+        bint has_connection,
+        object address,
+    ):
+        DatagramWriter.__init__(self, transport, address, 8)
+
+        self.fileobj = fileobj
+        self.fd = fd
+        self.family = family
+        self.has_connection = has_connection
+        self.write_ready_registered = False
+
+    cdef object _validate_address(self, object addr):
+        cdef:
+            char raw_addr[256]
+            unsigned int raw_addr_len = 0
+
+        if not self.has_connection:
+            # Datagram endpoint creation resolves INET addresses; resolving here could block the event-loop thread.
+            aiofn_pyaddr_to_sockaddr(self.family, addr, raw_addr, &raw_addr_len)
+        return addr
+
+    cdef bint _try_sendto(self, object data, object addr) except -1:
+        cdef:
+            SelectorDatagramTransport transport = <SelectorDatagramTransport>self.transport
+            char *buf_ptr
+            Py_ssize_t buf_len
+            Py_ssize_t bytes_sent
+            char raw_addr[256]
+            unsigned int raw_addr_len = 0
+            void *raw_addr_ptr = NULL
+
+        try:
+            aiofn_unpack_simple_buffer(data, &buf_ptr, &buf_len, 0)
+            if not self.has_connection:
+                aiofn_pyaddr_to_sockaddr(self.family, addr, raw_addr, &raw_addr_len)
+                raw_addr_ptr = raw_addr
+
+            bytes_sent = aiofn_sendto(self.fd, buf_ptr, buf_len, raw_addr_ptr, raw_addr_len)
+            if unlikely(transport._is_debug):
+                _logger.debug("%r: aiofn_sendto(...,len=%d)=%d", transport, buf_len, bytes_sent)
+            if bytes_sent == -1:
+                return False
+
+            return True
+        except (BlockingIOError, InterruptedError):
+            return False
+        except OSError as exc:
+            transport._call_protocol_error_received(exc)
+            return True
+
+    cdef NoResult _ensure_progress(self) except NoResult.EXC:
+        if unlikely(self.transport._is_debug):
+            _logger.debug(
+                "%r: _ensure_writer called, conn_lost=%s, already_registered=%s",
+                self.transport,
+                self.transport._finalizing_close,
+                self.write_ready_registered,
+            )
+
+        if self.transport._finalizing_close or self.write_ready_registered:
+            return NoResult.OK
+
+        self.write_ready_registered = True
+        self.transport._loop.add_writer(self.fileobj, self._write_ready)
+        return NoResult.OK
+
+    cdef NoResult drop_writer(self) except NoResult.EXC:
+        if unlikely(self.transport._is_debug):
+            _logger.debug("%r: _drop_writer called", self.transport)
+
+        if not self.write_ready_registered:
+            return NoResult.OK
+
+        self.write_ready_registered = False
+        self.transport._loop.remove_writer(self.fileobj)
+        return NoResult.OK
+
+    def _write_ready(self):
+        cdef SelectorDatagramTransport transport = <SelectorDatagramTransport>self.transport
+
+        try:
+            if unlikely(transport._is_debug):
+                _logger.debug("%r write_ready event, resume writing from backlog", transport)
+
+            while self.backlog:
+                data, addr = self.backlog[0]
+                if not self._try_sendto(data, addr):
+                    break
+
+                self.backlog.popleft()
+                self.backlog_size -= len(data) + self.header_size
+
+            self.maybe_resume_protocol()
+            if not self.backlog:
+                self.drop_writer()
+                if transport._closing:
+                    transport._finalizing_close = True
+                    transport._finalize_close(None)
+        except:
+            self.drop_writer()
+            transport._handle_error('Fatal write error on datagram transport')
+
+    cdef NoResult clear(self, object exc) except NoResult.EXC:
+        self.drop_writer()
+        FlowControlledWriter.clear(self, exc)
+        return NoResult.OK
 
 
 cdef class SelectorReadPipeTransport(SelectorTransport):
@@ -1025,6 +890,7 @@ cdef class SelectorWritePipeTransport(SelectorStreamTransport):
         SelectorStreamTransport.__init__(self, loop, pipe, protocol)
         self._extra['pipe'] = pipe
         self._is_socket = False
+        (<StreamWriter>self._writer).is_socket = False
 
         self._loop.call_soon((<object>self)._call_protocol_connection_made)
 
@@ -1055,7 +921,7 @@ cdef class SelectorWritePipeTransport(SelectorStreamTransport):
         # Pipe was closed by peer.
         if unlikely(self._is_debug):
             _logger.info("%r was closed by peer", self)
-        if self._write_backlog:
+        if self._writer.backlog:
             self._force_close(BrokenPipeError())
         else:
             self._force_close(None)
