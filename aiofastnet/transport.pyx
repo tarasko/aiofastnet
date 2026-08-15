@@ -322,6 +322,14 @@ cdef class FDTransport(Transport):
             warnings.warn(f"unclosed {self.__class__.__name__} for {self._file}", ResourceWarning, source=self)
             self._file.close()
 
+    cpdef _finalize_close(self, exc):
+        try:
+            self._call_protocol_connection_lost(exc)
+        finally:
+            self._file.close()
+            self._file = None
+            self._protocol = None
+
 
 cdef class Protocol:
     """Optional Cython protocol interface for avoiding Python method dispatch."""

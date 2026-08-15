@@ -363,14 +363,6 @@ cdef class SelectorDatagramTransport(DatagramTransport):
         self._clear_write_backlog(exc)
         self._schedule_finalize_close(exc)
 
-    cpdef _finalize_close(self, exc):
-        try:
-            self._call_protocol_connection_lost(exc)
-        finally:
-            self._file.close()
-            self._file = None
-            self._protocol = None
-
     def _read_ready(self):
         cdef:
             PyObject* buffer
@@ -575,14 +567,6 @@ cdef class SelectorReadPipeTransport(FDTransport):
 
     cdef bint _should_report_fatal_error(self, exc) except -1:
         return not (isinstance(exc, OSError) and exc.errno == errno.EIO)
-
-    cpdef _finalize_close(self, exc):
-        try:
-            self._call_protocol_connection_lost(exc)
-        finally:
-            self._file.close()
-            self._file = None
-            self._protocol = None
 
 
 cdef class SelectorWritePipeTransport(SelectorStreamTransport):
