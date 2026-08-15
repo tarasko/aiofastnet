@@ -188,57 +188,29 @@ cdef class ProactorSocketTransport(StreamTransport):
             _logger.debug("%r: shutdown(SHUT_WR) done", self)
         return NoResult.OK
 
-    cpdef close(self):
-        self._check_thread("close")
-        if self._closing:
-            return
-
-        self.pause_reading()
-        self._closing = True
-        if self._write_backlog_size == 0:
-            assert self._write_submitted_size == 0
-            self._finalizing_close = True
-            self._schedule_finalize_close()
-
     cpdef _force_close(self, exc):
         if self._finalizing_close:
             return
 
-        self.pause_reading()
+        self._pause_reading()
         self._closing = True
         self._finalizing_close = True
         self._close_exc = exc
 
         if self._write_submitted_size == 0:
             self._clear_write_backlog(exc)
-            self._schedule_finalize_close()
+            self._schedule_finalize_close(exc)
 
-    cdef inline NoResult _schedule_finalize_close(self) except NoResult.EXC:
-        self._loop.call_soon((<object>self)._finalize_close, self._close_exc)
-
-    def _finalize_close(self, exc):
-        cdef:
-            object server
-
+    cdef NoResult _release_backend_resources(self) except NoResult.EXC:
         assert self._read_paused
         assert self._write_submitted_size == 0
         try:
-            self._call_protocol_connection_lost(exc)
+            self._proactor_socket.context.unwrap_socket(self._proactor_socket)
         finally:
-            server = self._server
-            try:
-                self._proactor_socket.context.unwrap_socket(self._proactor_socket)
-            finally:
-                self._proactor_socket.owner = None
-                self._proactor_socket = None
-                if self._file is not None:
-                    self._file.close()
-                    self._file = None
-                self._protocol = None
-                self._close_exc = None
-                if server is not None:
-                    server._detach(self)
-                    self._server = None
+            self._proactor_socket.owner = None
+            self._proactor_socket = None
+            self._close_exc = None
+        return NoResult.OK
 
     cdef NoResult _ensure_progress(self) except NoResult.EXC:
         if self._write_submitted_size == 0:
@@ -342,7 +314,7 @@ cdef class ProactorSocketTransport(StreamTransport):
         if self._finalizing_close:
             self._write_submitted_size = 0
             self._clear_write_backlog(self._close_exc)
-            self._schedule_finalize_close()
+            self._schedule_finalize_close(self._close_exc)
             return NoResult.OK
 
         if status != AIOFN_LOOP_OK:
@@ -377,8 +349,8 @@ cdef class ProactorSocketTransport(StreamTransport):
         self._maybe_resume_protocol()
         if self._write_backlog_size == 0:
             if self._closing:
-                self._finalizing_close = True
-                self._schedule_finalize_close()
+                if not self._finalizing_close:
+                    self._schedule_finalize_close(self._close_exc)
             elif self._write_eof:
                 self._write_eof_now()
         return NoResult.OK

@@ -93,6 +93,12 @@ cdef class Transport:
         if self._closing or self._read_paused:
             return
 
+        self._pause_reading()
+
+    cdef inline NoResult _pause_reading(self) except NoResult.EXC:
+        if self._read_paused:
+            return NoResult.OK
+
         self._read_paused = True
         try:
             self._stop_reading()
@@ -102,6 +108,7 @@ cdef class Transport:
 
         if unlikely(self._is_debug):
             _logger.debug("%r pauses reading", self)
+        return NoResult.OK
 
     cpdef resume_reading(self):
         self._check_thread("resume_reading")
@@ -575,6 +582,43 @@ cdef class StreamTransport(WritableTransport):
             self._file.close()
             if self._server is not None:
                 self._server._detach(self)
+
+    cpdef close(self):
+        self._check_thread("close")
+        if self._closing:
+            return
+
+        self._pause_reading()
+        self._closing = True
+        if self._write_backlog_size == 0:
+            self._schedule_finalize_close(None)
+
+    cdef inline NoResult _schedule_finalize_close(self, exc) except NoResult.EXC:
+        self._finalizing_close = True
+        self._loop.call_soon((<object>self)._finalize_close, exc)
+
+    cdef NoResult _release_backend_resources(self) except NoResult.EXC:
+        return NoResult.OK
+
+    cpdef _finalize_close(self, exc):
+        cdef object server
+
+        try:
+            self._call_protocol_connection_lost(exc)
+        finally:
+            server = self._server
+            try:
+                self._release_backend_resources()
+            finally:
+                try:
+                    if self._file is not None:
+                        self._file.close()
+                finally:
+                    self._file = None
+                    self._protocol = None
+                    if server is not None:
+                        server._detach(self)
+                        self._server = None
 
     cpdef write_nocheck(self, data):
         if not self.__pre_write_check("write"):

@@ -54,18 +54,6 @@ cdef class SelectorStreamTransport(StreamTransport):
     cdef NoResult _start_reading(self) except NoResult.EXC:
         self._loop.add_reader(self._fileno_obj, self._read_ready)
 
-    cpdef close(self):
-        self._check_thread("close")
-        if self._closing:
-            return
-
-        self._closing = True
-        self._loop.remove_reader(self._fileno_obj)
-        if self._write_backlog_size == 0:
-            self._finalizing_close = True
-            self._clear_write_backlog(None)
-            self._loop.call_soon(self._finalize_close, None)
-
     cdef bint _should_report_fatal_error(self, exc) except -1:
         return not isinstance(exc, OSError)
 
@@ -73,20 +61,10 @@ cdef class SelectorStreamTransport(StreamTransport):
         if self._finalizing_close:
             return
 
+        self._pause_reading()
         self._clear_write_backlog(exc)
-        if not self._closing:
-            self._closing = True
-            self._loop.remove_reader(self._fileno_obj)
-        self._finalizing_close = True
-        self._loop.call_soon(self._finalize_close, exc)
-
-    def _finalize_close(self, exc):
-        try:
-            self._call_protocol_connection_lost(exc)
-        finally:
-            self._file.close()
-            self._file = None
-            self._protocol = None
+        self._closing = True
+        self._schedule_finalize_close(exc)
 
     cpdef can_write_eof(self):
         return True
@@ -136,9 +114,6 @@ cdef class SelectorStreamTransport(StreamTransport):
 
         return bytes_sent == bytes_to_send
 
-    cdef inline NoResult _adjust_write_backlog(self, Py_ssize_t bytes_sent) except NoResult.EXC:
-        self._consume_write_backlog(bytes_sent)
-
     cdef inline bint _try_sendfile_from_backlog_top(self) except -1:
         cdef SendFileRequest sendfile_req = <SendFileRequest>self._write_backlog[0]
 
@@ -164,7 +139,7 @@ cdef class SelectorStreamTransport(StreamTransport):
             else:
                 bytes_sent = 0
                 all_sent = self._try_write_backlog(&bytes_sent)
-                self._adjust_write_backlog(bytes_sent)
+                self._consume_write_backlog(bytes_sent)
 
     def _write_ready(self):
         assert self._write_backlog_size > 0, 'Data should not be empty'
@@ -183,8 +158,8 @@ cdef class SelectorStreamTransport(StreamTransport):
             if self._write_backlog_size == 0:
                 self._stop_write_ready()
                 if self._closing:
-                    self._finalizing_close = True
-                    self._finalize_close(None)
+                    if not self._finalizing_close:
+                        self._schedule_finalize_close(None)
                 elif self._write_eof:
                     self._write_eof_now()
         return NoResult.OK
@@ -269,15 +244,6 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
         if waiter is not None:
             # only wake up the waiter when connection_made() has been called
             self._loop.call_soon(_set_result_unless_cancelled_callback, waiter, None)
-
-    def _finalize_close(self, exc):
-        try:
-            SelectorStreamTransport._finalize_close(self, exc)
-        finally:
-            server = self._server
-            if server is not None:
-                server._detach(self)
-                self._server = None
 
     def _read_ready(self):
         try:
@@ -385,6 +351,7 @@ cdef class SelectorSocketTransport(SelectorStreamTransport):
         self._file.shutdown(socket.SHUT_WR)
         if unlikely(self._is_debug):
             _logger.debug("%r: shutdown(SHUT_WR) done", self)
+
 
 cdef class SelectorDatagramTransport(DatagramTransport):
     """Provide message-oriented send and receive behavior for a datagram socket."""
