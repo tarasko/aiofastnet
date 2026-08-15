@@ -64,8 +64,8 @@ def _ssl_needs_fallback_engine(sslcontext: ssl.SSLContext) -> bool:
 
 def _get_proactor_context(loop, sock):
     # Only LoopBase exposes this method; third-party selector loops continue
-    # using SelectorSocketTransport. The current proactor transport and ABI
-    # cover TCP streams; Unix-domain streams still use the reactor transport.
+    # using selector transports. The current proactor transports cover INET
+    # sockets; Unix-domain sockets still use reactor transports.
     get_proactor_context = getattr(loop, "get_proactor_context", None)
     if get_proactor_context is not None and sock.family in (socket.AF_INET, socket.AF_INET6):
         return get_proactor_context()
@@ -78,6 +78,17 @@ def _make_socket_transport(loop, sock, protocol, waiter=None, server=None, *, pr
 
         return ProactorSocketTransport(proactor_context, loop, sock, protocol, waiter, server)
     return SelectorSocketTransport(loop, sock, protocol, waiter=waiter, server=server)
+
+
+def _make_datagram_transport(loop, sock, protocol, address, waiter, *, proactor_context):
+    if proactor_context is not None:
+        from .proactor_transport import ProactorDatagramTransport
+
+        return ProactorDatagramTransport(proactor_context, loop, sock, protocol, address, waiter)
+
+    from .selector_transport import SelectorDatagramTransport
+
+    return SelectorDatagramTransport(loop, sock, protocol, address, waiter)
 
 
 async def _wait_and_close_transport_on_exc(waiter: asyncio.Future[Any], transport: Any) -> Any:

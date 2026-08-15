@@ -664,7 +664,7 @@ cdef class LoopBase:
             if (proactor.wrap_socket == NULL or proactor.unwrap_socket == NULL or
                     proactor.connect == NULL or proactor.read_start == NULL or proactor.read_stop == NULL or
                     proactor.recvfrom_start == NULL or proactor.recvfrom_stop == NULL or
-                    proactor.write == NULL or proactor.cancel == NULL):
+                    proactor.write == NULL or proactor.sendto == NULL or proactor.cancel == NULL):
                 raise ValueError("loop backend proactor is missing a required operation")
 
             proactor_context = <ProactorContext>ProactorContext.__new__(ProactorContext)

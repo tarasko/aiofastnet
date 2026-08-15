@@ -67,7 +67,7 @@ cdef extern from "loop_backend.h":
 
     ctypedef void (*aiofn_loop_proactor_callback_fn)(aiofn_loop_proactor_op_t *) noexcept nogil
 
-    ctypedef struct sockaddr:
+    ctypedef struct sockaddr "struct sockaddr":
         pass
 
     ctypedef void (*aiofn_loop_read_alloc_fn)(void *, size_t, void **, size_t *) noexcept nogil

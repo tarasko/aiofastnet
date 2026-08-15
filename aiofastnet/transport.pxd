@@ -77,6 +77,8 @@ cdef class Transport:
     cdef object _call_protocol_eof_received(self)
     cdef inline object _call_protocol_get_buffer(self, char** buf_ptr, Py_ssize_t* buf_len)
     cdef inline NoResult _call_protocol_buffer_updated(self, Py_ssize_t bytes_read) except NoResult.EXC
+    cdef inline NoResult _call_protocol_datagram_received(self, data, addr) except NoResult.EXC
+    cdef inline NoResult _call_protocol_error_received(self, exc) except NoResult.EXC
 
 
 cdef class Protocol:
@@ -134,56 +136,58 @@ cdef class WriteWatermarks:
     cdef inline NoResult _set_write_buffer_limits(self, high, low) except NoResult.EXC
 
 
-cdef class FlowControlledWriter:
+cdef class WritableTransport(Transport):
     cdef:
-        Transport transport
         WriteWatermarks _watermarks
 
-        object backlog
-        Py_ssize_t backlog_size
-        size_t closed_write_count
+        object _write_backlog
+        Py_ssize_t _write_backlog_size
+        size_t _closed_write_count
 
-    cdef Py_ssize_t get_write_buffer_size(self) except -1
-    cdef tuple get_write_buffer_limits(self)
-    cdef NoResult set_write_buffer_limits(self, high, low) except NoResult.EXC
-    cdef inline NoResult maybe_pause_protocol(self) except NoResult.EXC
-    cdef inline NoResult maybe_resume_protocol(self) except NoResult.EXC
-    cdef NoResult clear(self, object exc) except NoResult.EXC
+    cpdef Py_ssize_t get_write_buffer_size(self) except -1
+    cpdef tuple get_write_buffer_limits(self)
+    cpdef set_write_buffer_limits(self, high=*, low=*)
 
+    cdef inline Py_ssize_t _get_write_buffer_size_nocheck(self) except -1
+    cdef inline NoResult _maybe_pause_protocol(self) except NoResult.EXC
+    cdef inline NoResult _maybe_resume_protocol(self) except NoResult.EXC
+    cdef NoResult _clear_write_backlog(self, object exc) except NoResult.EXC
+
+    # Implement in concrete transport.
     cdef NoResult _ensure_progress(self) except NoResult.EXC
 
 
-cdef class StreamWriter(FlowControlledWriter):
+cdef class StreamTransport(WritableTransport):
     cdef:
-        aiofn_iovec iovecs[256]
+        int _write_fd
+        bint _write_is_socket
+        bint _write_eof
+        aiofn_iovec _write_iovecs[256]
 
-        int fd
-        bint is_socket
-        bint eof
-
-    cdef NoResult write_nocheck(self, object data) except NoResult.EXC
-    cdef NoResult writelines_nocheck(self, object list_of_data) except NoResult.EXC
-    cdef NoResult write_c(self, char *ptr, Py_ssize_t size) except NoResult.EXC
-    cdef object sendfile(self, file, offset, count)
-
-    cdef inline NoResult append_request(self, WriteRequest request) except NoResult.EXC
-    cdef inline NoResult append_lines_tail(self, object list_of_data, Py_ssize_t bytes_sent) except NoResult.EXC
-
-    cdef inline WriteRequest try_write(self, object data, char *ptr, Py_ssize_t size)
-    cdef inline bint try_writelines(self, object list_of_data, Py_ssize_t *total_bytes_sent) except -1
-    cdef inline Py_ssize_t flush_iovecs(self, Py_ssize_t iovecs_count, Py_ssize_t *total_bytes_sent) except -2
+    # Implement in concrete transport.
     cdef bint _try_sendfile(self, SendFileRequest request) except -1
-    cdef NoResult consume(self, Py_ssize_t bytes_sent) except NoResult.EXC
 
-    cdef inline bint _pre_write_check(self, str meth) except -1
+    cpdef write_nocheck(self, data)
+    cpdef writelines_nocheck(self, list_of_data)
+    cdef NoResult write_c(self, char *ptr, Py_ssize_t size) except NoResult.EXC
+    cdef object _sendfile(self, file, offset, count)
+
+    cdef inline WriteRequest _try_write(self, object data, char *ptr, Py_ssize_t size)
+    cdef inline bint _try_writelines(self, object list_of_data, Py_ssize_t *total_bytes_sent) except -1
+    cdef inline Py_ssize_t _flush_iovecs(self, Py_ssize_t iovecs_count, Py_ssize_t *total_bytes_sent) except -2
+    cdef inline NoResult _consume_write_backlog(self, Py_ssize_t bytes_sent) except NoResult.EXC
+
+    cdef inline bint __pre_write_check(self, str meth) except -1
+    cdef inline NoResult __append_request(self, WriteRequest request) except NoResult.EXC
+    cdef inline NoResult __append_lines_tail(self, object list_of_data, Py_ssize_t bytes_sent) except NoResult.EXC
 
 
-cdef class DatagramWriter(FlowControlledWriter):
+cdef class DatagramTransport(WritableTransport):
     cdef:
-        object address
-        Py_ssize_t header_size
+        object _address
+        Py_ssize_t _datagram_header_size
 
-    cdef NoResult sendto_nocheck(self, object data, object addr) except NoResult.EXC
+    cpdef sendto_nocheck(self, data, addr)
 
     cdef object _validate_address(self, object addr)
     cdef bint _try_sendto(self, object data, object addr) except -1

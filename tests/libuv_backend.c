@@ -345,6 +345,12 @@ static void aiofn_libuv_on_udp_read(
 
     assert(socket->recvfrom_callback != NULL);
 
+    // libuv reports an EAGAIN receive as nread == 0 with no source address;
+    // an empty datagram also has nread == 0, but carries a valid address.
+    if (nread == 0 && address == NULL) {
+        return;
+    }
+
     if (nread < 0) {
         aiofn_libuv_set_error((aiofn_libuv_state_t *)handle->loop->data, "uv_udp_recv", (int)nread);
         socket->recvfrom_callback(socket->read_callback_data, AIOFN_LOOP_ERROR, buffer->base, 0, address);

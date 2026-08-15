@@ -261,10 +261,8 @@ typedef struct {
     /* Cancel one pending connect, write, sendto, or sendfile operation. */
     aiofn_loop_status (*cancel)(void *state, aiofn_loop_proactor_op_t *op);
 
-    /*
-     * Start persistent asynchronous datagram receives. alloc supplies both a
-     * receive buffer and address storage for each datagram.
-     */
+    /* Start persistent asynchronous datagram receives. alloc supplies the
+       data buffer; the backend supplies source-address storage to callback. */
     aiofn_loop_status (*recvfrom_start)(
         void *state,
         aiofn_loop_proactor_socket_t *socket,
@@ -279,7 +277,9 @@ typedef struct {
         aiofn_loop_proactor_socket_t *socket
     );
 
-    /* Start one asynchronous datagram send to the supplied native address. */
+    /* Start one asynchronous datagram send to the supplied native address.
+       The address is valid only for the duration of this call; the backend
+       must copy it if the native operation retains address storage. */
     aiofn_loop_status (*sendto)(
         void *state,
         aiofn_loop_proactor_socket_t *socket,

@@ -73,7 +73,7 @@ cdef extern from *:
         if (new_size == 0)
         {
             Py_DECREF(obj);
-            Py_RETURN_NONE;
+            return PyBytes_FromStringAndSize(NULL, 0);
         }
         _PyBytes_Resize(&obj, new_size);
         return obj;

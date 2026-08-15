@@ -9,7 +9,7 @@ import threading
 
 import pytest
 
-from tests.utils import ConnectionType, TestClient, TestServer, make_test_ssl_contexts
+from tests.utils import AsyncClient, ConnectionType, TestClient, TestServer, make_test_ssl_contexts
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="the libuv test backend is Unix-only")
 
@@ -435,6 +435,45 @@ async def test_proactor_socket_transport_read_control_and_eof(libuv_loop):
             client.transport.write_eof()
             await client.wait_closed()
             assert client.is_eof_received
+
+
+async def test_proactor_datagram_transport_io(libuv_loop):
+    from aiofastnet.proactor_transport import ProactorDatagramTransport
+
+    class DatagramClient(AsyncClient):
+        def __init__(self):
+            super().__init__()
+            self.empty_datagram_received = asyncio.get_running_loop().create_future()
+
+        def datagram_received(self, data, addr):
+            super().datagram_received(data, addr)
+            if not data and not self.empty_datagram_received.done():
+                self.empty_datagram_received.set_result(addr)
+
+    async with TestServer(ct=ConnectionType("udp")) as server:
+        assert isinstance(server.server, ProactorDatagramTransport)
+
+        async with TestClient(server, ct=ConnectionType("udp"), protocol_factory=DatagramClient) as client:
+            assert isinstance(client.transport, ProactorDatagramTransport)
+
+            payload = b"proactor datagram transport"
+            client.write(payload)
+            assert await client.readn(len(payload)) == payload
+
+            client.write(b"")
+            await asyncio.wait_for(client.empty_datagram_received, 1)
+
+            client.transport.pause_reading()
+            assert not client.transport.is_reading()
+
+            paused_payload = b"received after resume"
+            client.write(paused_payload)
+            with pytest.raises(asyncio.TimeoutError):
+                await client.readn(len(paused_payload), 0.05)
+
+            client.transport.resume_reading()
+            assert client.transport.is_reading()
+            assert await client.readn(len(paused_payload)) == paused_payload
 
 
 async def test_proactor_socket_transport_abort_pending_write(libuv_loop):

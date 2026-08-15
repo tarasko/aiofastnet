@@ -215,6 +215,24 @@ cdef class Transport:
         except:
             aiofn_add_info_and_reraise('Fatal error: protocol.buffer_updated() call failed.')
 
+    cdef inline NoResult _call_protocol_datagram_received(self, data, addr) except NoResult.EXC:
+        try:
+            self._protocol.datagram_received(data, addr)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as exc:
+            self._report_protocol_exception(
+                exc, 'Fatal error: protocol.datagram_received() call failed.')
+
+    cdef inline NoResult _call_protocol_error_received(self, exc) except NoResult.EXC:
+        try:
+            self._protocol.error_received(exc)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as caught:
+            self._report_protocol_exception(
+                caught, 'Fatal error: protocol.error_received() call failed.')
+
     def write(self, data):
         self._check_thread("write")
         aiofn_validate_buffer(data)
@@ -436,49 +454,52 @@ cdef class WriteWatermarks:
         self._low_water = low
 
 
-cdef class FlowControlledWriter:
-    """Manage write buffering and protocol flow control for one transport."""
+cdef class WritableTransport(Transport):
+    """Transport base with write buffering and protocol flow control."""
 
-    def __init__(self, Transport transport):
-        self.transport = transport
-        self._watermarks = WriteWatermarks(transport._loop)
+    def __init__(self, loop):
+        Transport.__init__(self, loop)
+        self._watermarks = WriteWatermarks(loop)
 
-        self.backlog = collections.deque()
-        self.backlog_size = 0
-        self.closed_write_count = 0
+        self._write_backlog = collections.deque()
+        self._write_backlog_size = 0
+        self._closed_write_count = 0
 
-    cdef Py_ssize_t get_write_buffer_size(self) except -1:
-        cdef Py_ssize_t total = self.backlog_size
+    cpdef Py_ssize_t get_write_buffer_size(self) except -1:
+        self._check_thread("get_write_buffer_size")
+        return self._get_write_buffer_size_nocheck()
 
-        if self.transport._protocol_aiofn:
-            total += (<Protocol>self.transport._protocol).get_local_write_buffer_size()
+    cdef inline Py_ssize_t _get_write_buffer_size_nocheck(self) except -1:
+        cdef Py_ssize_t total = self._write_backlog_size
+        if self._protocol_aiofn:
+            total += (<Protocol>self._protocol).get_local_write_buffer_size()
 
         return total
 
-    cdef tuple get_write_buffer_limits(self):
+    cpdef tuple get_write_buffer_limits(self):
+        self._check_thread("get_write_buffer_limits")
         return self._watermarks.get_write_buffer_limits()
 
-    cdef NoResult set_write_buffer_limits(self, high, low) except NoResult.EXC:
+    cpdef set_write_buffer_limits(self, high=None, low=None):
+        self._check_thread("set_write_buffer_limits")
         self._watermarks.set_write_buffer_limits(
-            self.transport,
-            self.transport._protocol,
-            self.get_write_buffer_size(),
+            self,
+            self._protocol,
+            self._get_write_buffer_size_nocheck(),
             high,
             low,
         )
 
-    cdef inline NoResult maybe_pause_protocol(self) except NoResult.EXC:
-        self._watermarks.maybe_pause_protocol(
-            self.transport, self.transport._protocol, self.get_write_buffer_size())
+    cdef inline NoResult _maybe_pause_protocol(self) except NoResult.EXC:
+        self._watermarks.maybe_pause_protocol(self, self._protocol, self._get_write_buffer_size_nocheck())
 
-    cdef inline NoResult maybe_resume_protocol(self) except NoResult.EXC:
-        self._watermarks.maybe_resume_protocol(
-            self.transport, self.transport._protocol, self.get_write_buffer_size())
+    cdef inline NoResult _maybe_resume_protocol(self) except NoResult.EXC:
+        self._watermarks.maybe_resume_protocol(self, self._protocol, self._get_write_buffer_size_nocheck())
 
-    cdef NoResult clear(self, object exc) except NoResult.EXC:
+    cdef NoResult _clear_write_backlog(self, object exc) except NoResult.EXC:
         cdef SendFileRequest request
 
-        for item in self.backlog:
+        for item in self._write_backlog:
             if isinstance(item, SendFileRequest):
                 request = <SendFileRequest>item
                 if request.waiter is not None and not request.waiter.done():
@@ -487,26 +508,26 @@ cdef class FlowControlledWriter:
                     else:
                         request.waiter.set_exception(exc)
 
-        self.backlog.clear()
-        self.backlog_size = 0
+        self._write_backlog.clear()
+        self._write_backlog_size = 0
 
     cdef NoResult _ensure_progress(self) except NoResult.EXC:
         raise NotImplementedError()
 
 
-cdef class StreamWriter(FlowControlledWriter):
-    """Implement ordered byte-stream writes independently of the I/O driver."""
+cdef class StreamTransport(WritableTransport):
+    """Transport base implementing ordered byte-stream write queues."""
 
-    def __init__(self, Transport transport, int fd, bint is_socket):
-        FlowControlledWriter.__init__(self, transport)
+    def __init__(self, loop, int fd, bint is_socket):
+        WritableTransport.__init__(self, loop)
 
-        self.fd = fd
-        self.is_socket = is_socket
-        self.eof = False
+        self._write_fd = fd
+        self._write_is_socket = is_socket
+        self._write_eof = False
 
-    cdef NoResult write_nocheck(self, object data) except NoResult.EXC:
-        if not self._pre_write_check("write"):
-            return NoResult.OK
+    cpdef write_nocheck(self, data):
+        if not self.__pre_write_check("write"):
+            return
 
         cdef:
             char *data_ptr
@@ -514,44 +535,44 @@ cdef class StreamWriter(FlowControlledWriter):
             WriteRequest request
 
         try:
-            if self.backlog_size == 0:
+            if self._write_backlog_size == 0:
                 aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
                 if data_len == 0:
-                    return NoResult.OK
+                    return
 
-                request = self.try_write(data, data_ptr, data_len)
+                request = self._try_write(data, data_ptr, data_len)
                 if request is None:
-                    return NoResult.OK
+                    return
             else:
                 request = make_write_request(data)
                 if request.size == 0:
-                    return NoResult.OK
+                    return
 
-            self.append_request(request)
+            self.__append_request(request)
             self._ensure_progress()
-            self.maybe_pause_protocol()
+            self._maybe_pause_protocol()
         except:
-            self.transport._handle_error('Fatal write error on transport')
+            self._handle_error('Fatal write error on transport')
 
-    cdef NoResult writelines_nocheck(self, object list_of_data) except NoResult.EXC:
-        if not self._pre_write_check("writelines"):
-            return NoResult.OK
+    cpdef writelines_nocheck(self, list_of_data):
+        if not self.__pre_write_check("writelines"):
+            return
 
         cdef Py_ssize_t total_bytes_sent = 0
 
         try:
-            if self.backlog_size == 0:
-                if self.try_writelines(list_of_data, &total_bytes_sent):
-                    return NoResult.OK
+            if self._write_backlog_size == 0:
+                if self._try_writelines(list_of_data, &total_bytes_sent):
+                    return
 
-            self.append_lines_tail(list_of_data, total_bytes_sent)
+            self.__append_lines_tail(list_of_data, total_bytes_sent)
             self._ensure_progress()
-            self.maybe_pause_protocol()
+            self._maybe_pause_protocol()
         except:
-            self.transport._handle_error('Fatal write error on transport')
+            self._handle_error('Fatal write error on transport')
 
     cdef NoResult write_c(self, char *ptr, Py_ssize_t size) except NoResult.EXC:
-        if not self._pre_write_check("write_c"):
+        if not self.__pre_write_check("write_c"):
             return NoResult.OK
 
         if size <= 0:
@@ -560,24 +581,24 @@ cdef class StreamWriter(FlowControlledWriter):
         cdef WriteRequest request
 
         try:
-            if not self.backlog:
-                request = self.try_write(None, ptr, size)
+            if self._write_backlog_size == 0:
+                request = self._try_write(None, ptr, size)
                 if request is None:
                     return NoResult.OK
             else:
                 request = make_write_request_from_ptr(ptr, size)
 
-            self.append_request(request)
+            self.__append_request(request)
             self._ensure_progress()
-            self.maybe_pause_protocol()
+            self._maybe_pause_protocol()
         except:
-            self.transport._handle_error('Fatal write error on transport')
+            self._handle_error('Fatal write error on transport')
 
-    cdef object sendfile(self, file, offset, count):
-        if self.eof:
+    cdef object _sendfile(self, file, offset, count):
+        if self._write_eof:
             raise RuntimeError('Cannot call sendfile() after write_eof()')
 
-        if self.transport._closing or self.transport._finalizing_close:
+        if self._closing or self._finalizing_close:
             raise RuntimeError("Transport is closing")
 
         cdef SendFileRequest request = make_sendfile_request(file, offset, count)
@@ -585,60 +606,39 @@ cdef class StreamWriter(FlowControlledWriter):
             return None
 
         try:
-            if not self.backlog and self._try_sendfile(request):
+            if self._write_backlog_size == 0 and self._try_sendfile(request):
                 return None
 
-            if unlikely(self.transport._is_debug):
+            if unlikely(self._is_debug):
                 _logger.debug(
                     "%r: enqueue SendFileRequest(offset=%d,count=%d)",
-                    self.transport,
+                    self,
                     request.offset,
                     request.count,
                 )
 
-            self.backlog.append(request)
-            self.backlog_size += request.count
+            self._write_backlog.append(request)
+            self._write_backlog_size += request.count
             self._ensure_progress()
-            self.maybe_pause_protocol()
+            self._maybe_pause_protocol()
 
             # I/O drivers never complete an operation from its initiating call,
             # so the waiter can be allocated after progress has been scheduled.
-            request.waiter = self.transport._loop.create_future()
+            request.waiter = self._loop.create_future()
             return request.waiter
         except:
-            self.transport._handle_error('Fatal sendfile error on transport')
+            self._handle_error('Fatal sendfile error on transport')
             raise
 
-    cdef NoResult append_request(self, WriteRequest request) except NoResult.EXC:
-        self.backlog.append(request)
-        self.backlog_size += request.size
-
-    cdef NoResult append_lines_tail(self, object list_of_data, Py_ssize_t bytes_sent) except NoResult.EXC:
-        cdef:
-            char *data_ptr
-            Py_ssize_t data_len
-
-        for data in list_of_data:
-            aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
-            if data_len <= bytes_sent:
-                bytes_sent -= data_len
-                continue
-
-            if bytes_sent:
-                self.append_request(make_write_request_tail(data, data_ptr + bytes_sent, data_len - bytes_sent))
-                bytes_sent = 0
-            elif data_len:
-                self.append_request(make_write_request(data))
-
-    cdef WriteRequest try_write(
+    cdef WriteRequest _try_write(
         self,
         object data,
         char *ptr,
         Py_ssize_t size
     ):
-        cdef Py_ssize_t bytes_sent = aiofn_write(self.fd, ptr, size, self.is_socket)
-        if unlikely(self.transport._is_debug):
-            _logger.debug("%r: aiofn_write(..., len=%d)=%d", self.transport, size, bytes_sent)
+        cdef Py_ssize_t bytes_sent = aiofn_write(self._write_fd, ptr, size, self._write_is_socket)
+        if unlikely(self._is_debug):
+            _logger.debug("%r: aiofn_write(..., len=%d)=%d", self, size, bytes_sent)
 
         if bytes_sent == size:
             return None
@@ -652,7 +652,7 @@ cdef class StreamWriter(FlowControlledWriter):
         else:
             return make_write_request_tail(data, ptr, size)
 
-    cdef bint try_writelines(self, object list_of_data, Py_ssize_t *total_bytes_sent) except -1:
+    cdef bint _try_writelines(self, object list_of_data, Py_ssize_t *total_bytes_sent) except -1:
         cdef:
             char *data_ptr
             Py_ssize_t data_len
@@ -665,14 +665,14 @@ cdef class StreamWriter(FlowControlledWriter):
             if unlikely(data_len == 0):
                 continue
 
-            self.iovecs[index].iov_base = data_ptr
-            self.iovecs[index].iov_len = data_len
+            self._write_iovecs[index].iov_base = data_ptr
+            self._write_iovecs[index].iov_len = data_len
             bytes_to_send += data_len
             if index < AIOFN_MAX_IOVEC - 1:
                 index += 1
                 continue
 
-            bytes_sent = self.flush_iovecs(index + 1, total_bytes_sent)
+            bytes_sent = self._flush_iovecs(index + 1, total_bytes_sent)
             if bytes_sent != bytes_to_send:
                 return False
 
@@ -681,16 +681,16 @@ cdef class StreamWriter(FlowControlledWriter):
             bytes_sent = 0
 
         if index:
-            bytes_sent = self.flush_iovecs(index, total_bytes_sent)
+            bytes_sent = self._flush_iovecs(index, total_bytes_sent)
 
         return bytes_sent == bytes_to_send
 
-    cdef Py_ssize_t flush_iovecs(self, Py_ssize_t iovecs_count, Py_ssize_t *total_bytes_sent) except -2:
-        cdef Py_ssize_t bytes_sent = aiofn_writev(self.fd, self.iovecs, iovecs_count, self.is_socket)
-        if unlikely(self.transport._is_debug):
+    cdef Py_ssize_t _flush_iovecs(self, Py_ssize_t iovecs_count, Py_ssize_t *total_bytes_sent) except -2:
+        cdef Py_ssize_t bytes_sent = aiofn_writev(self._write_fd, self._write_iovecs, iovecs_count, self._write_is_socket)
+        if unlikely(self._is_debug):
             _logger.debug(
                 "%r: aiofn_writev(..., len(iovecs)=%d)=%d",
-                self.transport, iovecs_count, bytes_sent)
+                self, iovecs_count, bytes_sent)
 
         if bytes_sent > 0:
             total_bytes_sent[0] += bytes_sent
@@ -700,83 +700,103 @@ cdef class StreamWriter(FlowControlledWriter):
     cdef bint _try_sendfile(self, SendFileRequest request) except -1:
         raise NotImplementedError()
 
-    cdef NoResult consume(self, Py_ssize_t bytes_sent) except NoResult.EXC:
+    cdef NoResult _consume_write_backlog(self, Py_ssize_t bytes_sent) except NoResult.EXC:
         cdef:
             Py_ssize_t request_size
             WriteRequest request
 
-        assert 0 <= bytes_sent <= self.backlog_size
-        self.backlog_size -= bytes_sent
+        assert 0 <= bytes_sent <= self._write_backlog_size
+        self._write_backlog_size -= bytes_sent
 
         while bytes_sent:
-            assert isinstance(self.backlog[0], WriteRequest)
-            request = <WriteRequest>self.backlog[0]
+            assert isinstance(self._write_backlog[0], WriteRequest)
+            request = <WriteRequest>self._write_backlog[0]
             request_size = request.size
             if request_size <= bytes_sent:
                 bytes_sent -= request_size
-                self.backlog.popleft()
+                self._write_backlog.popleft()
             else:
                 request.ptr += bytes_sent
                 request.size -= bytes_sent
                 bytes_sent = 0
         return NoResult.OK
 
-    cdef inline bint _pre_write_check(self, str meth) except -1:
-        if self.eof:
+    cdef inline bint __pre_write_check(self, str meth) except -1:
+        if self._write_eof:
             raise RuntimeError(f'Cannot call {meth}() after write_eof()')
 
-        if unlikely(self.transport._finalizing_close):
-            if self.closed_write_count >= _log_threshold_for_connlost_writes:
+        if unlikely(self._finalizing_close):
+            if self._closed_write_count >= _log_threshold_for_connlost_writes:
                 _logger.warning(f'{meth}() called after connection lost.')
-            self.closed_write_count += 1
+            self._closed_write_count += 1
             return False
 
         return True
 
+    cdef NoResult __append_request(self, WriteRequest request) except NoResult.EXC:
+        self._write_backlog.append(request)
+        self._write_backlog_size += request.size
 
-cdef class DatagramWriter(FlowControlledWriter):
-    """Implement message queueing independently of the datagram I/O driver."""
+    cdef NoResult __append_lines_tail(self, object list_of_data, Py_ssize_t bytes_sent) except NoResult.EXC:
+        cdef:
+            char *data_ptr
+            Py_ssize_t data_len
+
+        for data in list_of_data:
+            aiofn_unpack_simple_buffer(data, &data_ptr, &data_len, 0)
+            if data_len <= bytes_sent:
+                bytes_sent -= data_len
+                continue
+
+            if bytes_sent:
+                self.__append_request(make_write_request_tail(data, data_ptr + bytes_sent, data_len - bytes_sent))
+                bytes_sent = 0
+            elif data_len:
+                self.__append_request(make_write_request(data))
+
+
+
+cdef class DatagramTransport(WritableTransport):
+    """Transport base implementing message-oriented write queues."""
 
     def __init__(
         self,
-        Transport transport,
+        loop,
         object address,
         Py_ssize_t header_size,
     ):
-        FlowControlledWriter.__init__(self, transport)
+        WritableTransport.__init__(self, loop)
 
-        self.address = address or None
-        self.header_size = header_size
+        self._address = address or None
+        self._datagram_header_size = header_size
 
-    cdef NoResult sendto_nocheck(self, object data, object addr) except NoResult.EXC:
-        if self.address is not None:
-            if addr is not None and addr != self.address:
+    cpdef sendto_nocheck(self, data, addr):
+        if self._address is not None:
+            if addr is not None and addr != self._address:
                 raise ValueError(
-                    f'Invalid address: must be None or {self.address}')
-            addr = self.address
+                    f'Invalid address: must be None or {self._address}')
+            addr = self._address
 
         addr = self._validate_address(addr)
 
-        if unlikely(self.transport._finalizing_close and self.address is not None):
-            if self.closed_write_count >= _log_threshold_for_connlost_writes:
+        if unlikely(self._finalizing_close and self._address is not None):
+            if self._closed_write_count >= _log_threshold_for_connlost_writes:
                 _logger.warning('socket.send() raised exception.')
-            self.closed_write_count += 1
-            return NoResult.OK
+            self._closed_write_count += 1
+            return
 
         try:
-            if not self.backlog:
+            if self._write_backlog_size == 0:
                 if self._try_sendto(data, addr):
-                    return NoResult.OK
+                    return
 
             # Ensure that what we buffer is immutable.
-            self.backlog.append((aiofn_maybe_copy_buffer(data), addr))
-            self.backlog_size += len(data) + self.header_size
+            self._write_backlog.append((aiofn_maybe_copy_buffer(data), addr))
+            self._write_backlog_size += len(data) + self._datagram_header_size
             self._ensure_progress()
-            self.maybe_pause_protocol()
+            self._maybe_pause_protocol()
         except:
-            self.transport._handle_error('Fatal write error on datagram transport')
-
-        return NoResult.OK
+            self._handle_error('Fatal write error on datagram transport')
 
     cdef object _validate_address(self, object addr):
         raise NotImplementedError()
