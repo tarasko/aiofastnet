@@ -148,6 +148,7 @@ cdef class Transport:
     cdef NoResult _fatal_error(self, exc, message='Fatal error on transport') except NoResult.EXC:
         if self._should_report_fatal_error(exc):
             self._report_protocol_exception(exc, message)
+
         elif unlikely(self._is_debug):
             _logger.debug("%r: %s", self, message, exc_info=True)
 

@@ -46,7 +46,6 @@ cdef class SelectorStreamTransport(StreamTransport):
         StreamTransport.__init__(self, loop, file, server)
         self._set_protocol(protocol)
         self._write_ready_registered = False
-        self._sendfile_compatible = False
 
     cdef NoResult _stop_reading(self) except NoResult.EXC:
         self._loop.remove_reader(self._fileno_obj)
@@ -61,10 +60,10 @@ cdef class SelectorStreamTransport(StreamTransport):
         if self._finalizing_close:
             return
 
+        self._closing = True
         self._pause_reading()
         self._stop_write_ready()
         self._clear_write_backlog(exc)
-        self._closing = True
         self._schedule_finalize_close(exc)
 
     cpdef can_write_eof(self):
@@ -74,12 +73,45 @@ cdef class SelectorStreamTransport(StreamTransport):
         self._check_thread("write_eof")
         if self._closing or self._write_eof:
             return
+
         self._write_eof = True
         if self._write_backlog_size == 0:
             self._write_eof_now()
 
     cdef NoResult _write_eof_now(self) except NoResult.EXC:
         raise NotImplementedError()
+
+    def _write_ready(self):
+        if unlikely(self._is_debug):
+            _logger.debug("%r write_ready event, resume writing from backlog", self)
+
+        if self._finalizing_close:
+            return
+
+        cdef:
+            Py_ssize_t bytes_sent
+            bint all_sent = True
+
+        try:
+            while self._write_backlog_size > 0 and all_sent:
+                if isinstance(self._write_backlog[0], SendFileRequest):
+                    all_sent = self._try_sendfile_from_backlog_top()
+                else:
+                    bytes_sent = 0
+                    all_sent = self._try_write_backlog(&bytes_sent)
+                    self._consume_write_backlog(bytes_sent)
+        except:
+            self._handle_error('Fatal write error on transport')
+        else:
+            self._maybe_resume_protocol()
+
+            if self._write_backlog_size == 0:
+                self._stop_write_ready()
+                if self._closing:
+                    if not self._finalizing_close:
+                        self._schedule_finalize_close(None)
+                elif self._write_eof:
+                    self._write_eof_now()
 
     cdef bint _try_write_backlog(self, Py_ssize_t *total_bytes_sent) except -1:
         cdef:
@@ -125,45 +157,10 @@ cdef class SelectorStreamTransport(StreamTransport):
             self._write_backlog.popleft()
             if not sendfile_req.waiter.done():
                 sendfile_req.waiter.set_result(None)
+
         self._write_backlog_size -= <Py_ssize_t>(orig_req_size - sendfile_req.count)
 
         return all_sent
-
-    cdef inline NoResult _flush_write_backlog(self) except NoResult.EXC:
-        cdef:
-            Py_ssize_t bytes_sent
-            bint all_sent = True
-
-        while self._write_backlog_size > 0 and all_sent:
-            if isinstance(self._write_backlog[0], SendFileRequest):
-                all_sent = self._try_sendfile_from_backlog_top()
-            else:
-                bytes_sent = 0
-                all_sent = self._try_write_backlog(&bytes_sent)
-                self._consume_write_backlog(bytes_sent)
-
-    def _write_ready(self):
-        assert self._write_backlog_size > 0, 'Data should not be empty'
-        if self._finalizing_close:
-            return
-
-        try:
-            if unlikely(self._is_debug):
-                _logger.debug("%r write_ready event, resume writing from backlog", self)
-            self._flush_write_backlog()
-        except:
-            self._stop_write_ready()
-            self._handle_error('Fatal write error on transport')
-        else:
-            self._maybe_resume_protocol()
-            if self._write_backlog_size == 0:
-                self._stop_write_ready()
-                if self._closing:
-                    if not self._finalizing_close:
-                        self._schedule_finalize_close(None)
-                elif self._write_eof:
-                    self._write_eof_now()
-        return NoResult.OK
 
     cdef NoResult _ensure_progress(self) except NoResult.EXC:
         if unlikely(self._is_debug):
