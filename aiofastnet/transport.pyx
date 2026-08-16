@@ -443,6 +443,11 @@ cdef class FDTransport(Transport):
             info.append('closing')
         return info
 
+    cdef bint _should_report_fatal_error(self, exc) except -1:
+        # syscalls on FD based transports may raise OSError.
+        # Such exceptions should not be reported to the loop exception_handler
+        return not isinstance(exc, OSError)
+
     cpdef _finalize_close(self, exc):
         try:
             self._call_protocol_connection_lost(exc)

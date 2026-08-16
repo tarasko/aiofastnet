@@ -53,9 +53,6 @@ cdef class SelectorStreamTransport(StreamTransport):
     cdef NoResult _start_reading(self) except NoResult.EXC:
         self._loop.add_reader(self._fileno_obj, self._read_ready)
 
-    cdef bint _should_report_fatal_error(self, exc) except -1:
-        return not isinstance(exc, OSError)
-
     cpdef _force_close(self, exc):
         if self._finalizing_close:
             return
@@ -332,9 +329,6 @@ cdef class SelectorDatagramTransport(DatagramTransport):
 
     cdef NoResult _start_reading(self) except NoResult.EXC:
         self._loop.add_reader(self._fileno_obj, self._read_ready)
-
-    cdef bint _should_report_fatal_error(self, exc) except -1:
-        return not isinstance(exc, OSError)
 
     cpdef _force_close(self, exc):
         if self._finalizing_close:
