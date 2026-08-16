@@ -32,6 +32,128 @@ cdef:
     size_t _log_threshold_for_connlost_writes = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
 
 
+cdef class Protocol:
+    """Optional Cython protocol interface for avoiding Python method dispatch."""
+
+    cpdef is_buffered_protocol(self):
+        return None
+
+    cpdef Py_ssize_t get_local_write_buffer_size(self) except -1:
+        return 0
+
+    cpdef get_buffer(self, Py_ssize_t hint):
+        raise NotImplementedError()
+
+    cdef NoResult get_buffer_c(self, Py_ssize_t hint, char** buf_ptr, Py_ssize_t* buf_len) except NoResult.EXC:
+        buffer = self.get_buffer(hint)
+        aiofn_unpack_simple_buffer(buffer, buf_ptr, buf_len, PyBUF_WRITABLE)
+
+    cpdef buffer_updated(self, Py_ssize_t bytes_read):
+        raise NotImplementedError()
+
+    cpdef data_received(self, data):
+        raise NotImplementedError()
+
+
+cpdef aiofn_is_buffered_protocol(protocol):
+    try:
+        ret = getattr(protocol, 'is_buffered_protocol')()
+        if ret is not None:
+            return ret
+    except AttributeError:
+        pass
+
+    return isinstance(protocol, asyncio.BufferedProtocol)
+
+
+@cython.no_gc
+cdef class WriteRequest:
+    """Own an immutable write buffer and its current unsent memory range."""
+
+
+cdef WriteRequest make_write_request(object data):
+    cdef WriteRequest req = <WriteRequest>WriteRequest.__new__(WriteRequest)
+    req.data = aiofn_maybe_copy_buffer(data)
+    aiofn_unpack_simple_buffer(req.data, &req.ptr, &req.size, 0)
+    return req
+
+
+cdef WriteRequest make_write_request_from_ptr(char* ptr, Py_ssize_t size):
+    cdef WriteRequest req = <WriteRequest>WriteRequest.__new__(WriteRequest)
+    req.data = PyBytes_FromStringAndSize(ptr, size)
+    req.ptr = PyBytes_AS_STRING(req.data)
+    req.size = size
+    return req
+
+
+cdef WriteRequest make_write_request_tail(object data, char* ptr, Py_ssize_t size):
+    cdef WriteRequest req = <WriteRequest>WriteRequest.__new__(WriteRequest)
+    req.data = aiofn_maybe_copy_buffer_tail(data, ptr, size)
+    aiofn_unpack_simple_buffer(req.data, &req.ptr, &req.size, 0)
+    return req
+
+
+cdef class SendFileRequest:
+    """Mutable progress state for a file transfer queued with writes."""
+
+    def __len__(self):
+        return self.count
+
+
+cdef SendFileRequest make_sendfile_request(file, offset, count):
+    cdef:
+        int fd
+        object file_stat
+        object available
+        SendFileRequest request
+
+    if "b" not in getattr(file, "mode", "b"):
+        raise ValueError("file should be opened in binary mode")
+
+    if not isinstance(offset, int):
+        raise TypeError(f"offset must be a non-negative integer (got {offset!r})")
+    if offset < 0:
+        raise ValueError(f"offset must be a non-negative integer (got {offset!r})")
+
+    if count is not None:
+        if not isinstance(count, int):
+            raise TypeError(f"count must be a positive integer (got {count!r})")
+        if count <= 0:
+            raise ValueError(f"count must be a positive integer (got {count!r})")
+
+    try:
+        fd = file.fileno()
+    except (AttributeError, io.UnsupportedOperation) as exc:
+        raise asyncio.SendfileNotAvailableError("not a regular file") from exc
+
+    try:
+        file_stat = os.fstat(fd)
+    except OSError as exc:
+        raise asyncio.SendfileNotAvailableError("not a regular file") from exc
+
+    if not stat.S_ISREG(file_stat.st_mode):
+        raise asyncio.SendfileNotAvailableError("not a regular file")
+
+    available = max(0, file_stat.st_size - offset)
+    if count is not None:
+        available = min(count, available)
+
+    request = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
+    request.file = file
+    request.fd = fd
+
+    if sys.platform == "win32":
+        # The proactor ABI uses a Windows HANDLE, not Python's CRT descriptor.
+        request.native_handle = msvcrt.get_osfhandle(fd)
+    else:
+        request.native_handle = fd
+
+    request.offset = offset
+    request.count = available
+    request.waiter = None
+    return request
+
+
 cdef class Transport:
     """Internal transport interface implemented by aiofastnet transports."""
 
@@ -95,21 +217,6 @@ cdef class Transport:
 
         self._pause_reading()
 
-    cdef inline NoResult _pause_reading(self) except NoResult.EXC:
-        if self._read_paused:
-            return NoResult.OK
-
-        self._read_paused = True
-        try:
-            self._stop_reading()
-        except BaseException:
-            self._read_paused = False
-            raise
-
-        if unlikely(self._is_debug):
-            _logger.debug("%r pauses reading", self)
-        return NoResult.OK
-
     cpdef resume_reading(self):
         self._check_thread("resume_reading")
         if self._closing or not self._read_paused:
@@ -128,6 +235,20 @@ cdef class Transport:
     cpdef abort(self):
         self._check_thread("abort")
         self._force_close(None)
+
+    cdef inline NoResult _pause_reading(self) except NoResult.EXC:
+        if self._read_paused:
+            return NoResult.OK
+
+        self._read_paused = True
+        try:
+            self._stop_reading()
+        except BaseException:
+            self._read_paused = False
+            raise
+
+        if unlikely(self._is_debug):
+            _logger.debug("%r pauses reading", self)
 
     cdef NoResult _start_reading(self) except NoResult.EXC:
         raise NotImplementedError()
@@ -306,14 +427,6 @@ cdef class FDTransport(Transport):
         else:
             os.set_blocking(self._fileno_obj, False)
 
-    cdef inline list _get_fd_repr_info(self):
-        info = [f'fd={self._fileno_obj}', self.__class__.__name__]
-        if self._file is None:
-            info.append('closed')
-        elif self._closing:
-            info.append('closing')
-        return info
-
     def __repr__(self):
         return '[{}]'.format(' '.join(self._get_fd_repr_info()))
 
@@ -322,6 +435,14 @@ cdef class FDTransport(Transport):
             warnings.warn(f"unclosed {self.__class__.__name__} for {self._file}", ResourceWarning, source=self)
             self._file.close()
 
+    cdef inline list _get_fd_repr_info(self):
+        info = [f'fd={self._fileno_obj}', self.__class__.__name__]
+        if self._file is None:
+            info.append('closed')
+        elif self._closing:
+            info.append('closing')
+        return info
+
     cpdef _finalize_close(self, exc):
         try:
             self._call_protocol_connection_lost(exc)
@@ -329,128 +450,6 @@ cdef class FDTransport(Transport):
             self._file.close()
             self._file = None
             self._protocol = None
-
-
-cdef class Protocol:
-    """Optional Cython protocol interface for avoiding Python method dispatch."""
-
-    cpdef is_buffered_protocol(self):
-        return None
-
-    cpdef Py_ssize_t get_local_write_buffer_size(self) except -1:
-        return 0
-
-    cpdef get_buffer(self, Py_ssize_t hint):
-        raise NotImplementedError()
-
-    cdef NoResult get_buffer_c(self, Py_ssize_t hint, char** buf_ptr, Py_ssize_t* buf_len) except NoResult.EXC:
-        buffer = self.get_buffer(hint)
-        aiofn_unpack_simple_buffer(buffer, buf_ptr, buf_len, PyBUF_WRITABLE)
-
-    cpdef buffer_updated(self, Py_ssize_t bytes_read):
-        raise NotImplementedError()
-
-    cpdef data_received(self, data):
-        raise NotImplementedError()
-
-
-cpdef aiofn_is_buffered_protocol(protocol):
-    try:
-        ret = getattr(protocol, 'is_buffered_protocol')()
-        if ret is not None:
-            return ret
-    except AttributeError:
-        pass
-
-    return isinstance(protocol, asyncio.BufferedProtocol)
-
-
-@cython.no_gc
-cdef class WriteRequest:
-    """Own an immutable write buffer and its current unsent memory range."""
-
-
-cdef class SendFileRequest:
-    """Mutable progress state for a file transfer queued with writes."""
-
-    def __len__(self):
-        return self.count
-
-
-cdef SendFileRequest make_sendfile_request(file, offset, count):
-    cdef:
-        int fd
-        object file_stat
-        object available
-        SendFileRequest request
-
-    if "b" not in getattr(file, "mode", "b"):
-        raise ValueError("file should be opened in binary mode")
-
-    if not isinstance(offset, int):
-        raise TypeError(f"offset must be a non-negative integer (got {offset!r})")
-    if offset < 0:
-        raise ValueError(f"offset must be a non-negative integer (got {offset!r})")
-
-    if count is not None:
-        if not isinstance(count, int):
-            raise TypeError(f"count must be a positive integer (got {count!r})")
-        if count <= 0:
-            raise ValueError(f"count must be a positive integer (got {count!r})")
-
-    try:
-        fd = file.fileno()
-    except (AttributeError, io.UnsupportedOperation) as exc:
-        raise asyncio.SendfileNotAvailableError("not a regular file") from exc
-
-    try:
-        file_stat = os.fstat(fd)
-    except OSError as exc:
-        raise asyncio.SendfileNotAvailableError("not a regular file") from exc
-
-    if not stat.S_ISREG(file_stat.st_mode):
-        raise asyncio.SendfileNotAvailableError("not a regular file")
-
-    available = max(0, file_stat.st_size - offset)
-    if count is not None:
-        available = min(count, available)
-
-    request = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
-    request.file = file
-    request.fd = fd
-
-    if sys.platform == "win32":
-        # The proactor ABI uses a Windows HANDLE, not Python's CRT descriptor.
-        request.native_handle = msvcrt.get_osfhandle(fd)
-    else:
-        request.native_handle = fd
-
-    request.offset = offset
-    request.count = available
-    request.waiter = None
-    return request
-
-
-cdef WriteRequest make_write_request(object data):
-    cdef WriteRequest req = <WriteRequest>WriteRequest.__new__(WriteRequest)
-    req.data = aiofn_maybe_copy_buffer(data)
-    aiofn_unpack_simple_buffer(req.data, &req.ptr, &req.size, 0)
-    return req
-
-
-cdef WriteRequest make_write_request_from_ptr(char* ptr, Py_ssize_t size):
-    cdef WriteRequest req = <WriteRequest>WriteRequest.__new__(WriteRequest)
-    req.data = PyBytes_FromStringAndSize(ptr, size)
-    req.ptr = PyBytes_AS_STRING(req.data)
-    req.size = size
-    return req
-
-
-cdef WriteRequest make_write_request_tail(object data, char* ptr, Py_ssize_t size):
-    cdef WriteRequest req = <WriteRequest>WriteRequest.__new__(WriteRequest)
-    req.data = aiofn_maybe_copy_buffer_tail(data, ptr, size)
-    aiofn_unpack_simple_buffer(req.data, &req.ptr, &req.size, 0)
-    return req
 
 
 cdef class WriteWatermarks:
@@ -541,13 +540,6 @@ cdef class WritableTransport(FDTransport):
         self._check_thread("get_write_buffer_size")
         return self._get_write_buffer_size_nocheck()
 
-    cdef inline Py_ssize_t _get_write_buffer_size_nocheck(self) except -1:
-        cdef Py_ssize_t total = self._write_backlog_size
-        if self._protocol_aiofn:
-            total += (<Protocol>self._protocol).get_local_write_buffer_size()
-
-        return total
-
     cpdef tuple get_write_buffer_limits(self):
         self._check_thread("get_write_buffer_limits")
         return self._watermarks.get_write_buffer_limits()
@@ -561,6 +553,13 @@ cdef class WritableTransport(FDTransport):
             high,
             low,
         )
+
+    cdef inline Py_ssize_t _get_write_buffer_size_nocheck(self) except -1:
+        cdef Py_ssize_t total = self._write_backlog_size
+        if self._protocol_aiofn:
+            total += (<Protocol>self._protocol).get_local_write_buffer_size()
+
+        return total
 
     cdef inline NoResult _maybe_pause_protocol(self) except NoResult.EXC:
         self._watermarks.maybe_pause_protocol(self, self._protocol, self._get_write_buffer_size_nocheck())
@@ -583,7 +582,10 @@ cdef class WritableTransport(FDTransport):
         self._write_backlog.clear()
         self._write_backlog_size = 0
 
-    cdef NoResult _ensure_progress(self) except NoResult.EXC:
+    cdef NoResult _start_backlog_writing(self) except NoResult.EXC:
+        raise NotImplementedError()
+
+    cdef NoResult _stop_backlog_writing(self) except NoResult.EXC:
         raise NotImplementedError()
 
 
@@ -656,7 +658,7 @@ cdef class StreamTransport(WritableTransport):
                     return
 
             self.__append_request(request)
-            self._ensure_progress()
+            self._start_backlog_writing()
             self._maybe_pause_protocol()
         except:
             self._handle_error('Fatal write error on transport')
@@ -673,7 +675,7 @@ cdef class StreamTransport(WritableTransport):
                     return
 
             self.__append_lines_tail(list_of_data, total_bytes_sent)
-            self._ensure_progress()
+            self._start_backlog_writing()
             self._maybe_pause_protocol()
         except:
             self._handle_error('Fatal write error on transport')
@@ -696,7 +698,7 @@ cdef class StreamTransport(WritableTransport):
                 request = make_write_request_from_ptr(ptr, size)
 
             self.__append_request(request)
-            self._ensure_progress()
+            self._start_backlog_writing()
             self._maybe_pause_protocol()
         except:
             self._handle_error('Fatal write error on transport')
@@ -733,7 +735,7 @@ cdef class StreamTransport(WritableTransport):
 
             self._write_backlog.append(request)
             self._write_backlog_size += request.count
-            self._ensure_progress()
+            self._start_backlog_writing()
             self._maybe_pause_protocol()
 
             # I/O drivers never complete an operation from its initiating call,
@@ -891,8 +893,22 @@ cdef class DatagramTransport(WritableTransport):
     ):
         WritableTransport.__init__(self, loop, file)
 
-        self._address = address or None
+        cdef:
+            char raw_addr[256]
+            unsigned int raw_addr_len = 0
+            int family = file.family
+
+        # Try to resolve address, aiofn_pyaddr_to_sockaddr fail if DNS lookup
+        # is required. Address that we get, must already have been resolved
+        if address is not None:
+            aiofn_pyaddr_to_sockaddr(family, address, raw_addr, &raw_addr_len)
+            self._address = address
+        else:
+            self._address = None
         self._datagram_header_size = header_size
+
+        self._family = family
+        self._has_connection = self._extra['peername'] is not None
 
     cpdef sendto_nocheck(self, data, addr):
         if self._address is not None:
@@ -917,13 +933,46 @@ cdef class DatagramTransport(WritableTransport):
             # Ensure that what we buffer is immutable.
             self._write_backlog.append((aiofn_maybe_copy_buffer(data), addr))
             self._write_backlog_size += len(data) + self._datagram_header_size
-            self._ensure_progress()
+            self._start_backlog_writing()
             self._maybe_pause_protocol()
         except:
             self._handle_error('Fatal write error on datagram transport')
 
     cdef object _validate_address(self, object addr):
-        raise NotImplementedError()
+        cdef:
+            char raw_addr[256]
+            unsigned int raw_addr_len = 0
+
+        if not self._has_connection:
+            # Datagram endpoint creation resolves INET addresses; resolving here could block the event-loop thread.
+            aiofn_pyaddr_to_sockaddr(self._family, addr, raw_addr, &raw_addr_len)
+
+        return addr
 
     cdef bint _try_sendto(self, object data, object addr) except -1:
-        raise NotImplementedError()
+        cdef:
+            char *buf_ptr
+            Py_ssize_t buf_len
+            Py_ssize_t bytes_sent
+            char raw_addr[256]
+            unsigned int raw_addr_len = 0
+            void *raw_addr_ptr = NULL
+
+        try:
+            aiofn_unpack_simple_buffer(data, &buf_ptr, &buf_len, 0)
+            if not self._has_connection:
+                aiofn_pyaddr_to_sockaddr(self._family, addr, raw_addr, &raw_addr_len)
+                raw_addr_ptr = raw_addr
+
+            bytes_sent = aiofn_sendto(self._fileno, buf_ptr, buf_len, raw_addr_ptr, raw_addr_len)
+            if unlikely(self._is_debug):
+                _logger.debug("%r: aiofn_sendto(...,len=%d)=%d", self, buf_len, bytes_sent)
+            if bytes_sent == -1:
+                return False
+
+            return True
+        except (BlockingIOError, InterruptedError):
+            return False
+        except OSError as exc:
+            self._call_protocol_error_received(exc)
+            return True

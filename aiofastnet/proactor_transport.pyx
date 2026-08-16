@@ -204,21 +204,20 @@ cdef class ProactorSocketTransport(StreamTransport):
     cdef NoResult _release_backend_resources(self) except NoResult.EXC:
         assert self._read_paused
         assert self._write_submitted_size == 0
+
         try:
             self._proactor_socket.context.unwrap_socket(self._proactor_socket)
         finally:
             self._proactor_socket.owner = None
             self._proactor_socket = None
             self._close_exc = None
-        return NoResult.OK
 
-    cdef NoResult _ensure_progress(self) except NoResult.EXC:
+    cdef NoResult _start_backlog_writing(self) except NoResult.EXC:
         if self._write_submitted_size == 0:
             if isinstance(self._write_backlog[0], SendFileRequest):
                 self._submit_sendfile()
             else:
                 self._submit_write()
-        return NoResult.OK
 
     cdef bint _try_sendfile(self, SendFileRequest request) except -1:
         return False
@@ -272,7 +271,6 @@ cdef class ProactorSocketTransport(StreamTransport):
         except BaseException:
             self._write_submitted_size = 0
             raise
-        return NoResult.OK
 
     cdef NoResult _submit_sendfile(self) except NoResult.EXC:
         cdef SendFileRequest request = <SendFileRequest>self._write_backlog[0]
@@ -344,7 +342,7 @@ cdef class ProactorSocketTransport(StreamTransport):
         self._write_submitted_size = 0
 
         if self._write_backlog_size > 0:
-            self._ensure_progress()
+            self._start_backlog_writing()
 
         self._maybe_resume_protocol()
         if self._write_backlog_size == 0:
@@ -353,12 +351,6 @@ cdef class ProactorSocketTransport(StreamTransport):
                     self._schedule_finalize_close(self._close_exc)
             elif self._write_eof:
                 self._write_eof_now()
-        return NoResult.OK
-
-    cdef NoResult _clear_write_backlog(self, object exc) except NoResult.EXC:
-        assert self._write_submitted_size == 0
-        WritableTransport._clear_write_backlog(self, exc)
-        return NoResult.OK
 
 
 cdef class ProactorDatagramTransport(DatagramTransport):
@@ -377,8 +369,6 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         object _close_exc
 
     def __init__(self, ProactorContext context, loop, sock, protocol, address, waiter=None):
-        self._family = sock.family
-
         DatagramTransport.__init__(self, loop, sock, address, 8)
         self._set_protocol(protocol)
 
@@ -386,7 +376,6 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         # The scheduled initializer starts receiving and then delivers connection_made().
         self._read_paused = True
 
-        self._has_connection = self._extra['peername'] is not None
         self._send_pending = False
         self._send_op.callback = _sendto_callback_trampoline
         self._send_op.callback_data = <void *>self
@@ -403,11 +392,6 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         self._loop.call_soon((<object>self)._initialize)
         if waiter is not None:
             self._loop.call_soon(aiofn_set_result_unless_cancelled, waiter, None)
-
-    def __repr__(self):
-        info = self._get_fd_repr_info()
-        info.append(f'wbuf_size={self._write_backlog_size}')
-        return '[{}]'.format(' '.join(info))
 
     def __dealloc__(self):
         Py_XDECREF(self._read_bytes)
@@ -526,49 +510,9 @@ cdef class ProactorDatagramTransport(DatagramTransport):
                 self._protocol = None
                 self._close_exc = None
 
-    cdef object _validate_address(self, object addr):
-        cdef:
-            char raw_address[256]
-            unsigned int raw_address_len = 0
-
-        if not self._has_connection:
-            # Endpoint creation resolves INET addresses; resolving here would
-            # block the event-loop thread.
-            aiofn_pyaddr_to_sockaddr(self._family, addr, raw_address, &raw_address_len)
-        return addr
-
-    cdef bint _try_sendto(self, object data, object addr) except -1:
-        cdef:
-            char *buffer
-            Py_ssize_t buffer_len
-            Py_ssize_t bytes_sent
-            char raw_address[256]
-            unsigned int raw_address_len = 0
-            void *raw_address_ptr = NULL
-
-        try:
-            aiofn_unpack_simple_buffer(data, &buffer, &buffer_len, 0)
-            if not self._has_connection:
-                aiofn_pyaddr_to_sockaddr(self._family, addr, raw_address, &raw_address_len)
-                raw_address_ptr = raw_address
-
-            bytes_sent = aiofn_sendto(self._fileno, buffer, buffer_len, raw_address_ptr, raw_address_len)
-            if unlikely(self._is_debug):
-                _logger.debug("%r: aiofn_sendto(...,len=%d)=%d", self, buffer_len, bytes_sent)
-            if bytes_sent == -1:
-                return False
-
-            return True
-        except (BlockingIOError, InterruptedError):
-            return False
-        except OSError as exc:
-            self._call_protocol_error_received(exc)
-            return True
-
-    cdef NoResult _ensure_progress(self) except NoResult.EXC:
+    cdef NoResult _start_backlog_writing(self) except NoResult.EXC:
         if not self._send_pending:
             self._submit_sendto()
-        return NoResult.OK
 
     cdef NoResult _submit_sendto(self) except NoResult.EXC:
         cdef:
@@ -652,7 +596,7 @@ cdef class ProactorDatagramTransport(DatagramTransport):
             return NoResult.OK
 
         if self._write_backlog_size > 0:
-            self._ensure_progress()
+            self._start_backlog_writing()
 
         self._maybe_resume_protocol()
         if self._write_backlog_size == 0 and self._closing and not self._finalizing_close:

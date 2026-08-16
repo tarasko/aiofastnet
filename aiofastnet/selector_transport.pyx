@@ -62,7 +62,7 @@ cdef class SelectorStreamTransport(StreamTransport):
 
         self._closing = True
         self._pause_reading()
-        self._stop_write_ready()
+        self._stop_backlog_writing()
         self._clear_write_backlog(exc)
         self._schedule_finalize_close(exc)
 
@@ -106,7 +106,7 @@ cdef class SelectorStreamTransport(StreamTransport):
             self._maybe_resume_protocol()
 
             if self._write_backlog_size == 0:
-                self._stop_write_ready()
+                self._stop_backlog_writing()
                 if self._closing:
                     if not self._finalizing_close:
                         self._schedule_finalize_close(None)
@@ -128,10 +128,10 @@ cdef class SelectorStreamTransport(StreamTransport):
 
         return all_sent
 
-    cdef NoResult _ensure_progress(self) except NoResult.EXC:
+    cdef NoResult _start_backlog_writing(self) except NoResult.EXC:
         if unlikely(self._is_debug):
             _logger.debug(
-                "%r: _ensure_progress called, conn_lost=%s, already_registered=%s",
+                "%r: _start_backlog_writing called, conn_lost=%s, already_registered=%s",
                 self,
                 self._finalizing_close,
                 self._write_ready_registered,
@@ -143,7 +143,7 @@ cdef class SelectorStreamTransport(StreamTransport):
         self._write_ready_registered = True
         self._loop.add_writer(self._fileno_obj, self._write_ready)
 
-    cdef NoResult _stop_write_ready(self) except NoResult.EXC:
+    cdef NoResult _stop_backlog_writing(self) except NoResult.EXC:
         if unlikely(self._is_debug):
             _logger.debug("%r: stop write-ready notifications", self)
 
@@ -312,25 +312,13 @@ cdef class SelectorDatagramTransport(DatagramTransport):
     """Provide message-oriented send and receive behavior for a datagram socket."""
 
     cdef:
-        int _family
-        bint _has_connection
         bint _write_ready_registered
 
     def __init__(self, loop, sock, protocol, address, waiter):
-        cdef:
-            char raw_addr[256]
-            unsigned int raw_addr_len = 0
-            int family = sock.family
-
-        if address is not None:
-            aiofn_pyaddr_to_sockaddr(family, address, raw_addr, &raw_addr_len)
-
         DatagramTransport.__init__(self, loop, sock, address, 8)
-        self._family = family
-        self._write_ready_registered = False
-
         self._set_protocol(protocol)
-        self._has_connection = self._extra['peername'] is not None
+
+        self._write_ready_registered = False
 
         self._loop.call_soon((<object>self)._call_protocol_connection_made)
         # only start reading when connection_made() has been called
@@ -338,11 +326,6 @@ cdef class SelectorDatagramTransport(DatagramTransport):
                              self._fileno_obj, self._read_ready)
         # only wake up the waiter when connection_made() has been called
         self._loop.call_soon(_set_result_unless_cancelled_callback, waiter, None)
-
-    def __repr__(self):
-        info = self._get_fd_repr_info()
-        info.append(f'wbuf_size={self._write_backlog_size}')
-        return '[{}]'.format(' '.join(info))
 
     cdef NoResult _stop_reading(self) except NoResult.EXC:
         self._loop.remove_reader(self._fileno_obj)
@@ -359,7 +342,7 @@ cdef class SelectorDatagramTransport(DatagramTransport):
 
         self._closing = True
         self._pause_reading()
-        self._stop_write_ready()
+        self._stop_backlog_writing()
         self._clear_write_backlog(exc)
         self._schedule_finalize_close(exc)
 
@@ -414,48 +397,10 @@ cdef class SelectorDatagramTransport(DatagramTransport):
     cpdef write_eof(self):
         raise NotImplementedError()
 
-    cdef object _validate_address(self, object addr):
-        cdef:
-            char raw_addr[256]
-            unsigned int raw_addr_len = 0
-
-        if not self._has_connection:
-            # Datagram endpoint creation resolves INET addresses; resolving here could block the event-loop thread.
-            aiofn_pyaddr_to_sockaddr(self._family, addr, raw_addr, &raw_addr_len)
-        return addr
-
-    cdef bint _try_sendto(self, object data, object addr) except -1:
-        cdef:
-            char *buf_ptr
-            Py_ssize_t buf_len
-            Py_ssize_t bytes_sent
-            char raw_addr[256]
-            unsigned int raw_addr_len = 0
-            void *raw_addr_ptr = NULL
-
-        try:
-            aiofn_unpack_simple_buffer(data, &buf_ptr, &buf_len, 0)
-            if not self._has_connection:
-                aiofn_pyaddr_to_sockaddr(self._family, addr, raw_addr, &raw_addr_len)
-                raw_addr_ptr = raw_addr
-
-            bytes_sent = aiofn_sendto(self._fileno, buf_ptr, buf_len, raw_addr_ptr, raw_addr_len)
-            if unlikely(self._is_debug):
-                _logger.debug("%r: aiofn_sendto(...,len=%d)=%d", self, buf_len, bytes_sent)
-            if bytes_sent == -1:
-                return False
-
-            return True
-        except (BlockingIOError, InterruptedError):
-            return False
-        except OSError as exc:
-            self._call_protocol_error_received(exc)
-            return True
-
-    cdef NoResult _ensure_progress(self) except NoResult.EXC:
+    cdef NoResult _start_backlog_writing(self) except NoResult.EXC:
         if unlikely(self._is_debug):
             _logger.debug(
-                "%r: _ensure_progress called, conn_lost=%s, already_registered=%s",
+                "%r: _start_backlog_writing called, conn_lost=%s, already_registered=%s",
                 self,
                 self._finalizing_close,
                 self._write_ready_registered,
@@ -467,9 +412,9 @@ cdef class SelectorDatagramTransport(DatagramTransport):
         self._write_ready_registered = True
         self._loop.add_writer(self._fileno_obj, self._write_ready)
 
-    cdef NoResult _stop_write_ready(self) except NoResult.EXC:
+    cdef NoResult _stop_backlog_writing(self) except NoResult.EXC:
         if unlikely(self._is_debug):
-            _logger.debug("%r: stop write-ready notifications", self)
+            _logger.debug("%r: _stop_backlog_writing called", self)
 
         if not self._write_ready_registered:
             return NoResult.OK
@@ -493,14 +438,14 @@ cdef class SelectorDatagramTransport(DatagramTransport):
             self._maybe_resume_protocol()
 
             if self._write_backlog_size == 0:
-                self._stop_write_ready()
+                self._stop_backlog_writing()
 
                 # A reentrant close from resume_writing() may already have
                 # scheduled finalization.
                 if self._closing and not self._finalizing_close:
                     self._schedule_finalize_close(None)
         except:
-            self._stop_write_ready()
+            self._stop_backlog_writing()
             self._handle_error('Fatal write error on datagram transport')
 
 

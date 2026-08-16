@@ -169,7 +169,8 @@ cdef class WritableTransport(FDTransport):
     cdef NoResult _clear_write_backlog(self, object exc) except NoResult.EXC
 
     # Implement in concrete transport.
-    cdef NoResult _ensure_progress(self) except NoResult.EXC
+    cdef NoResult _start_backlog_writing(self) except NoResult.EXC
+    cdef NoResult _stop_backlog_writing(self) except NoResult.EXC
 
 
 cdef class StreamTransport(WritableTransport):
@@ -203,6 +204,8 @@ cdef class DatagramTransport(WritableTransport):
     cdef:
         object _address
         Py_ssize_t _datagram_header_size
+        int _family
+        bint _has_connection
 
     cpdef sendto_nocheck(self, data, addr)
 
