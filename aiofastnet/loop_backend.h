@@ -104,6 +104,12 @@ typedef struct {
     /* Static, UTF-8 backend name used in diagnostics. */
     const char *name;
 
+    /* Optional readiness-based socket interface; NULL means unsupported. */
+    const aiofn_reactor_backend_t *reactor;
+
+    /* Optional completion-based socket interface; NULL means unsupported. */
+    const aiofn_proactor_backend_t *proactor;
+
     /*
      * Block until stop() is requested or an unrecoverable backend error
      * occurs. It must not return merely because no user work is registered.
@@ -180,12 +186,6 @@ typedef struct {
         void *state,
         aiofn_loop_signal_watch_t *watch
     );
-
-    /* Optional readiness-based socket interface; NULL means unsupported. */
-    const aiofn_reactor_backend_t *reactor;
-
-    /* Optional completion-based socket interface; NULL means unsupported. */
-    const aiofn_proactor_backend_t *proactor;
 
     /*
      * Optional diagnostic for the most recent failed operation. The returned
