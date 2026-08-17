@@ -33,6 +33,8 @@ from .api_sock import (
     sock_sendto
 )
 from .loop_backend cimport (
+    AIOFN_LOOP_PROACTOR_HANDLE_PIPE,
+    AIOFN_LOOP_PROACTOR_HANDLE_SOCKET,
     AIOFN_LOOP_BACKEND_CAPSULE_NAME,
     AIOFN_LOOP_BACKEND_MIN_SIZE,
     AIOFN_REACTOR_BACKEND_MIN_SIZE,
@@ -43,6 +45,7 @@ from .loop_backend cimport (
     AIOFN_LOOP_NO_MEMORY,
     AIOFN_LOOP_OK,
     aiofn_loop_backend_t,
+    aiofn_loop_native_handle_t,
     aiofn_proactor_backend_t,
     aiofn_reactor_backend_t,
     aiofn_loop_action_t,
@@ -493,43 +496,58 @@ cdef class ProactorContext:
         (<LoopBase>self.loop)._backend_failed(exc)
         return NoResult.OK
 
-    cdef inline ProactorSocket wrap_socket(self, object sock):
+    cdef inline ProactorHandle wrap_socket(self, object sock):
+        return self._wrap_handle(
+            <aiofn_loop_native_handle_t>_fileobj_to_fileno_obj(sock),
+            AIOFN_LOOP_PROACTOR_HANDLE_SOCKET,
+            <int>sock.type,
+        )
+
+    cdef inline ProactorHandle wrap_pipe(self, object pipe):
+        cdef aiofn_loop_native_handle_t native_handle = _fileobj_to_fileno_obj(pipe)
+        return self._wrap_handle(native_handle, AIOFN_LOOP_PROACTOR_HANDLE_PIPE, 0)
+
+    cdef inline ProactorHandle _wrap_handle(
+        self,
+        aiofn_loop_native_handle_t native_handle,
+        int kind,
+        int socktype,
+    ):
         cdef:
-            int fd = _fileobj_to_fileno_obj(sock)
-            ProactorSocket result = self.sockets.get(fd)
+            tuple key = (kind, native_handle)
+            ProactorHandle result = self.handles.get(key)
 
         if result is None:
-            result = <ProactorSocket>ProactorSocket.__new__(ProactorSocket)
+            result = <ProactorHandle>ProactorHandle.__new__(ProactorHandle)
             result.context = self
             result.owner = None
-            result.backend_sock.fd = fd
-            result.backend_sock.socktype = <int>sock.type
-            result.backend_sock.backend_token = NULL
+            result.backend_handle.native_handle = native_handle
+            result.backend_handle.kind = kind
+            result.backend_handle.socktype = socktype
+            result.backend_handle.backend_token = NULL
 
-            self.check_status(self.proactor.wrap_socket(self.backend.state, &result.backend_sock))
-            self.sockets[fd] = result
+            self.check_status(self.proactor.wrap_handle(self.backend.state, &result.backend_handle))
+            self.handles[key] = result
 
         return result
 
-    cdef inline NoResult unwrap_socket(self, ProactorSocket sock) except NoResult.EXC:
-        if sock.backend_sock.backend_token != NULL:
-            self.check_status(self.proactor.unwrap_socket(self.backend.state, &sock.backend_sock))
-            self.sockets.pop(sock.backend_sock.fd, None)
-            sock.owner = None
-        return NoResult.OK
+    cdef inline NoResult unwrap_handle(self, ProactorHandle handle) except NoResult.EXC:
+        if handle.backend_handle.backend_token != NULL:
+            self.check_status(self.proactor.unwrap_handle(self.backend.state, &handle.backend_handle))
+            self.handles.pop((handle.backend_handle.kind, handle.backend_handle.native_handle), None)
+            handle.owner = None
 
     cdef NoResult close(self) except NoResult.EXC:
-        cdef ProactorSocket sock
+        cdef ProactorHandle handle
 
-        for socket_obj in tuple(self.sockets.values()):
-            sock = <ProactorSocket>socket_obj
-            self.check_status(self.proactor.unwrap_socket(self.backend.state, &sock.backend_sock))
-            sock.owner = None
-        self.sockets = None
-        return NoResult.OK
+        for handle_obj in tuple(self.handles.values()):
+            handle = <ProactorHandle>handle_obj
+            self.check_status(self.proactor.unwrap_handle(self.backend.state, &handle.backend_handle))
+            handle.owner = None
+        self.handles = None
 
 
-cdef class ProactorSocket:
+cdef class ProactorHandle:
     pass
 
 
@@ -661,7 +679,7 @@ cdef class LoopBase:
         if proactor != NULL:
             if proactor.struct_size < AIOFN_PROACTOR_BACKEND_MIN_SIZE:
                 raise ValueError("loop backend proactor structure is too small")
-            if (proactor.wrap_socket == NULL or proactor.unwrap_socket == NULL or
+            if (proactor.wrap_handle == NULL or proactor.unwrap_handle == NULL or
                     proactor.connect == NULL or proactor.read_start == NULL or proactor.read_stop == NULL or
                     proactor.recvfrom_start == NULL or proactor.recvfrom_stop == NULL or
                     proactor.write == NULL or proactor.sendto == NULL or proactor.cancel == NULL):
@@ -671,7 +689,7 @@ cdef class LoopBase:
             proactor_context.loop = self
             proactor_context.backend = backend_ptr
             proactor_context.proactor = proactor
-            proactor_context.sockets = {}
+            proactor_context.handles = {}
             self._proactor_context = proactor_context
         else:
             self._proactor_context = None

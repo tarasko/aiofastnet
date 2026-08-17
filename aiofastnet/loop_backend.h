@@ -27,11 +27,6 @@ enum {
     AIOFN_LOOP_NOT_SUPPORTED = 3
 };
 
-typedef uint32_t aiofn_loop_fd_events;
-enum {
-    AIOFN_LOOP_FD_READ = 1u << 0,
-    AIOFN_LOOP_FD_WRITE = 1u << 1
-};
 
 typedef struct aiofn_loop_action aiofn_loop_action_t;
 
@@ -49,25 +44,6 @@ typedef struct aiofn_loop_action {
     void *backend_token;
 } aiofn_loop_action_t;
 
-typedef void (*aiofn_loop_fd_ready_fn)(
-    void *callback_data,
-    uint32_t events
-);
-
-/*
- * Frontend-owned storage shared by the independent read and write watches for
- * one fd. The frontend initializes fd, callback, and callback_data. The backend
- * stores non-NULL native tokens for active directions and clears each token
- * when that direction is removed. A backend with one combined registration
- * may store the same native pointer in both token fields.
- */
-typedef struct {
-    int fd;
-    aiofn_loop_fd_ready_fn callback;
-    void *callback_data;
-    void *backend_read_token;
-    void *backend_write_token;
-} aiofn_loop_fd_watch_t;
 
 typedef void (*aiofn_loop_signal_fn)(
     void *callback_data,
@@ -85,236 +61,11 @@ typedef struct {
     void *backend_token;
 } aiofn_loop_signal_watch_t;
 
-/*
- * Optional readiness-based socket operations. The frontend owns each watch;
- * the reactor stores its native registration tokens in that same object.
- * struct_size permits appending operations without changing the meaning of
- * existing fields. The interface object must remain valid until backend close.
- */
-typedef struct {
-    size_t struct_size;
+struct aiofn_reactor_backend;
+typedef struct aiofn_reactor_backend aiofn_reactor_backend_t;
 
-    /* Add persistent, level-triggered read readiness; do not call inline. */
-    aiofn_loop_status (*add_reader)(void *state, aiofn_loop_fd_watch_t *watch);
-
-    /* Remove read readiness and clear watch->backend_read_token. */
-    aiofn_loop_status (*remove_reader)(void *state, aiofn_loop_fd_watch_t *watch);
-
-    /* Add persistent, level-triggered write readiness; do not call inline. */
-    aiofn_loop_status (*add_writer)(void *state, aiofn_loop_fd_watch_t *watch);
-
-    /* Remove write readiness and clear watch->backend_write_token. */
-    aiofn_loop_status (*remove_writer)(void *state, aiofn_loop_fd_watch_t *watch);
-} aiofn_reactor_backend_t;
-
-/*
- * Frontend-owned native socket wrapper used by proactor operations. For an
- * accept operation, the frontend supplies an empty wrapper with socktype set;
- * the backend fills fd/backend_token on successful completion and owns any
- * native resources until the wrapper is unwrapped.
- */
-typedef struct {
-    int fd;
-    int socktype;
-    void *backend_token;
-} aiofn_loop_proactor_socket_t;
-
-/*
- * Platform-native file handle used by proactor file operations. It contains a
- * POSIX file descriptor on Unix and a Windows HANDLE cast through intptr_t.
- */
-typedef intptr_t aiofn_loop_file_handle_t;
-
-
-typedef struct aiofn_loop_proactor_op aiofn_loop_proactor_op_t;
-
-/*
- * Platform-native scatter-gather buffer. Keeping this representation
- * identical to iovec/WSABUF lets proactor backends pass frontend-owned arrays
- * directly to native APIs without allocating and copying descriptors.
- */
-#if defined(_WIN32)
-typedef struct
-{
-    ULONG iov_len;
-    CHAR* iov_base;
-} aiofn_loop_buffer_t;
-#else
-typedef struct iovec aiofn_loop_buffer_t;
-#endif
-
-typedef void (*aiofn_loop_proactor_callback_fn)(aiofn_loop_proactor_op_t *op);
-
-typedef void (*aiofn_loop_read_alloc_fn)(
-    void *callback_data,
-    size_t suggested_size,
-    void **buffer,
-    size_t *buffer_len
-);
-
-typedef void (*aiofn_loop_read_callback_fn)(
-    void *callback_data,
-    aiofn_loop_status status,
-    void *buffer,
-    size_t bytes_read
-);
-
-typedef void (*aiofn_loop_recvfrom_callback_fn)(
-    void *callback_data,
-    aiofn_loop_status status,
-    void *buffer,
-    size_t bytes_read,
-    const struct sockaddr *address
-);
-
-typedef void (*aiofn_loop_accept_callback_fn)(
-    void *callback_data,
-    aiofn_loop_status status,
-    aiofn_loop_proactor_socket_t *accepted_socket,
-    const void *address,
-    size_t address_len
-);
-
-/*
- * Frontend-owned one-shot operation. The backend fills status and transferred
- * before invoking callback, clears backend_token before the callback, and must
- * not access this object after the callback returns.
- */
-typedef struct aiofn_loop_proactor_op {
-    aiofn_loop_proactor_callback_fn callback;
-    void *callback_data;
-    void *backend_token;
-    aiofn_loop_status status;
-    size_t transferred;
-} aiofn_loop_proactor_op_t;
-
-/*
- * Proactor interface. Each operation is called from the loop thread, just
- * like the common backend interface. A socket may have at most one
- * active stream read, one active datagram read, and one pending output
- * operation (write, sendto, or sendfile); an input and output operation may
- * overlap. The shared allocation callback supplies data buffers; datagram
- * callbacks receive the source address from backend-owned storage. Initiating
- * functions must not invoke completion, read, or accept callbacks inline;
- * callbacks run only after control returns to the backend event loop.
- */
-typedef struct {
-    size_t struct_size;
-
-    /* Wrap an existing nonblocking socket into a native proactor handle.
-       All async operations require already wrapped proactor handle and not a native socket.
-    */
-    aiofn_loop_status (*wrap_socket)(void *state, aiofn_loop_proactor_socket_t *socket);
-
-    /*
-     * Stop using the native socket handle and release backend resources.
-     * This does not close the frontend-owned socket or its fd.
-     */
-    aiofn_loop_status (*unwrap_socket)(void *state, aiofn_loop_proactor_socket_t *socket);
-
-    /* Start an asynchronous connect operation. */
-    aiofn_loop_status (*connect)(
-        void *state,
-        aiofn_loop_proactor_socket_t *socket,
-        aiofn_loop_proactor_op_t *op,
-        const void *address,
-        size_t address_len
-    );
-
-    /* Start persistent asynchronous stream reads. A successful callback with
-       zero bytes signals stream EOF. */
-    aiofn_loop_status (*read_start)(
-        void *state,
-        aiofn_loop_proactor_socket_t *socket,
-        aiofn_loop_read_alloc_fn alloc,
-        aiofn_loop_read_callback_fn callback,
-        void *callback_data
-    );
-
-    /* Stop persistent stream reads. */
-    aiofn_loop_status (*read_stop)(
-        void *state,
-        aiofn_loop_proactor_socket_t *socket
-    );
-
-    /* Start the socket's one pending asynchronous scatter-gather write. The
-       frontend keeps buffers and their referenced memory alive through the
-       completion callback; the backend must not access them afterwards. */
-    aiofn_loop_status (*write)(
-        void *state,
-        aiofn_loop_proactor_socket_t *socket,
-        aiofn_loop_proactor_op_t *op,
-        const aiofn_loop_buffer_t *buffers,
-        size_t buffer_count
-    );
-
-    /* Cancel one pending connect, write, sendto, or sendfile operation. */
-    aiofn_loop_status (*cancel)(void *state, aiofn_loop_proactor_op_t *op);
-
-    /* Start persistent asynchronous datagram receives. alloc supplies the
-       data buffer; the backend supplies source-address storage to callback. */
-    aiofn_loop_status (*recvfrom_start)(
-        void *state,
-        aiofn_loop_proactor_socket_t *socket,
-        aiofn_loop_read_alloc_fn alloc,
-        aiofn_loop_recvfrom_callback_fn callback,
-        void *callback_data
-    );
-
-    /* Stop persistent asynchronous datagram receives. */
-    aiofn_loop_status (*recvfrom_stop)(
-        void *state,
-        aiofn_loop_proactor_socket_t *socket
-    );
-
-    /* Start one asynchronous datagram send to the supplied native address.
-       The address is valid only for the duration of this call; the backend
-       must copy it if the native operation retains address storage. */
-    aiofn_loop_status (*sendto)(
-        void *state,
-        aiofn_loop_proactor_socket_t *socket,
-        aiofn_loop_proactor_op_t *op,
-        const void *buffer,
-        size_t buffer_len,
-        const void *address,
-        size_t address_len
-    );
-
-    /*
-     * Start persistent asynchronous accepts. On each successful callback the
-     * backend transfers ownership of the accepted native handle to the
-     * frontend. The address pointer is valid only during the callback.
-     */
-    aiofn_loop_status (*accept_start)(
-        void *state,
-        aiofn_loop_proactor_socket_t *listener,
-        aiofn_loop_accept_callback_fn callback,
-        void *callback_data
-    );
-
-    /* Stop persistent asynchronous accepts. */
-    aiofn_loop_status (*accept_stop)(
-        void *state,
-        aiofn_loop_proactor_socket_t *listener
-    );
-
-    /*
-     * Start one asynchronous file transfer on a stream socket. The frontend
-     * keeps file valid until completion. The backend must not close it, change
-     * its file position, or transfer more than count bytes. A successful
-     * completion may be partial; op->transferred reports the number of bytes
-     * sent. The frontend supplies a positive count and an explicit nonnegative
-     * offset.
-     */
-    aiofn_loop_status (*sendfile)(
-        void *state,
-        aiofn_loop_proactor_socket_t *socket,
-        aiofn_loop_proactor_op_t *op,
-        aiofn_loop_file_handle_t file,
-        int64_t offset,
-        size_t count
-    );
-} aiofn_proactor_backend_t;
+struct aiofn_proactor_backend;
+typedef struct aiofn_proactor_backend aiofn_proactor_backend_t;
 
 /*
 * Every backend operation is called from the event-loop thread. No backend
@@ -406,19 +157,6 @@ typedef struct {
      */
     aiofn_loop_status (*action_cancel)(void *state, aiofn_loop_action_t *action);
 
-    /* Optional readiness-based socket interface; NULL means unsupported. */
-    const aiofn_reactor_backend_t *reactor;
-
-    /* Optional completion-based socket interface; NULL means unsupported. */
-    const aiofn_proactor_backend_t *proactor;
-
-    /*
-     * Optional diagnostic for the most recent failed operation. The returned
-     * UTF-8 string remains valid until the next backend operation. It may be
-     * NULL when no detail is available.
-     */
-    const char *(*last_error)(void *state);
-
     /*
      * Add a persistent watch for signum. The frontend owns watch and keeps it
      * alive until signal_unwatch() succeeds. The callback runs during normal
@@ -443,37 +181,31 @@ typedef struct {
         aiofn_loop_signal_watch_t *watch
     );
 
+    /* Optional readiness-based socket interface; NULL means unsupported. */
+    const aiofn_reactor_backend_t *reactor;
+
+    /* Optional completion-based socket interface; NULL means unsupported. */
+    const aiofn_proactor_backend_t *proactor;
+
+    /*
+     * Optional diagnostic for the most recent failed operation. The returned
+     * UTF-8 string remains valid until the next backend operation. It may be
+     * NULL when no detail is available.
+     */
+    const char *(*last_error)(void *state);
 } aiofn_loop_backend_t;
 
-#define AIOFN_LOOP_BACKEND_FIELD_END(field) \
-    (offsetof(aiofn_loop_backend_t, field) + sizeof(((aiofn_loop_backend_t *)0)->field))
+#define AIOFN_LOOP_FIELD_END(type_name, field) \
+    (offsetof(type_name, field) + sizeof(((type_name *)0)->field))
 
-#define AIOFN_LOOP_BACKEND_HAS_FIELD(backend, field) \
-    ((backend)->struct_size >= AIOFN_LOOP_BACKEND_FIELD_END(field))
-
-#define AIOFN_REACTOR_BACKEND_FIELD_END(field) \
-    (offsetof(aiofn_reactor_backend_t, field) + sizeof(((aiofn_reactor_backend_t *)0)->field))
-
-#define AIOFN_REACTOR_BACKEND_HAS_FIELD(reactor, field) \
-    ((reactor)->struct_size >= AIOFN_REACTOR_BACKEND_FIELD_END(field))
-
-#define AIOFN_REACTOR_BACKEND_MIN_SIZE AIOFN_REACTOR_BACKEND_FIELD_END(remove_writer)
-#define AIOFN_REACTOR_BACKEND_CURRENT_SIZE AIOFN_REACTOR_BACKEND_FIELD_END(remove_writer)
-
-#define AIOFN_PROACTOR_BACKEND_FIELD_END(field) \
-    (offsetof(aiofn_proactor_backend_t, field) + sizeof(((aiofn_proactor_backend_t *)0)->field))
-
-#define AIOFN_PROACTOR_BACKEND_HAS_FIELD(proactor, field) \
-    ((proactor)->struct_size >= AIOFN_PROACTOR_BACKEND_FIELD_END(field))
-
-#define AIOFN_PROACTOR_BACKEND_MIN_SIZE AIOFN_PROACTOR_BACKEND_FIELD_END(cancel)
-#define AIOFN_PROACTOR_BACKEND_CURRENT_SIZE AIOFN_PROACTOR_BACKEND_FIELD_END(sendfile)
-
-#define AIOFN_LOOP_BACKEND_MIN_SIZE AIOFN_LOOP_BACKEND_FIELD_END(signal_unwatch)
-#define AIOFN_LOOP_BACKEND_CURRENT_SIZE AIOFN_LOOP_BACKEND_FIELD_END(signal_unwatch)
+#define AIOFN_LOOP_BACKEND_MIN_SIZE AIOFN_LOOP_FIELD_END(aiofn_loop_backend_t, last_error)
+#define AIOFN_LOOP_BACKEND_CURRENT_SIZE AIOFN_LOOP_FIELD_END(aiofn_loop_backend_t, last_error)
 
 #ifdef __cplusplus
 }
 #endif
+
+#include "loop_backend_reactor.h"
+#include "loop_backend_proactor.h"
 
 #endif

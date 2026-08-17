@@ -23,13 +23,28 @@ async def _connect_pipe_asyncio(loop, method_name, protocol_factory, pipe):
     return wrapped_transport, user_protocol
 
 
+def _get_proactor_context(loop):
+    # Only LoopBase exposes this method; other loops continue using their
+    # native Windows pipe implementation or aiofastnet's selector transports.
+    get_proactor_context = getattr(loop, "get_proactor_context", None)
+    if get_proactor_context is not None:
+        return get_proactor_context()
+    return None
+
+
 async def connect_read_pipe(loop, protocol_factory, pipe):
-    if os.name == "nt":
+    proactor_context = _get_proactor_context(loop)
+    if proactor_context is None and os.name == "nt":
         return await _connect_pipe_asyncio(loop, "connect_read_pipe", protocol_factory, pipe)
 
     protocol = protocol_factory()
     waiter = loop.create_future()
-    transport = SelectorReadPipeTransport(loop, pipe, protocol, waiter)
+    if proactor_context is None:
+        transport = SelectorReadPipeTransport(loop, pipe, protocol, waiter)
+    else:
+        from .proactor_transport import ProactorReadPipeTransport
+
+        transport = ProactorReadPipeTransport(proactor_context, loop, pipe, protocol, waiter)
 
     await _wait_and_close_transport_on_exc(waiter, transport)
 
@@ -39,12 +54,18 @@ async def connect_read_pipe(loop, protocol_factory, pipe):
 
 
 async def connect_write_pipe(loop, protocol_factory, pipe):
-    if os.name == "nt":
+    proactor_context = _get_proactor_context(loop)
+    if proactor_context is None and os.name == "nt":
         return await _connect_pipe_asyncio(loop, "connect_write_pipe", protocol_factory, pipe)
 
     protocol = protocol_factory()
     waiter = loop.create_future()
-    transport = SelectorWritePipeTransport(loop, pipe, protocol, waiter)
+    if proactor_context is None:
+        transport = SelectorWritePipeTransport(loop, pipe, protocol, waiter)
+    else:
+        from .proactor_transport import ProactorWritePipeTransport
+
+        transport = ProactorWritePipeTransport(proactor_context, loop, pipe, protocol, waiter)
 
     await _wait_and_close_transport_on_exc(waiter, transport)
 

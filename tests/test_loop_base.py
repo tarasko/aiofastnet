@@ -9,7 +9,7 @@ import threading
 
 import pytest
 
-from tests.utils import AsyncClient, ConnectionType, TestClient, TestServer, make_test_ssl_contexts
+from tests.utils import AsyncClient, ConnectionType, SocketPair, TestClient, TestServer, make_test_ssl_contexts
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="the libuv test backend is Unix-only")
 
@@ -482,6 +482,23 @@ async def test_proactor_socket_transport_abort_pending_write(libuv_loop):
             client.write(b"x" * 2_000_000)
             client.abort()
             await client.wait_closed()
+
+
+async def test_proactor_pipe_transports(libuv_loop, conn_type_pipe):
+    from aiofastnet.proactor_transport import ProactorReadPipeTransport, ProactorWritePipeTransport
+
+    async with SocketPair(conn_type_pipe) as (reader, writer):
+        assert isinstance(reader.transport, ProactorReadPipeTransport)
+        assert isinstance(writer.transport, ProactorWritePipeTransport)
+
+        payload = b"p" * (2 * 1024 * 1024)
+        writer.write(payload)
+        assert await reader.readn(len(payload)) == payload
+
+        writer.transport.write_eof()
+        await writer.wait_closed()
+        await reader.wait_closed()
+        assert reader.is_eof_received
 
 
 async def test_unix_socket_transport_uses_reactor(libuv_loop):

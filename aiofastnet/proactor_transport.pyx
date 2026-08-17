@@ -1,4 +1,6 @@
 import logging
+import os
+import stat
 
 from libc.stdint cimport int64_t
 
@@ -10,12 +12,12 @@ from .loop_backend cimport (
     aiofn_loop_status,
     sockaddr,
 )
-from .loop_base cimport ProactorContext, ProactorSocket
+from .loop_base cimport ProactorContext, ProactorHandle
 from .transport cimport (
     DatagramTransport,
+    FDTransport,
     SendFileRequest,
     StreamTransport,
-    WritableTransport,
     WriteRequest,
 )
 from .utils cimport (
@@ -45,7 +47,7 @@ cdef class ProactorSocketTransport(StreamTransport):
     """Stream transport driven directly by a LoopBase proactor backend."""
 
     cdef:
-        ProactorSocket _proactor_socket
+        ProactorHandle _proactor_handle
 
         object _read_buffer
         PyObject *_read_bytes
@@ -55,7 +57,7 @@ cdef class ProactorSocketTransport(StreamTransport):
 
         object _close_exc
 
-    def __init__(self, ProactorContext context, loop, sock, protocol, waiter=None, server=None):
+    def __init__(self, ProactorContext context, loop, sock, protocol, waiter=None, server=None, bint is_pipe=False):
         StreamTransport.__init__(self, loop, sock, protocol, server)
 
         self._read_buffer = None
@@ -71,11 +73,14 @@ cdef class ProactorSocketTransport(StreamTransport):
         self._write_op.transferred = 0
 
         self._close_exc = None
-        self._sendfile_compatible = context.proactor.sendfile != NULL
+        self._sendfile_compatible = not is_pipe and context.proactor.sendfile != NULL
 
-        self._proactor_socket = context.wrap_socket(sock)
-        assert self._proactor_socket.owner is None
-        self._proactor_socket.owner = self
+        if is_pipe:
+            self._proactor_handle = context.wrap_pipe(sock)
+        else:
+            self._proactor_handle = context.wrap_socket(sock)
+        assert self._proactor_handle.owner is None
+        self._proactor_handle.owner = self
 
         self._loop.call_soon((<object>self)._initialize)
         if waiter is not None:
@@ -97,18 +102,18 @@ cdef class ProactorSocketTransport(StreamTransport):
         self._call_protocol_connection_made()
 
     cdef NoResult _start_reading(self) except NoResult.EXC:
-        self._proactor_socket.context.check_status(self._proactor_socket.context.proactor.read_start(
-            self._proactor_socket.context.backend.state,
-            &self._proactor_socket.backend_sock,
+        self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.read_start(
+            self._proactor_handle.context.backend.state,
+            &self._proactor_handle.backend_handle,
             _read_alloc_trampoline,
             _read_callback_trampoline,
             <void *>self,
         ))
 
     cdef NoResult _stop_reading(self) except NoResult.EXC:
-        self._proactor_socket.context.check_status(self._proactor_socket.context.proactor.read_stop(
-            self._proactor_socket.context.backend.state,
-            &self._proactor_socket.backend_sock,
+        self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.read_stop(
+            self._proactor_handle.context.backend.state,
+            &self._proactor_handle.backend_handle,
         ))
         self._release_read_buffer()
 
@@ -146,7 +151,7 @@ cdef class ProactorSocketTransport(StreamTransport):
 
         if status != AIOFN_LOOP_OK:
             self._release_read_buffer()
-            self._proactor_socket.context.check_status(status)
+            self._proactor_handle.context.check_status(status)
 
         if bytes_read == 0:
             self._release_read_buffer()
@@ -187,10 +192,10 @@ cdef class ProactorSocketTransport(StreamTransport):
         assert self._write_submitted_size == 0
 
         try:
-            self._proactor_socket.context.unwrap_socket(self._proactor_socket)
+            self._proactor_handle.context.unwrap_handle(self._proactor_handle)
         finally:
-            self._proactor_socket.owner = None
-            self._proactor_socket = None
+            self._proactor_handle.owner = None
+            self._proactor_handle = None
             self._close_exc = None
 
     cdef NoResult _start_backlog_writing(self) except NoResult.EXC:
@@ -241,10 +246,10 @@ cdef class ProactorSocketTransport(StreamTransport):
                         submitted_size,
                     )
 
-            self._proactor_socket.context.check_status(
-                self._proactor_socket.context.proactor.write(
-                    self._proactor_socket.context.backend.state,
-                    &self._proactor_socket.backend_sock,
+            self._proactor_handle.context.check_status(
+                self._proactor_handle.context.proactor.write(
+                    self._proactor_handle.context.backend.state,
+                    &self._proactor_handle.backend_handle,
                     &self._write_op,
                     self._write_buffers,
                     buffer_count,
@@ -267,10 +272,10 @@ cdef class ProactorSocketTransport(StreamTransport):
             if unlikely(self._is_debug):
                 _logger.debug("%r: async_sendfile(offset=%d, count=%d)", self, request.offset, request.count)
 
-            self._proactor_socket.context.check_status(
-                self._proactor_socket.context.proactor.sendfile(
-                    self._proactor_socket.context.backend.state,
-                    &self._proactor_socket.backend_sock,
+            self._proactor_handle.context.check_status(
+                self._proactor_handle.context.proactor.sendfile(
+                    self._proactor_handle.context.backend.state,
+                    &self._proactor_handle.backend_handle,
                     &self._write_op,
                     <aiofn_loop_file_handle_t>request.native_handle,
                     request.offset,
@@ -297,7 +302,7 @@ cdef class ProactorSocketTransport(StreamTransport):
 
         if status != AIOFN_LOOP_OK:
             self._write_submitted_size = 0
-            self._proactor_socket.context.check_status(status)
+            self._proactor_handle.context.check_status(status)
 
         assert bytes_sent <= self._write_submitted_size
 
@@ -333,11 +338,146 @@ cdef class ProactorSocketTransport(StreamTransport):
                 self._write_eof_now()
 
 
+cdef class ProactorWritePipeTransport(ProactorSocketTransport):
+    """Write-side pipe transport driven by a LoopBase proactor backend."""
+
+    def __init__(self, ProactorContext context, loop, pipe, protocol, waiter=None):
+        pipe_stat = os.fstat(pipe.fileno())
+        mode = pipe_stat.st_mode
+        if not (stat.S_ISCHR(mode) or stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode)):
+            raise ValueError("Pipe transport is only for pipes, sockets and character devices")
+
+        ProactorSocketTransport.__init__(self, context, loop, pipe, protocol, waiter, is_pipe=True)
+        self._extra['pipe'] = pipe
+
+    cpdef _initialize(self):
+        if not self._closing:
+            self._call_protocol_connection_made()
+
+
+cdef class ProactorReadPipeTransport(FDTransport):
+    """Read-side pipe transport driven by a LoopBase proactor backend."""
+
+    cdef:
+        ProactorHandle _proactor_handle
+        PyObject *_read_bytes
+
+    def __init__(self, ProactorContext context, loop, pipe, protocol, waiter=None):
+        mode = os.fstat(pipe.fileno()).st_mode
+        if not (stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode) or stat.S_ISCHR(mode)):
+            raise ValueError("Pipe transport is for pipes/sockets only.")
+
+        FDTransport.__init__(self, loop, pipe)
+        self._set_protocol(protocol)
+        self._extra['pipe'] = pipe
+
+        self._read_bytes = NULL
+        self._read_paused = True
+
+        self._proactor_handle = context.wrap_pipe(pipe)
+        assert self._proactor_handle.owner is None
+        self._proactor_handle.owner = self
+
+        self._loop.call_soon((<object>self)._initialize)
+        if waiter is not None:
+            self._loop.call_soon(aiofn_set_result_unless_cancelled, waiter, None)
+
+    def __dealloc__(self):
+        Py_XDECREF(self._read_bytes)
+        self._read_bytes = NULL
+
+    cpdef _initialize(self):
+        if self._closing:
+            return
+
+        try:
+            self.resume_reading()
+        except:
+            self._handle_error('Fatal read error on proactor pipe transport')
+            return
+
+        self._call_protocol_connection_made()
+
+    cpdef close(self):
+        self.abort()
+
+    cdef NoResult _start_reading(self) except NoResult.EXC:
+        self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.read_start(
+            self._proactor_handle.context.backend.state,
+            &self._proactor_handle.backend_handle,
+            _pipe_read_alloc_trampoline,
+            _pipe_read_callback_trampoline,
+            <void *>self,
+        ))
+
+    cdef NoResult _stop_reading(self) except NoResult.EXC:
+        self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.read_stop(
+            self._proactor_handle.context.backend.state,
+            &self._proactor_handle.backend_handle,
+        ))
+        self._release_read_buffer()
+
+    cdef NoResult _allocate_read_buffer(self, void **buffer, size_t *buffer_len) except NoResult.EXC:
+        cdef char *data
+
+        # libuv may request a buffer for an EAGAIN read without delivering a
+        # read callback. Release that unused buffer before supplying another.
+        self._release_read_buffer()
+
+        self._read_bytes = aiofn_allocate_bytes(_data_received_max_size, &data)
+        buffer[0] = data
+        buffer_len[0] = <size_t>_data_received_max_size
+
+    cdef inline void _release_read_buffer(self) noexcept:
+        Py_XDECREF(self._read_bytes)
+        self._read_bytes = NULL
+
+    cdef NoResult _read_completed(self, aiofn_loop_status status, size_t bytes_read) except NoResult.EXC:
+        cdef:
+            PyObject *bytes_obj
+            object data
+
+        if status != AIOFN_LOOP_OK:
+            self._release_read_buffer()
+            self._proactor_handle.context.check_status(status)
+
+        if bytes_read == 0:
+            self._release_read_buffer()
+            if unlikely(self._is_debug):
+                _logger.info("%r was closed by peer", self)
+
+            self._call_protocol_eof_received()
+            self._force_close(None)
+            return NoResult.OK
+
+        assert self._read_bytes != NULL
+        bytes_obj = self._read_bytes
+        self._read_bytes = NULL
+        data = aiofn_finalize_bytes(bytes_obj, <Py_ssize_t>bytes_read)
+        self._call_protocol_data_received(data)
+
+    cpdef _finalize_close(self, exc):
+        assert self._read_paused
+
+        try:
+            self._call_protocol_connection_lost(exc)
+        finally:
+            try:
+                self._proactor_handle.context.unwrap_handle(self._proactor_handle)
+            finally:
+                self._proactor_handle.owner = None
+                self._proactor_handle = None
+                if self._file is not None:
+                    self._file.close()
+                    self._file = None
+                self._protocol = None
+
+
 cdef class ProactorDatagramTransport(DatagramTransport):
     """Datagram transport driven directly by a LoopBase proactor backend."""
 
     cdef:
-        ProactorSocket _proactor_socket
+        ProactorHandle _proactor_handle
         int _family
         bint _has_connection
 
@@ -364,9 +504,9 @@ cdef class ProactorDatagramTransport(DatagramTransport):
 
         self._close_exc = None
 
-        self._proactor_socket = context.wrap_socket(sock)
-        assert self._proactor_socket.owner is None
-        self._proactor_socket.owner = self
+        self._proactor_handle = context.wrap_socket(sock)
+        assert self._proactor_handle.owner is None
+        self._proactor_handle.owner = self
 
         self._loop.call_soon((<object>self)._initialize)
         if waiter is not None:
@@ -388,18 +528,18 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         self._call_protocol_connection_made()
 
     cdef NoResult _start_reading(self) except NoResult.EXC:
-        self._proactor_socket.context.check_status(self._proactor_socket.context.proactor.recvfrom_start(
-            self._proactor_socket.context.backend.state,
-            &self._proactor_socket.backend_sock,
+        self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.recvfrom_start(
+            self._proactor_handle.context.backend.state,
+            &self._proactor_handle.backend_handle,
             _recvfrom_alloc_trampoline,
             _recvfrom_callback_trampoline,
             <void *>self,
         ))
 
     cdef NoResult _stop_reading(self) except NoResult.EXC:
-        self._proactor_socket.context.check_status(self._proactor_socket.context.proactor.recvfrom_stop(
-            self._proactor_socket.context.backend.state,
-            &self._proactor_socket.backend_sock,
+        self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.recvfrom_stop(
+            self._proactor_handle.context.backend.state,
+            &self._proactor_handle.backend_handle,
         ))
         self._release_read_buffer()
 
@@ -433,7 +573,7 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         if status != AIOFN_LOOP_OK:
             self._release_read_buffer()
             try:
-                self._proactor_socket.context.check_status(status)
+                self._proactor_handle.context.check_status(status)
             except (KeyboardInterrupt, SystemExit):
                 raise
             except BaseException as exc:
@@ -473,10 +613,10 @@ cdef class ProactorDatagramTransport(DatagramTransport):
             self._call_protocol_connection_lost(exc)
         finally:
             try:
-                self._proactor_socket.context.unwrap_socket(self._proactor_socket)
+                self._proactor_handle.context.unwrap_handle(self._proactor_handle)
             finally:
-                self._proactor_socket.owner = None
-                self._proactor_socket = None
+                self._proactor_handle.owner = None
+                self._proactor_handle = None
                 if self._file is not None:
                     self._file.close()
                     self._file = None
@@ -514,10 +654,10 @@ cdef class ProactorDatagramTransport(DatagramTransport):
             if unlikely(self._is_debug):
                 _logger.debug("%r: async_sendto(..., len=%d)", self, buffer_len)
 
-            self._proactor_socket.context.check_status(
-                self._proactor_socket.context.proactor.sendto(
-                    self._proactor_socket.context.backend.state,
-                    &self._proactor_socket.backend_sock,
+            self._proactor_handle.context.check_status(
+                self._proactor_handle.context.proactor.sendto(
+                    self._proactor_handle.context.backend.state,
+                    &self._proactor_handle.backend_handle,
                     &self._send_op,
                     buffer,
                     <size_t>buffer_len,
@@ -548,7 +688,7 @@ cdef class ProactorDatagramTransport(DatagramTransport):
 
         if status != AIOFN_LOOP_OK:
             try:
-                self._proactor_socket.context.check_status(status)
+                self._proactor_handle.context.check_status(status)
             except (KeyboardInterrupt, SystemExit):
                 raise
             except BaseException as exc:
@@ -590,7 +730,7 @@ cdef void _recvfrom_alloc_trampoline(
         try:
             transport._handle_error('Fatal read buffer allocation error on proactor datagram transport')
         except BaseException as exc:
-            transport._proactor_socket.context.backend_failed(exc)
+            transport._proactor_handle.context.backend_failed(exc)
 
 
 cdef void _recvfrom_callback_trampoline(
@@ -607,7 +747,7 @@ cdef void _recvfrom_callback_trampoline(
         try:
             transport._handle_error('Fatal read error on proactor datagram transport')
         except BaseException as exc:
-            transport._proactor_socket.context.backend_failed(exc)
+            transport._proactor_handle.context.backend_failed(exc)
 
 
 cdef void _sendto_callback_trampoline(aiofn_loop_proactor_op_t *op) noexcept with gil:
@@ -619,7 +759,7 @@ cdef void _sendto_callback_trampoline(aiofn_loop_proactor_op_t *op) noexcept wit
         try:
             transport._handle_error('Fatal write error on proactor datagram transport')
         except BaseException as exc:
-            transport._proactor_socket.context.backend_failed(exc)
+            transport._proactor_handle.context.backend_failed(exc)
 
 
 cdef void _read_alloc_trampoline(
@@ -637,7 +777,41 @@ cdef void _read_alloc_trampoline(
         try:
             transport._handle_error('Fatal read buffer allocation error on proactor socket transport')
         except BaseException as exc:
-            transport._proactor_socket.context.backend_failed(exc)
+            transport._proactor_handle.context.backend_failed(exc)
+
+
+cdef void _pipe_read_alloc_trampoline(
+    void *callback_data,
+    size_t suggested_size,
+    void **buffer,
+    size_t *buffer_len,
+) noexcept with gil:
+    cdef ProactorReadPipeTransport transport = <ProactorReadPipeTransport>callback_data
+    try:
+        transport._allocate_read_buffer(buffer, buffer_len)
+    except BaseException:
+        buffer[0] = NULL
+        buffer_len[0] = 0
+        try:
+            transport._handle_error('Fatal read buffer allocation error on proactor pipe transport')
+        except BaseException as exc:
+            transport._proactor_handle.context.backend_failed(exc)
+
+
+cdef void _pipe_read_callback_trampoline(
+    void *callback_data,
+    aiofn_loop_status status,
+    void *buffer,
+    size_t bytes_read,
+) noexcept with gil:
+    cdef ProactorReadPipeTransport transport = <ProactorReadPipeTransport>callback_data
+    try:
+        transport._read_completed(status, bytes_read)
+    except BaseException:
+        try:
+            transport._handle_error('Fatal read error on proactor pipe transport')
+        except BaseException as exc:
+            transport._proactor_handle.context.backend_failed(exc)
 
 
 cdef void _read_callback_trampoline(
@@ -653,7 +827,7 @@ cdef void _read_callback_trampoline(
         try:
             transport._handle_error('Fatal read error on proactor socket transport')
         except BaseException as exc:
-            transport._proactor_socket.context.backend_failed(exc)
+            transport._proactor_handle.context.backend_failed(exc)
 
 
 cdef void _write_callback_trampoline(aiofn_loop_proactor_op_t *op) noexcept with gil:
@@ -665,4 +839,4 @@ cdef void _write_callback_trampoline(aiofn_loop_proactor_op_t *op) noexcept with
         try:
             transport._handle_error('Fatal write error on proactor socket transport')
         except BaseException as exc:
-            transport._proactor_socket.context.backend_failed(exc)
+            transport._proactor_handle.context.backend_failed(exc)
