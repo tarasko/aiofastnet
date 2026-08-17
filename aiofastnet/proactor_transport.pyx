@@ -25,7 +25,6 @@ from .utils cimport (
     aiofn_allocate_bytes,
     aiofn_finalize_bytes,
     aiofn_pyaddr_to_sockaddr,
-    aiofn_sendto,
     aiofn_sockaddr_to_pyaddr,
     aiofn_unpack_simple_buffer,
     unlikely,
@@ -58,8 +57,7 @@ cdef class ProactorSocketTransport(StreamTransport):
         object _close_exc
 
     def __init__(self, ProactorContext context, loop, sock, protocol, waiter=None, server=None):
-        StreamTransport.__init__(self, loop, sock, server)
-        self._set_protocol(protocol)
+        StreamTransport.__init__(self, loop, sock, protocol, server)
 
         self._read_buffer = None
         self._read_bytes = NULL
@@ -181,12 +179,6 @@ cdef class ProactorSocketTransport(StreamTransport):
         self._write_eof = True
         if self._write_backlog_size == 0:
             self._write_eof_now()
-
-    cdef NoResult _write_eof_now(self) except NoResult.EXC:
-        self._file.shutdown(socket.SHUT_WR)
-        if unlikely(self._is_debug):
-            _logger.debug("%r: shutdown(SHUT_WR) done", self)
-        return NoResult.OK
 
     cpdef _force_close(self, exc):
         if self._finalizing_close:
@@ -369,8 +361,7 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         object _close_exc
 
     def __init__(self, ProactorContext context, loop, sock, protocol, address, waiter=None):
-        DatagramTransport.__init__(self, loop, sock, address, 8)
-        self._set_protocol(protocol)
+        DatagramTransport.__init__(self, loop, sock, protocol, address, 8)
 
         self._read_bytes = NULL
         # The scheduled initializer starts receiving and then delivers connection_made().
@@ -473,12 +464,6 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         py_address = aiofn_sockaddr_to_pyaddr(<void *>address, 0)
         self._call_protocol_datagram_received(data, py_address)
         return NoResult.OK
-
-    cpdef can_write_eof(self):
-        return False
-
-    cpdef write_eof(self):
-        raise NotImplementedError()
 
     cpdef _force_close(self, exc):
         if self._finalizing_close:

@@ -275,13 +275,6 @@ cdef class SSLTransportBase(Transport):
             _logger.debug("%r: user called abort()", self)
         self._abort(None)
 
-    def write_eof(self):
-        self._check_thread("write_eof")
-        raise NotImplementedError()
-
-    def can_write_eof(self):
-        return False
-
     # Underlying transport use this to take into account upstream write buffer
     # size when deciding to report pause_writing()/resume_writing()
     cpdef Py_ssize_t get_local_write_buffer_size(self) except -1:

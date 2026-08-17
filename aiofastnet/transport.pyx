@@ -30,6 +30,7 @@ else:
 cdef:
     object _logger = getLogger('aiofastnet')
     size_t _log_threshold_for_connlost_writes = constants.LOG_THRESHOLD_FOR_CONNLOST_WRITES
+    object _os_sendfile = getattr(os, "sendfile", None)
 
 
 cdef class Protocol:
@@ -154,6 +155,69 @@ cdef SendFileRequest make_sendfile_request(file, offset, count):
     return request
 
 
+cdef class WriteWatermarks:
+    """Track write-buffer limits and protocol pause/resume state."""
+
+    def __init__(self, loop):
+        self._loop = loop
+        self._set_write_buffer_limits(None, None)
+        self._paused = False
+
+    cpdef tuple get_write_buffer_limits(self):
+        return (self._low_water, self._high_water)
+
+    cpdef set_write_buffer_limits(self, transport, app_protocol, Py_ssize_t write_buffer_size, high=None, low=None):
+        self._set_write_buffer_limits(high, low)
+        self.maybe_pause_protocol(transport, app_protocol, write_buffer_size)
+        self.maybe_resume_protocol(transport, app_protocol, write_buffer_size)
+
+    cpdef maybe_pause_protocol(self, transport, app_protocol, Py_ssize_t write_buffer_size):
+        if write_buffer_size <= self._high_water:
+            return
+        if not self._paused:
+            self._paused = True
+            try:
+                app_protocol.pause_writing()
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as exc:
+                self._loop.call_exception_handler({
+                    'message': 'protocol.pause_writing() failed',
+                    'exception': exc,
+                    'transport': transport,
+                    'protocol': app_protocol,
+                })
+
+    cpdef maybe_resume_protocol(self, transport, app_protocol, Py_ssize_t write_buffer_size):
+        if self._paused and write_buffer_size <= self._low_water:
+            self._paused = False
+            try:
+                app_protocol.resume_writing()
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as exc:
+                self._loop.call_exception_handler({
+                    'message': 'protocol.resume_writing() failed',
+                    'exception': exc,
+                    'transport': self,
+                    'protocol': app_protocol,
+                })
+
+    cdef inline NoResult _set_write_buffer_limits(self, high, low) except NoResult.EXC:
+        if high is None:
+            if low is None:
+                high = 64 * 1024
+            else:
+                high = 4 * low
+        if low is None:
+            low = high // 4
+
+        if not high >= low >= 0:
+            raise ValueError(f'high ({high!r}) must be >= low ({low!r}) must be >= 0')
+        self._high_water = high
+        self._low_water = low
+
+
 cdef class Transport:
     """Internal transport interface implemented by aiofastnet transports."""
 
@@ -235,6 +299,13 @@ cdef class Transport:
     cpdef abort(self):
         self._check_thread("abort")
         self._force_close(None)
+
+    cpdef can_write_eof(self):
+        return False
+
+    cpdef write_eof(self):
+        self._check_thread("write_eof")
+        raise NotImplementedError()
 
     cdef inline NoResult _pause_reading(self) except NoResult.EXC:
         if self._read_paused:
@@ -436,7 +507,7 @@ cdef class FDTransport(Transport):
             self._file.close()
 
     cdef inline list _get_fd_repr_info(self):
-        info = [f'fd={self._fileno_obj}', self.__class__.__name__]
+        cdef list info = [f'fd={self._fileno_obj}', self.__class__.__name__]
         if self._file is None:
             info.append('closed')
         elif self._closing:
@@ -448,6 +519,16 @@ cdef class FDTransport(Transport):
         # Such exceptions should not be reported to the loop exception_handler
         return not isinstance(exc, OSError)
 
+    cpdef _force_close(self, exc):
+        if self._finalizing_close:
+            return
+
+        if not self._closing:
+            self._closing = True
+            self._pause_reading()
+
+        self._schedule_finalize_close(exc)
+
     cpdef _finalize_close(self, exc):
         try:
             self._call_protocol_connection_lost(exc)
@@ -456,68 +537,16 @@ cdef class FDTransport(Transport):
             self._file = None
             self._protocol = None
 
+    # Default implementations are for reactor, proactor transport's override it and do it in it's own
+    # special way.
+    cdef NoResult _start_reading(self) except NoResult.EXC:
+        self._loop.add_reader(self._fileno_obj, self._read_ready)
 
-cdef class WriteWatermarks:
-    """Track write-buffer limits and protocol pause/resume state."""
+    cdef NoResult _stop_reading(self) except NoResult.EXC:
+        self._loop.remove_reader(self._fileno_obj)
 
-    def __init__(self, loop):
-        self._loop = loop
-        self._set_write_buffer_limits(None, None)
-        self._paused = False
-
-    cpdef tuple get_write_buffer_limits(self):
-        return (self._low_water, self._high_water)
-
-    cpdef set_write_buffer_limits(self, transport, app_protocol, Py_ssize_t write_buffer_size, high=None, low=None):
-        self._set_write_buffer_limits(high, low)
-        self.maybe_pause_protocol(transport, app_protocol, write_buffer_size)
-        self.maybe_resume_protocol(transport, app_protocol, write_buffer_size)
-
-    cpdef maybe_pause_protocol(self, transport, app_protocol, Py_ssize_t write_buffer_size):
-        if write_buffer_size <= self._high_water:
-            return
-        if not self._paused:
-            self._paused = True
-            try:
-                app_protocol.pause_writing()
-            except (KeyboardInterrupt, SystemExit):
-                raise
-            except BaseException as exc:
-                self._loop.call_exception_handler({
-                    'message': 'protocol.pause_writing() failed',
-                    'exception': exc,
-                    'transport': transport,
-                    'protocol': app_protocol,
-                })
-
-    cpdef maybe_resume_protocol(self, transport, app_protocol, Py_ssize_t write_buffer_size):
-        if self._paused and write_buffer_size <= self._low_water:
-            self._paused = False
-            try:
-                app_protocol.resume_writing()
-            except (KeyboardInterrupt, SystemExit):
-                raise
-            except BaseException as exc:
-                self._loop.call_exception_handler({
-                    'message': 'protocol.resume_writing() failed',
-                    'exception': exc,
-                    'transport': self,
-                    'protocol': app_protocol,
-                })
-
-    cdef inline NoResult _set_write_buffer_limits(self, high, low) except NoResult.EXC:
-        if high is None:
-            if low is None:
-                high = 64 * 1024
-            else:
-                high = 4 * low
-        if low is None:
-            low = high // 4
-
-        if not high >= low >= 0:
-            raise ValueError(f'high ({high!r}) must be >= low ({low!r}) must be >= 0')
-        self._high_water = high
-        self._low_water = low
+    def _read_ready(self):
+        raise NotImplementedError()
 
 
 cdef class WritableTransport(FDTransport):
@@ -530,6 +559,7 @@ cdef class WritableTransport(FDTransport):
         self._write_backlog = collections.deque()
         self._write_backlog_size = 0
         self._closed_write_count = 0
+        self._write_ready_registered = False
 
     cpdef close(self):
         self._check_thread("close")
@@ -588,17 +618,52 @@ cdef class WritableTransport(FDTransport):
         self._write_backlog_size = 0
 
     cdef NoResult _start_backlog_writing(self) except NoResult.EXC:
-        raise NotImplementedError()
+        if unlikely(self._is_debug):
+            _logger.debug(
+                "%r: _start_backlog_writing called, conn_lost=%s, already_registered=%s",
+                self,
+                self._finalizing_close,
+                self._write_ready_registered,
+            )
+
+        if self._finalizing_close or self._write_ready_registered:
+            return NoResult.OK
+
+        self._write_ready_registered = True
+        self._loop.add_writer(self._fileno_obj, self._write_ready)
 
     cdef NoResult _stop_backlog_writing(self) except NoResult.EXC:
+        if unlikely(self._is_debug):
+            _logger.debug("%r: _stop_backlog_writing called", self)
+
+        if not self._write_ready_registered:
+            return NoResult.OK
+
+        self._write_ready_registered = False
+        self._loop.remove_writer(self._fileno_obj)
+
+    cpdef _force_close(self, exc):
+        if self._finalizing_close:
+            return
+
+        if not self._closing:
+            self._closing = True
+            self._pause_reading()
+
+        self._stop_backlog_writing()
+        self._clear_write_backlog(exc)
+        self._schedule_finalize_close(exc)
+
+    def _write_ready(self):
         raise NotImplementedError()
 
 
 cdef class StreamTransport(WritableTransport):
     """Transport base implementing ordered byte-stream write queues."""
 
-    def __init__(self, loop, file, server=None):
+    def __init__(self, loop, file, protocol, server=None):
         WritableTransport.__init__(self, loop, file)
+        self._set_protocol(protocol)
 
         self._server = server
         self._write_eof = False
@@ -616,28 +681,17 @@ cdef class StreamTransport(WritableTransport):
             if self._server is not None:
                 self._server._detach(self)
 
-    cdef NoResult _release_backend_resources(self) except NoResult.EXC:
-        return NoResult.OK
+    cpdef can_write_eof(self):
+        return True
 
-    cpdef _finalize_close(self, exc):
-        cdef object server
+    cpdef write_eof(self):
+        self._check_thread("write_eof")
+        if self._closing or self._write_eof:
+            return
 
-        try:
-            self._call_protocol_connection_lost(exc)
-        finally:
-            server = self._server
-            try:
-                self._release_backend_resources()
-            finally:
-                try:
-                    if self._file is not None:
-                        self._file.close()
-                finally:
-                    self._file = None
-                    self._protocol = None
-                    if server is not None:
-                        server._detach(self)
-                        self._server = None
+        self._write_eof = True
+        if self._write_backlog_size == 0:
+            self._write_eof_now()
 
     cpdef write_nocheck(self, data):
         if not self.__pre_write_check("write"):
@@ -751,6 +805,38 @@ cdef class StreamTransport(WritableTransport):
             self._handle_error('Fatal sendfile error on transport')
             raise
 
+    def _write_ready(self):
+        if unlikely(self._is_debug):
+            _logger.debug("%r write_ready event, resume writing from backlog", self)
+
+        if self._finalizing_close:
+            return
+
+        cdef:
+            Py_ssize_t bytes_sent
+            bint all_sent = True
+
+        try:
+            while self._write_backlog_size > 0 and all_sent:
+                if isinstance(self._write_backlog[0], SendFileRequest):
+                    all_sent = self._try_sendfile_from_backlog_top()
+                else:
+                    bytes_sent = 0
+                    all_sent = self._try_writelines(self._write_backlog, &bytes_sent)
+                    self._consume_write_backlog(bytes_sent)
+        except:
+            self._handle_error('Fatal write error on transport')
+        else:
+            self._maybe_resume_protocol()
+
+            if self._write_backlog_size == 0:
+                self._stop_backlog_writing()
+                if self._closing:
+                    if not self._finalizing_close:
+                        self._schedule_finalize_close(None)
+                elif self._write_eof:
+                    self._write_eof_now()
+
     cdef WriteRequest _try_write(
         self,
         object data,
@@ -829,9 +915,6 @@ cdef class StreamTransport(WritableTransport):
 
         return bytes_sent
 
-    cdef bint _try_sendfile(self, SendFileRequest request) except -1:
-        raise NotImplementedError()
-
     cdef NoResult _consume_write_backlog(self, Py_ssize_t bytes_sent) except NoResult.EXC:
         cdef:
             Py_ssize_t request_size
@@ -841,8 +924,7 @@ cdef class StreamTransport(WritableTransport):
         self._write_backlog_size -= bytes_sent
 
         while bytes_sent:
-            assert isinstance(self._write_backlog[0], WriteRequest)
-            request = <WriteRequest>self._write_backlog[0]
+            request = self._write_backlog[0]
             request_size = request.size
             if request_size <= bytes_sent:
                 bytes_sent -= request_size
@@ -851,6 +933,64 @@ cdef class StreamTransport(WritableTransport):
                 request.ptr += bytes_sent
                 request.size -= bytes_sent
                 bytes_sent = 0
+
+    cdef NoResult _write_eof_now(self) except NoResult.EXC:
+        if self._is_socket:
+            self._file.shutdown(socket.SHUT_WR)
+            if unlikely(self._is_debug):
+                _logger.debug("%r: shutdown(SHUT_WR) done", self)
+        else:
+            self.close()
+
+    cdef bint _try_sendfile(self, SendFileRequest request) except -1:
+        """Return whether the request completed without waiting for write readiness."""
+        if _os_sendfile is None:
+            raise NotImplementedError()
+
+        try:
+            while request.count:
+                bytes_sent = _os_sendfile(self._fileno, request.fd, request.offset, request.count)
+                if unlikely(self._is_debug):
+                    _logger.debug(
+                        "%r: os.sendfile(offset=%d,count=%d)=%d",
+                        self,
+                        request.offset,
+                        request.count,
+                        bytes_sent,
+                    )
+
+                if bytes_sent == 0:
+                    request.count = 0
+                    break
+
+                request.offset += bytes_sent
+                request.count -= bytes_sent
+
+            return True
+        except BlockingIOError:
+            return False
+        except ConnectionResetError:
+            raise
+        except OSError as exc:
+            # macOS reports a reset socket as ENOTCONN instead of ECONNRESET.
+            if sys.platform == "darwin" and exc.errno == 57:
+                raise ConnectionResetError()
+            raise
+
+    cdef inline bint _try_sendfile_from_backlog_top(self) except -1:
+        cdef SendFileRequest sendfile_req = <SendFileRequest>self._write_backlog[0]
+
+        orig_req_size = sendfile_req.count
+
+        cdef bint all_sent = self._try_sendfile(sendfile_req)
+        if all_sent:
+            self._write_backlog.popleft()
+            if not sendfile_req.waiter.done():
+                sendfile_req.waiter.set_result(None)
+
+        self._write_backlog_size -= <Py_ssize_t>(orig_req_size - sendfile_req.count)
+
+        return all_sent
 
     cdef inline bint __pre_write_check(self, str meth) except -1:
         if self._write_eof:
@@ -885,6 +1025,29 @@ cdef class StreamTransport(WritableTransport):
             elif data_len:
                 self.__append_request(make_write_request(data))
 
+    cdef NoResult _release_backend_resources(self) except NoResult.EXC:
+        return NoResult.OK
+
+    cpdef _finalize_close(self, exc):
+        cdef object server
+
+        try:
+            self._call_protocol_connection_lost(exc)
+        finally:
+            server = self._server
+            try:
+                self._release_backend_resources()
+            finally:
+                try:
+                    if self._file is not None:
+                        self._file.close()
+                finally:
+                    self._file = None
+                    self._protocol = None
+                    if server is not None:
+                        server._detach(self)
+                        self._server = None
+
 
 cdef class DatagramTransport(WritableTransport):
     """Transport base implementing message-oriented write queues."""
@@ -893,10 +1056,12 @@ cdef class DatagramTransport(WritableTransport):
         self,
         loop,
         file,
+        protocol,
         object address,
         Py_ssize_t header_size,
     ):
         WritableTransport.__init__(self, loop, file)
+        self._set_protocol(protocol)
 
         cdef:
             char raw_addr[256]
@@ -976,8 +1141,6 @@ cdef class DatagramTransport(WritableTransport):
                 return False
 
             return True
-        except (BlockingIOError, InterruptedError):
-            return False
         except OSError as exc:
             self._call_protocol_error_received(exc)
             return True

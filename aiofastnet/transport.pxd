@@ -52,6 +52,8 @@ cdef class Transport:
     cpdef pause_reading(self)
     cpdef resume_reading(self)
     cpdef abort(self)
+    cpdef can_write_eof(self)
+    cpdef write_eof(self)
 
     # aiofastnet extension,
     # skip checks for thread-safety and data types
@@ -157,6 +159,7 @@ cdef class WritableTransport(FDTransport):
         object _write_backlog
         Py_ssize_t _write_backlog_size
         size_t _closed_write_count
+        bint _write_ready_registered
 
     cpdef close(self)
     cpdef Py_ssize_t get_write_buffer_size(self) except -1
@@ -181,23 +184,26 @@ cdef class StreamTransport(WritableTransport):
         public bint _sendfile_compatible
 
     # Implement in concrete transport.
-    cdef bint _try_sendfile(self, SendFileRequest request) except -1
     cdef NoResult _release_backend_resources(self) except NoResult.EXC
+    cdef bint _try_sendfile(self, SendFileRequest request) except -1
 
     cpdef close(self)
-    cpdef _finalize_close(self, exc)
     cpdef write_nocheck(self, data)
     cpdef writelines_nocheck(self, list_of_data)
     cdef NoResult write_c(self, char *ptr, Py_ssize_t size) except NoResult.EXC
 
     cdef inline WriteRequest _try_write(self, object data, char *ptr, Py_ssize_t size)
     cdef inline bint _try_writelines(self, object list_of_data, Py_ssize_t *total_bytes_sent) except -1
+    cdef inline bint _try_sendfile_from_backlog_top(self) except -1
     cdef inline Py_ssize_t _flush_iovecs(self, Py_ssize_t iovecs_count, Py_ssize_t *total_bytes_sent) except -2
     cdef inline NoResult _consume_write_backlog(self, Py_ssize_t bytes_sent) except NoResult.EXC
 
+    cdef NoResult _write_eof_now(self) except NoResult.EXC
     cdef inline bint __pre_write_check(self, str meth) except -1
     cdef inline NoResult __append_request(self, WriteRequest request) except NoResult.EXC
     cdef inline NoResult __append_lines_tail(self, object list_of_data, Py_ssize_t bytes_sent) except NoResult.EXC
+
+    cpdef _finalize_close(self, exc)
 
 
 cdef class DatagramTransport(WritableTransport):
