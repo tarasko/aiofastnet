@@ -1,5 +1,4 @@
 import logging
-import socket
 
 from libc.stdint cimport int64_t
 
@@ -167,25 +166,15 @@ cdef class ProactorSocketTransport(StreamTransport):
             self._read_bytes = NULL
             data = aiofn_finalize_bytes(bytes_obj, <Py_ssize_t>bytes_read)
             self._call_protocol_data_received(data)
-        return NoResult.OK
-
-    cpdef can_write_eof(self):
-        return True
-
-    cpdef write_eof(self):
-        self._check_thread("write_eof")
-        if self._closing or self._write_eof:
-            return
-        self._write_eof = True
-        if self._write_backlog_size == 0:
-            self._write_eof_now()
 
     cpdef _force_close(self, exc):
         if self._finalizing_close:
             return
 
-        self._closing = True
-        self._pause_reading()
+        if not self._closing:
+            self._closing = True
+            self._pause_reading()
+
         self._finalizing_close = True
         self._close_exc = exc
 
@@ -290,7 +279,6 @@ cdef class ProactorSocketTransport(StreamTransport):
         except BaseException:
             self._write_submitted_size = 0
             raise
-        return NoResult.OK
 
     cdef NoResult _write_completed(self, aiofn_loop_status status, size_t bytes_sent) except NoResult.EXC:
         cdef:
@@ -539,7 +527,6 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         except BaseException:
             self._send_pending = False
             raise
-        return NoResult.OK
 
     cdef NoResult _sendto_completed(self, aiofn_loop_status status, size_t bytes_sent) except NoResult.EXC:
         cdef:
@@ -586,12 +573,6 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         self._maybe_resume_protocol()
         if self._write_backlog_size == 0 and self._closing and not self._finalizing_close:
             self._schedule_finalize_close(self._close_exc)
-        return NoResult.OK
-
-    cdef NoResult _clear_write_backlog(self, object exc) except NoResult.EXC:
-        assert not self._send_pending
-        WritableTransport._clear_write_backlog(self, exc)
-        return NoResult.OK
 
 
 cdef void _recvfrom_alloc_trampoline(
