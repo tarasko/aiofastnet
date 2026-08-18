@@ -19,6 +19,7 @@ from .transport cimport (
     SendFileRequest,
     StreamTransport,
     WriteRequest,
+    make_write_request_tail,
 )
 from .utils cimport (
     AIOFN_MAX_IOVEC,
@@ -204,6 +205,9 @@ cdef class ProactorSocketTransport(StreamTransport):
                 self._submit_sendfile()
             else:
                 self._submit_write()
+
+    # cdef WriteRequest _try_write(self, object data, char *ptr, Py_ssize_t size):
+    #     return make_write_request_tail(data, ptr, size)
 
     cdef bint _try_sendfile(self, SendFileRequest request) except -1:
         return False

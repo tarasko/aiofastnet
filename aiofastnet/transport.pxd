@@ -192,7 +192,7 @@ cdef class StreamTransport(WritableTransport):
     cpdef writelines_nocheck(self, list_of_data)
     cdef NoResult write_c(self, char *ptr, Py_ssize_t size) except NoResult.EXC
 
-    cdef inline WriteRequest _try_write(self, object data, char *ptr, Py_ssize_t size)
+    cdef WriteRequest _try_write(self, object data, char *ptr, Py_ssize_t size)
     cdef inline bint _try_writelines(self, object list_of_data, Py_ssize_t *total_bytes_sent) except -1
     cdef inline bint _try_sendfile_from_backlog_top(self) except -1
     cdef inline Py_ssize_t _flush_iovecs(self, Py_ssize_t iovecs_count, Py_ssize_t *total_bytes_sent) except -2
