@@ -9,10 +9,11 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 
 import pytest
+from aiofastnet.selector_transport import SelectorSocketTransport
 from aiofastnet.utils import aiofn_maybe_copy_buffer
 
 import aiofastnet
-from aiofastnet.transport import Protocol, SelectorSocketTransport, Transport
+from aiofastnet.transport import Protocol, Transport
 from tests.utils import (
     UDP_MAX_PAYLOAD_SIZE,
     AsyncClient,
@@ -44,6 +45,25 @@ async def test_echo_socketpair(conn_type_plus_udp):
 
 @pytest.mark.parametrize("msg_size", [1, 2, 3, 4, 5, 6, 7, 8, 29, 64, 256 * 1024, 6 * 1024 * 1024])
 async def test_echo(all_loops, msg_size, conn_type_plus_udp, buffered_protocol):
+    if conn_type_plus_udp.name == "udp":
+        if msg_size > UDP_MAX_PAYLOAD_SIZE:
+            pytest.skip("UDP datagram payload exceeds the portable IPv4 limit")
+        if buffered_protocol:
+            pytest.skip("UDP datagram protocol is always simple")
+
+    payload = b"x" * msg_size
+
+    async with TestServer(ct=conn_type_plus_udp, is_buffered=buffered_protocol) as server:
+        async with TestClient(server, ct=conn_type_plus_udp, is_buffered=buffered_protocol) as client:
+            client.write(payload)
+            echoed = await client.readn(msg_size)
+            assert echoed == payload
+            client.close()
+            await client.wait_closed()
+
+
+@pytest.mark.parametrize("msg_size", [1, 2, 3, 4, 5, 6, 7, 8, 29, 64, 256 * 1024, 6 * 1024 * 1024])
+async def test_echo_test_loop(test_loop, msg_size, conn_type_plus_udp, buffered_protocol):
     if conn_type_plus_udp.name == "udp":
         if msg_size > UDP_MAX_PAYLOAD_SIZE:
             pytest.skip("UDP datagram payload exceeds the portable IPv4 limit")

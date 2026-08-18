@@ -20,17 +20,34 @@ Read README.md for project description.
   aiofastnet conventions, such as `logger` -> `_logger` or `self` -> `loop`.
   Fallback code for unsupported event loop implementations, such as proactor
   loops, is acceptable.
-* In Cython, side-effect-only `cdef` helpers should return `NoResult` with
-  `except NoResult.EXC`. This avoids a `PyErr_Occurred()` call on the successful
-  path while making it clear that callers must ignore the return value. Use a
-  meaningful return type instead when callers consume the result. Helpers that
-  are passed to Python APIs as callbacks should instead be untyped `cpdef`
-  functions so Cython provides the normal Python-callable wrapper.
+* In Cython, infallible side-effect-only `cdef` helpers should return `void` and
+  be declared `noexcept`. Side-effect-only helpers that can genuinely raise
+  should return `NoResult` with `except NoResult.EXC`; this avoids a
+  `PyErr_Occurred()` call on the successful path while making it clear that
+  callers must ignore the return value. Use a meaningful return type instead
+  when callers consume the result. Helpers that are passed to Python APIs as
+  callbacks should instead be untyped `cpdef` functions so Cython provides the
+  normal Python-callable wrapper. Do not write `return NoResult.OK` as the last
+  statement of a function; let the function fall through because Cython already
+  returns that value. Keep explicit `return NoResult.OK` for early returns.
 * Add a concise comment for compatibility checks or defensive-looking logic
   whose necessity is not apparent from the code. Explain the concrete platform,
   runtime, or implementation behavior being handled, especially when using
   `getattr`, feature detection, or seemingly redundant conditions. Do not add
   speculative fallbacks for unsupported or hypothetical environments.
+* When an ABI contract says that the frontend validates arguments, lifecycle
+  state, or operation exclusivity, backend code must trust those guarantees and
+  must not duplicate the checks. Keep checks for native-library failures,
+  allocation failures, and operating-system errors.
+* If an internal invariant is unclear while implementing code, use the
+  language's assertion mechanism (`assert()` in C or `assert` in Python) to
+  document and verify it rather than silently recovering or returning a
+  generic runtime error. Do not use assertions for external input, allocation
+  failures, or native-library and operating-system errors.
+* Optimize code layout for human readability, not just compactness. Use blank
+  lines to separate logically distinct groups of declarations and statements;
+  for example, visually separate read, write, and connect state in native
+  structures and separate setup, validation, operation, and cleanup blocks.
 
 # Test style
 

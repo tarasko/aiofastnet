@@ -74,6 +74,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
+    - uses: ./.github/actions/setup-libuv
     - name: Set up Python
       uses: actions/setup-python@v7
       with:
@@ -120,6 +121,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
+    - uses: ./.github/actions/setup-libuv
     - name: Set up Python ${{ matrix.pyver }}
       uses: actions/setup-python@v7
       with:
@@ -197,6 +199,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
+    - uses: ./.github/actions/setup-libuv
     - name: Set up uv python
       # important: do not use system python
       env:
@@ -243,6 +246,7 @@ jobs:
           sh -lc '
             manylinux-interpreters ensure ${{ matrix.python-tag }}
             PYBIN="/opt/python/${{ matrix.python-tag }}/bin"
+            apk add --no-cache libuv-dev liburing-dev
             "$PYBIN/python" -VV
             "$PYBIN/python" -c "import sys, sysconfig; print(sys.version); print(\"Py_GIL_DISABLED=\", sysconfig.get_config_var(\"Py_GIL_DISABLED\")); print(\"GIL enabled=\", getattr(sys, \"_is_gil_enabled\", lambda: \"n/a\")())"
             "$PYBIN/python" -m pip install --upgrade pip
@@ -259,6 +263,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
+    - uses: ./.github/actions/setup-libuv
 
     # aiofastnet requires a Python distribution whose `ssl` module is
     # dynamically linked against OpenSSL. actions/setup-python provides that,
@@ -301,6 +306,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
+    - uses: ./.github/actions/setup-libuv
     - name: Set up Python
       uses: actions/setup-python@v7
       with:

@@ -14,6 +14,10 @@ from libc cimport errno
 from .constants import EXC_INFO_ATTR
 
 
+class DNSLookupRequired(ValueError):
+    pass
+
+
 cdef extern from "Python.h":
     PyObject *PyMemoryView_GET_BASE(PyObject *mview)
     int PyBytes_Check(PyObject *o)
@@ -64,13 +68,13 @@ cdef extern from *:
         return send((SOCKET)fd, (const char*)buf, aiofn_windows_io_len(len), 0);
     }
 
-    static inline Py_ssize_t aiofn_writev_sys(int fd, aiofn_iovec* iov, int iovcnt, int is_socket)
+    static inline Py_ssize_t aiofn_writev_sys(int fd, aiofn_loop_buffer_t* buffers, int buffer_count, int is_socket)
     {
         DWORD bytes_sent = 0;
         int rc;
 
         (void)is_socket;
-        rc = WSASend((SOCKET)fd, (LPWSABUF)iov, iovcnt, &bytes_sent, 0, NULL, NULL);
+        rc = WSASend((SOCKET)fd, (LPWSABUF)buffers, buffer_count, &bytes_sent, 0, NULL, NULL);
         return rc == SOCKET_ERROR ? -1 : (Py_ssize_t)bytes_sent;
     }
 
@@ -121,7 +125,7 @@ cdef extern from *:
             return write(fd, buf, len);
     }
 
-    static inline Py_ssize_t aiofn_writev_sys(int fd, aiofn_iovec* iov, int iovcnt, int is_socket)
+    static inline Py_ssize_t aiofn_writev_sys(int fd, aiofn_loop_buffer_t* buffers, int buffer_count, int is_socket)
     {
         if (is_socket)
         {
@@ -131,20 +135,20 @@ cdef extern from *:
             #endif
 
             /* send is slightly faster than sendmsg with iovec */
-            if (iovcnt == 1)
-                return send(fd, iov[0].iov_base, iov[0].iov_len, flags);
+            if (buffer_count == 1)
+                return send(fd, buffers[0].iov_base, buffers[0].iov_len, flags);
             else
             {
                 struct msghdr msg;
 
                 memset(&msg, 0, sizeof(msg));
-                msg.msg_iov = iov;
-                msg.msg_iovlen = iovcnt;
+                msg.msg_iov = buffers;
+                msg.msg_iovlen = buffer_count;
                 return sendmsg(fd, &msg, flags);
             }
         }
         else
-            return writev(fd, iov, iovcnt);
+            return writev(fd, buffers, buffer_count);
     }
 
     static inline void aiofn_set_exc_from_error(int err) {
@@ -187,10 +191,7 @@ cdef extern from *:
 
         memset(raw_addr, 0, sizeof(struct sockaddr_storage));
         if (inet_pton(AF_INET, host, &sin->sin_addr) != 1)
-        {
-            PyErr_Format(PyExc_ValueError, "%R: socket family mismatch or a DNS lookup is required", pyaddr);
             return -1;
-        }
 
         sin->sin_family = AF_INET;
         sin->sin_port = htons((uint16_t)port);
@@ -204,10 +205,7 @@ cdef extern from *:
 
         memset(raw_addr, 0, sizeof(struct sockaddr_storage));
         if (inet_pton(AF_INET6, host, &sin6->sin6_addr) != 1)
-        {
-            PyErr_Format(PyExc_ValueError, "%R: socket family mismatch or a DNS lookup is required", pyaddr);
             return -1;
-        }
 
         sin6->sin6_family = AF_INET6;
         sin6->sin6_port = htons((uint16_t)port);
@@ -309,11 +307,11 @@ cdef extern from *:
 
     Py_ssize_t aiofn_read_sys(int fd, void* buf, size_t len, bint is_socket)
     Py_ssize_t aiofn_write_sys(int fd, const void* buf, size_t len, bint is_socket)
-    Py_ssize_t aiofn_writev_sys(int fd, aiofn_iovec *iov, int iovcnt, bint is_socket)
+    Py_ssize_t aiofn_writev_sys(int fd, aiofn_loop_buffer_t *buffers, int buffer_count, bint is_socket)
     Py_ssize_t aiofn_recvfrom_sys(int fd, void* buf, size_t len, void* addr, unsigned int* addrlen)
     Py_ssize_t aiofn_sendto_sys(int fd, void* buf, size_t len, void* addr, unsigned int addrlen)
-    int aiofn_set_ipv4_sockaddr(object pyaddr, const char* host, long port, void* addr, unsigned int* addrlen) except -1
-    int aiofn_set_ipv6_sockaddr(object pyaddr, const char* host, long port, long flowinfo, long scope_id, void* addr, unsigned int* addrlen) except -1
+    int aiofn_set_ipv4_sockaddr(object pyaddr, const char* host, long port, void* addr, unsigned int* addrlen) noexcept
+    int aiofn_set_ipv6_sockaddr(object pyaddr, const char* host, long port, long flowinfo, long scope_id, void* addr, unsigned int* addrlen) noexcept
     int aiofn_set_unix_sockaddr(object pyaddr, const char* path, Py_ssize_t pathlen, void* addr, unsigned int* addrlen) except -1
     object aiofn_sockaddr_to_pyaddr(void* addr, unsigned int addrlen)
     void aiofn_set_exc_from_error(int error)
@@ -422,28 +420,29 @@ cdef NoResult aiofn_pyaddr_to_sockaddr(int family, object addr, void* raw_addr, 
         elif isinstance(addr, bytes):
             path = addr
         else:
-            raise ValueError(f'{addr!r}: socket family mismatch or a DNS lookup is required')
+            raise TypeError(f'{addr!r}: invalid addr type, must be str or bytes for AF_UNIX')
 
         PyBytes_AsStringAndSize(path, &path_ptr, &path_len)
         aiofn_set_unix_sockaddr(addr, path_ptr, path_len, raw_addr, raw_addr_len)
         return NoResult.OK
 
     if not isinstance(addr, tuple):
-        raise ValueError(f'{addr!r}: socket family mismatch or a DNS lookup is required')
+        raise TypeError(f'{addr!r}: invalid addr type, must be tuple for AF_INET or AF_INET6')
 
     tuple_size = len(addr)
     if (family == AF_INET and tuple_size != 2) or (family == AF_INET6 and tuple_size not in (2, 4)):
-        raise ValueError(f'{addr!r}: socket family mismatch or a DNS lookup is required')
+        raise ValueError(f'{addr!r}: invalid addr value, must have 2 or 4 elements')
+
     if family not in (AF_INET, AF_INET6):
-        raise ValueError(f'{addr!r}: socket family mismatch or a DNS lookup is required')
+        raise ValueError(f'{family}: invalid family value')
 
     host_obj = addr[0]
     if not isinstance(host_obj, str):
-        raise ValueError(f'{addr!r}: socket family mismatch or a DNS lookup is required')
+        raise ValueError(f'{addr!r}: invalid host object, must be str')
 
     host = PyUnicode_AsUTF8(host_obj)
     if host == NULL:
-        raise ValueError(f'{addr!r}: socket family mismatch or a DNS lookup is required')
+        raise ValueError(f'{addr!r}: invalid host object, cannot get raw utf8 string')
 
     try:
         port = addr[1]
@@ -451,15 +450,20 @@ cdef NoResult aiofn_pyaddr_to_sockaddr(int family, object addr, void* raw_addr, 
             flowinfo = addr[2]
             scope_id = addr[3]
     except (TypeError, ValueError, OverflowError):
-        raise ValueError(f'{addr!r}: socket family mismatch or a DNS lookup is required') from None
+        raise ValueError(f'{addr!r}: invalid port or flow info or scope_id value') from None
 
     if port < 0 or port > 65535 or flowinfo < 0 or scope_id < 0:
-        raise ValueError(f'{addr!r}: socket family mismatch or a DNS lookup is required')
+        raise ValueError(f'{addr!r}: invalid port or flow info or scope_id value')
 
+    cdef int rc
     if family == AF_INET:
-        aiofn_set_ipv4_sockaddr(addr, host, port, raw_addr, raw_addr_len)
+        rc = aiofn_set_ipv4_sockaddr(addr, host, port, raw_addr, raw_addr_len)
     else:
-        aiofn_set_ipv6_sockaddr(addr, host, port, flowinfo, scope_id, raw_addr, raw_addr_len)
+        rc = aiofn_set_ipv6_sockaddr(addr, host, port, flowinfo, scope_id, raw_addr, raw_addr_len)
+
+    if rc == -1:
+        raise DNSLookupRequired(f'{addr!r}: DNS lookup is required')
+
     return NoResult.OK
 
 
@@ -567,13 +571,18 @@ cdef Py_ssize_t aiofn_sendto(int sockfd, void* buf, Py_ssize_t len, void* raw_ad
         return -2
 
 
-cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* iov, Py_ssize_t iovcnt, bint is_socket) except -2:
+cdef Py_ssize_t aiofn_writev(
+    int sockfd,
+    aiofn_loop_buffer_t* buffers,
+    Py_ssize_t buffer_count,
+    bint is_socket,
+) except -2:
     cdef:
         Py_ssize_t bytes_sent
         int last_error
 
     while True:
-        bytes_sent = aiofn_writev_sys(sockfd, iov, iovcnt, is_socket)
+        bytes_sent = aiofn_writev_sys(sockfd, buffers, buffer_count, is_socket)
 
         if bytes_sent > 0:
             return bytes_sent

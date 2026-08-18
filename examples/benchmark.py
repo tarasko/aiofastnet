@@ -9,6 +9,8 @@ from logging import basicConfig
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import tests.libuv_loop
+import tests.uring_loop
 
 import aiofastnet
 from examples.utils import build_ssl_contexts, run_pair, set_socket_sndbuf
@@ -25,9 +27,15 @@ except ImportError:
     blazio = None
 
 
+try:
+    import zuvloop
+except ImportError:
+    zuvloop = None
+
+
 UDP_MAX_PAYLOAD_SIZE = 65507
 SUPPORTED_TRANSPORTS = ["ssl", "tcp", "udp"]
-SUPPORTED_LOOPS = ["asyncio", "uvloop", "blazio"]
+SUPPORTED_LOOPS = ["asyncio", "uvloop", "blazio", "libuv", "uring", "zuvloop"]
 
 
 def _round_msg_size(msg_size: int, chunks: int) -> int:
@@ -276,7 +284,7 @@ def _annotate_bars(ax, bars, values: list[float]) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Echo round-trip benchmark over loopback.")
     parser.add_argument("--msg-sizes", default="256,8192,32768,100000", help="Comma-separated message sizes in bytes")
-    parser.add_argument("--loops", default="asyncio,uvloop", help="Comma-separated event loops (asyncio,uvloop)")
+    parser.add_argument("--loops", default="asyncio,uvloop", help="Comma-separated event loops (asyncio,uvloop,libuv)")
     parser.add_argument(
         "--variant",
         default="native,aiofastnet",
@@ -363,6 +371,12 @@ def main():
                         loop_factory = uvloop.Loop
                     elif loop_kind == "blazio":
                         loop_factory = blazio.new_event_loop
+                    elif loop_kind == "zuvloop":
+                        loop_factory = zuvloop.new_event_loop
+                    elif loop_kind == "libuv":
+                        loop_factory = tests.libuv_loop.new_event_loop
+                    elif loop_kind == "uring":
+                        loop_factory = tests.uring_loop.new_event_loop
                     else:
                         loop_factory = asyncio.SelectorEventLoop
                     rps = asyncio.run(

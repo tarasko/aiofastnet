@@ -1,0 +1,574 @@
+import asyncio
+import contextvars
+import os
+import signal
+import socket
+import sys
+import tempfile
+import threading
+
+import pytest
+
+from tests.utils import AsyncClient, ConnectionType, SocketPair, TestClient, TestServer, make_test_ssl_contexts
+
+pytestmark = pytest.mark.skipif(os.name != "posix", reason="the libuv/uring test backends are Unix-only")
+
+
+def _tcp_socketpair():
+    # Use TCP descriptors because epoll rejects AF_UNIX socketpair descriptors here.
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    client = socket.socket()
+    client.connect(listener.getsockname())
+    server, _address = listener.accept()
+    listener.close()
+    return server, client
+
+
+async def test_run_until_complete_and_timer_cancel(test_loop):
+    called = []
+
+    timer = test_loop.call_later(3600, called.append, "cancelled")
+    timer.cancel()
+    test_loop.call_soon(called.append, "soon")
+    await asyncio.sleep(0.01)
+    assert called == ["soon"]
+
+
+async def test_loop_is_standalone_extension_type(test_loop):
+    assert not isinstance(test_loop, asyncio.BaseEventLoop)
+    assert isinstance(test_loop, asyncio.AbstractEventLoop)
+
+    assert asyncio.get_running_loop() is test_loop
+    assert asyncio.get_event_loop() is test_loop
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="asyncio.Runner was added in Python 3.11")
+async def test_asyncio_runner_lifecycle(test_loop, loop_module):
+    async def main():
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, sum, [1, 2, 3])
+        task = loop.create_task(asyncio.sleep(0, result=result), name="native-loop-task")
+        return await task
+
+    def run_runner():
+        with asyncio.Runner(loop_factory=loop_module.new_event_loop) as runner:
+            return runner.run(main())
+
+    assert await asyncio.to_thread(run_runner) == 6
+
+
+async def test_native_handle_compatibility(test_loop):
+    value = contextvars.ContextVar("value", default="unset")
+    called = []
+    value.set("captured")
+
+    def callback():
+        called.append(value.get())
+        value.set("callback")
+
+    handle = test_loop.call_soon(callback)
+    explicit_context = contextvars.copy_context()
+    explicit_context.run(value.set, "explicit")
+    test_loop.call_soon(lambda: called.append(value.get()), context=explicit_context)
+    value.set("caller")
+
+    first = test_loop.call_at(test_loop.time() + 3600, lambda: None)
+    second = test_loop.call_at(first.when() + 1, lambda: None)
+    try:
+        assert type(handle) is not type(first)
+        assert isinstance(first, type(handle))
+        assert not hasattr(handle, "when")
+        assert handle != object()
+        assert handle.get_context()[value] == "captured"
+        assert not handle.cancelled()
+        assert first < second
+        assert first.when() < second.when()
+        assert hash(first) == hash(first.when())
+    finally:
+        first.cancel()
+        second.cancel()
+
+    await asyncio.sleep(0)
+    assert called == ["captured", "explicit"]
+    assert value.get() == "caller"
+
+
+async def test_native_handle_reports_callback_exception(test_loop):
+    contexts = []
+    test_loop.set_exception_handler(lambda loop, context: contexts.append(context))
+
+    def fail():
+        raise RuntimeError("callback failed")
+
+    handle = test_loop.call_soon(fail)
+    await asyncio.sleep(0)
+
+    assert contexts[0]["handle"] is handle
+    assert isinstance(contexts[0]["exception"], RuntimeError)
+    assert contexts[0]["message"].startswith("Exception in callback")
+
+
+async def test_call_soon_threadsafe_wakes_loop(test_loop):
+    called = []
+    done = test_loop.create_future()
+
+    def submit():
+        test_loop.call_soon_threadsafe(called.append, "thread")
+        test_loop.call_soon_threadsafe(done.set_result, None)
+
+    thread = threading.Thread(target=submit)
+    thread.start()
+    await done
+    thread.join()
+
+    assert called == ["thread"]
+
+
+async def test_call_soon_pipe_capacity_is_reported(test_loop):
+    for submitted in range(100_000):
+        try:
+            test_loop.call_soon_threadsafe(lambda: None)
+        except RuntimeError as exc:
+            assert str(exc) == "call_soon_threadsafe failed: callback pipe is full"
+            break
+    else:
+        pytest.fail("the callback pipe did not reach its finite capacity")
+
+    assert submitted > 0
+
+
+async def test_call_soon_preserves_order(test_loop):
+    called = []
+    done = test_loop.create_future()
+    for value in range(1_000):
+        test_loop.call_soon(called.append, value)
+    test_loop.call_soon(done.set_result, None)
+
+    await done
+    assert called == list(range(1_000))
+
+
+async def test_cancel_removes_scheduled_action(test_loop):
+    called = []
+    done = test_loop.create_future()
+    handle = test_loop.call_soon(called.append, True)
+    handle.cancel()
+    test_loop.call_soon(done.set_result, None)
+
+    await done
+    assert called == []
+
+
+async def test_call_soon_threadsafe_preserves_order_across_pipe_batches(test_loop):
+    called = []
+    done = test_loop.create_future()
+    for value in range(1_000):
+        test_loop.call_soon_threadsafe(called.append, value)
+    test_loop.call_soon_threadsafe(done.set_result, None)
+
+    await done
+    assert called == list(range(1_000))
+
+
+async def test_close_cancels_calls_still_in_pipe(test_loop, loop_module):
+    called = []
+    loop = loop_module.new_event_loop()
+    try:
+        loop.call_soon_threadsafe(called.append, True)
+        loop.close()
+        assert called == []
+    finally:
+        loop.close()
+
+
+async def test_close_cancels_pending_backend_actions(test_loop, loop_module):
+    called = []
+    loop = loop_module.new_event_loop()
+    soon = loop.call_soon(called.append, "soon")
+    timer = loop.call_later(3600, called.append, "timer")
+
+    try:
+        loop.close()
+    finally:
+        loop.close()
+
+    assert called == []
+    assert soon.cancelled()
+    assert timer.cancelled()
+
+
+async def test_fd_readiness_calls_reader_directly(test_loop):
+    reader, writer = _tcp_socketpair()
+    try:
+        reader.setblocking(False)
+        called = []
+        readable = test_loop.create_future()
+        deferred = test_loop.create_future()
+
+        def on_deferred():
+            called.append("deferred")
+            deferred.set_result(None)
+
+        def on_readable():
+            called.append(reader.recv(1))
+            readable.set_result(None)
+            test_loop.call_soon(on_deferred)
+
+        test_loop.add_reader(reader, on_readable)
+        writer.send(b"x")
+        await readable
+
+        assert called[0] == b"x"
+
+        await deferred
+        assert called == [b"x", "deferred"]
+        assert test_loop.remove_reader(reader)
+    finally:
+        reader.close()
+        writer.close()
+
+
+async def test_native_signal_handler_runs_directly_and_can_remove_itself(test_loop):
+    called = []
+    signal_received = test_loop.create_future()
+    deferred = test_loop.create_future()
+
+    def on_deferred():
+        called.append("deferred")
+        deferred.set_result(None)
+
+    def on_signal():
+        called.append("signal")
+        assert test_loop.remove_signal_handler(signal.SIGUSR1)
+        signal_received.set_result(None)
+        test_loop.call_soon(on_deferred)
+
+    test_loop.add_signal_handler(signal.SIGUSR1, on_signal)
+    os.kill(os.getpid(), signal.SIGUSR1)
+    await signal_received
+
+    assert called[0] == "signal"
+    assert not test_loop.remove_signal_handler(signal.SIGUSR1)
+
+    await deferred
+    assert called == ["signal", "deferred"]
+
+
+async def test_native_signal_handler_can_be_replaced(test_loop):
+    called = []
+    signal_received = test_loop.create_future()
+
+    def on_signal(value):
+        called.append(value)
+        signal_received.set_result(None)
+
+    test_loop.add_signal_handler(signal.SIGUSR1, on_signal, "old")
+    test_loop.add_signal_handler(signal.SIGUSR1, on_signal, "new")
+    os.kill(os.getpid(), signal.SIGUSR1)
+    await signal_received
+
+    assert called == ["new"]
+    assert test_loop.remove_signal_handler(signal.SIGUSR1)
+
+
+async def test_reader_can_cancel_simultaneously_ready_writer(test_loop):
+    reader, writer = _tcp_socketpair()
+    try:
+        reader.setblocking(False)
+        called = []
+        done = test_loop.create_future()
+
+        def on_readable():
+            called.append("read")
+            reader.recv(1)
+            assert test_loop.remove_writer(reader)
+            done.set_result(None)
+
+        def on_writable():
+            called.append("write")
+
+        test_loop.add_reader(reader, on_readable)
+        test_loop.add_writer(reader, on_writable)
+        writer.send(b"x")
+        await done
+
+        # libuv does not define the order of simultaneously active events, but
+        # deleting the writer from the reader callback suppresses a pending call.
+        assert called[-1] == "read"
+        assert test_loop.remove_reader(reader)
+    finally:
+        reader.close()
+        writer.close()
+
+
+async def test_aiofastnet_socket_transport(test_loop):
+    from aiofastnet.proactor_transport import ProactorSocketTransport
+
+    peer, client = _tcp_socketpair()
+    peer.setblocking(False)
+    client.setblocking(False)
+
+    class ClientProtocol(asyncio.Protocol):
+        def __init__(self, done):
+            self.done = done
+
+        def connection_made(self, transport):
+            self.transport = transport
+            transport.write(b"request")
+
+        def data_received(self, data):
+            self.done.set_result(data)
+
+    done = test_loop.create_future()
+    transport = None
+
+    def echo():
+        peer.send(peer.recv(1024))
+
+    test_loop.add_reader(peer, echo)
+    try:
+        transport, _protocol = await test_loop.create_connection(lambda: ClientProtocol(done), sock=client)
+        assert isinstance(transport, ProactorSocketTransport)
+        assert await done == b"request"
+    finally:
+        if transport is None:
+            client.close()
+        else:
+            transport.close()
+        test_loop.remove_reader(peer)
+        await asyncio.sleep(0)
+
+    peer.close()
+
+
+@pytest.mark.parametrize("buffered", [False, True])
+async def test_proactor_socket_transport_stream_io(test_loop, buffered):
+    from aiofastnet.proactor_transport import ProactorSocketTransport
+
+    async with TestServer(ct=ConnectionType("tcp")) as server:
+        async with TestClient(server, is_buffered=buffered) as client:
+            assert isinstance(client.transport, ProactorSocketTransport)
+
+            data = b"proactor transport" * 32_768
+            client.write_in_lines(data, 300)
+            assert await client.readn(len(data)) == data
+
+
+async def test_proactor_socket_transport_sendfile(test_loop, loop_module):
+    if loop_module.__name__ == "tests.uring_loop":
+        pytest.skip("sendfile is not implemented for the uring test backend yet")
+
+    header = b"h" * (1024 * 1024)
+    payload = b"p" * (1024 * 1024)
+    tail = b"t" * (256 * 1024)
+
+    with tempfile.TemporaryFile() as file:
+        file.write(payload)
+        file.flush()
+
+        async with TestServer(ct=ConnectionType("tcp")) as server:
+            async with TestClient(server) as client:
+                client.write(header)
+                waiter = client.transport.sendfile(file, 2, len(payload) * 2)
+                assert waiter is not None
+                client.write(tail)
+                await waiter
+
+                expected = header + payload[2:] + tail
+                assert await client.readn(len(expected)) == expected
+
+
+async def test_proactor_socket_transport_sendfile_validates_request(test_loop, loop_module):
+    if loop_module.__name__ == "tests.uring_loop":
+        pytest.skip("sendfile is not implemented for the uring test backend yet")
+
+    async with TestServer(ct=ConnectionType("tcp")) as server:
+        async with TestClient(server) as client:
+            with tempfile.TemporaryFile() as file:
+                with pytest.raises(TypeError, match="offset must be a non-negative integer"):
+                    client.transport.sendfile(file, 1.5, 1)
+                with pytest.raises(ValueError, match="offset must be a non-negative integer"):
+                    client.transport.sendfile(file, -1, 1)
+                with pytest.raises(TypeError, match="count must be a positive integer"):
+                    client.transport.sendfile(file, 0, 1.5)
+                with pytest.raises(ValueError, match="count must be a positive integer"):
+                    client.transport.sendfile(file, 0, 0)
+
+            with tempfile.TemporaryFile(mode="w+") as file:
+                with pytest.raises(ValueError, match="file should be opened in binary mode"):
+                    client.transport.sendfile(file, 0, 1)
+
+            with open(os.devnull, "rb") as file:  # noqa: ASYNC230 - opening the local null device cannot block.
+                with pytest.raises(asyncio.SendfileNotAvailableError, match="not a regular file"):
+                    client.transport.sendfile(file, 0, 1)
+
+
+async def test_proactor_socket_transport_ssl_layer(test_loop):
+    from aiofastnet.ssl_transport import SSLTransport_Transport
+
+    server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", True)
+    connection_type = ConnectionType("ssl_mbio", server_context, client_context)
+
+    async with TestServer(ct=connection_type) as server:
+        async with TestClient(server, ct=connection_type) as client:
+            assert isinstance(client.transport, SSLTransport_Transport)
+
+            data = b"encrypted proactor transport"
+            client.write(data)
+            assert await client.readn(len(data)) == data
+
+
+async def test_proactor_socket_transport_read_control_and_eof(test_loop):
+    async with TestServer(ct=ConnectionType("tcp")) as server:
+        async with TestClient(server) as client:
+            assert client.transport.is_reading()
+            client.transport.pause_reading()
+            assert not client.transport.is_reading()
+            client.transport.resume_reading()
+            assert client.transport.is_reading()
+
+            client.write(b"before eof")
+            assert await client.readn(10) == b"before eof"
+
+            client.transport.write_eof()
+            await client.wait_closed()
+            assert client.is_eof_received
+
+
+async def test_proactor_datagram_transport_io(test_loop):
+    from aiofastnet.proactor_transport import ProactorDatagramTransport
+
+    class DatagramClient(AsyncClient):
+        def __init__(self):
+            super().__init__()
+            self.empty_datagram_received = asyncio.get_running_loop().create_future()
+
+        def datagram_received(self, data, addr):
+            super().datagram_received(data, addr)
+            if not data and not self.empty_datagram_received.done():
+                self.empty_datagram_received.set_result(addr)
+
+    async with TestServer(ct=ConnectionType("udp")) as server:
+        assert isinstance(server.server, ProactorDatagramTransport)
+
+        async with TestClient(server, ct=ConnectionType("udp"), protocol_factory=DatagramClient) as client:
+            assert isinstance(client.transport, ProactorDatagramTransport)
+
+            payload = b"proactor datagram transport"
+            client.write(payload)
+            assert await client.readn(len(payload)) == payload
+
+            client.write(b"")
+            await asyncio.wait_for(client.empty_datagram_received, 1)
+
+            client.transport.pause_reading()
+            assert not client.transport.is_reading()
+
+            paused_payload = b"received after resume"
+            client.write(paused_payload)
+            with pytest.raises(asyncio.TimeoutError):
+                await client.readn(len(paused_payload), 0.05)
+
+            client.transport.resume_reading()
+            assert client.transport.is_reading()
+            assert await client.readn(len(paused_payload)) == paused_payload
+
+
+async def test_proactor_socket_transport_abort_pending_write(test_loop):
+    async with TestServer(ct=ConnectionType("tcp")) as server:
+        async with TestClient(server) as client:
+            client.write(b"x" * 2_000_000)
+            client.abort()
+            await client.wait_closed()
+
+
+async def test_proactor_pipe_transports(test_loop, conn_type_pipe):
+    from aiofastnet.proactor_transport import ProactorReadPipeTransport, ProactorWritePipeTransport
+
+    async with SocketPair(conn_type_pipe) as (reader, writer):
+        assert isinstance(reader.transport, ProactorReadPipeTransport)
+        assert isinstance(writer.transport, ProactorWritePipeTransport)
+
+        payload = b"p" * (2 * 1024 * 1024)
+        writer.write(payload)
+        assert await reader.readn(len(payload)) == payload
+
+        writer.transport.write_eof()
+        await writer.wait_closed()
+        await reader.wait_closed()
+        assert reader.is_eof_received
+
+
+async def test_unix_socket_transport_uses_reactor(test_loop):
+    from aiofastnet.selector_transport import SelectorSocketTransport
+
+    async with TestServer(ct=ConnectionType("unix")) as server:
+        async with TestClient(server, ct=ConnectionType("unix")) as client:
+            assert isinstance(client.transport, SelectorSocketTransport)
+
+            client.write(b"reactor fallback")
+            assert await client.readn(16) == b"reactor fallback"
+
+
+async def test_proactor_sock_connect_recv_sendall(test_loop):
+    async with TestServer(ct=ConnectionType("tcp")) as server:
+        client = socket.socket()
+        client.setblocking(False)
+        try:
+            await test_loop.sock_connect(client, (server.host, server.port))
+            for _ in range(1000):
+                await test_loop.sock_sendall(client, b"hello")
+                assert await test_loop.sock_recv(client, 5) == b"hello"
+        finally:
+            client.close()
+
+
+async def test_proactor_sock_recv_into(test_loop):
+    async with TestServer(ct=ConnectionType("tcp")) as server:
+        client = socket.socket()
+        client.setblocking(False)
+        try:
+            await test_loop.sock_connect(client, (server.host, server.port))
+            await test_loop.sock_sendall(client, b"data!")
+            buffer = bytearray(5)
+            assert await test_loop.sock_recv_into(client, buffer) == 5
+            assert buffer == b"data!"
+        finally:
+            client.close()
+
+
+async def test_proactor_datagram_recvfrom_sendto(test_loop):
+    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server.setblocking(False)
+    client.setblocking(False)
+    server.bind(("127.0.0.1", 0))
+    client.bind(("127.0.0.1", 0))
+    try:
+        address = server.getsockname()
+        assert await test_loop.sock_sendto(client, b"hello", address) == 5
+        data, sender = await test_loop.sock_recvfrom(server, 5)
+        assert data == b"hello"
+        assert sender == client.getsockname()
+
+        assert await test_loop.sock_sendto(client, b"world", address) == 5
+        buffer = bytearray(5)
+        count, sender = await test_loop.sock_recvfrom_into(server, buffer)
+        assert count == 5
+        assert buffer == b"world"
+        assert sender == client.getsockname()
+    finally:
+        server.close()
+        client.close()
+
+
+async def test_loop_base_is_abstract_event_loop(test_loop, loop_module):
+    assert isinstance(test_loop, asyncio.AbstractEventLoop)
+    assert isinstance(test_loop, loop_module.EventLoop)
+
+
+async def test_addrinfo(test_loop):
+    res = await test_loop.getaddrinfo("google.com", 80)
+    print(res)

@@ -7,7 +7,6 @@ if cython.compiled:
 else:
     from aiofastnet.transport import Protocol, Transport
 
-
 @cython.cclass
 class ServerProtocol(Protocol, asyncio.BufferedProtocol):
     _transport: object
