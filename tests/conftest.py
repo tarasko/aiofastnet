@@ -29,10 +29,16 @@ def selector_loop():
 
 
 @pytest_asyncio.fixture
-async def libuv_loop():
+async def test_loop():
     if os.name != "posix":
-        pytest.skip("the libuv test backend is Unix-only")
+        pytest.skip("the libuv/uring test backends are not available on Windows")
     return asyncio.get_running_loop()
+
+
+@pytest_asyncio.fixture
+async def loop_module():
+    """The tests.<backend>_loop module backing the currently running loop."""
+    return sys.modules[type(asyncio.get_running_loop()).__module__]
 
 
 def _new_selector_event_loop():
@@ -41,11 +47,15 @@ def _new_selector_event_loop():
     return asyncio.new_event_loop()
 
 
-def _libuv_loop_factories():
+def _test_loop_factories():
     if os.name != "posix":
         return _selector_loop_factories()
-    from .libuv_loop import new_event_loop
-    return {"libuv": new_event_loop}
+    from .libuv_loop import new_event_loop as new_libuv_loop
+    factories = {"libuv": new_libuv_loop}
+    if sys.platform.startswith("linux"):
+        from .uring_loop import new_event_loop as new_uring_loop
+        factories["uring"] = new_uring_loop
+    return factories
 
 
 def _selector_loop_factories():
@@ -71,10 +81,20 @@ class _LibuvEventLoopPolicy(asyncio.DefaultEventLoopPolicy):
         return new_event_loop()
 
 
-def _libuv_loop_policies():
+class _UringEventLoopPolicy(asyncio.DefaultEventLoopPolicy):
+    def new_event_loop(self):
+        from .uring_loop import new_event_loop
+
+        return new_event_loop()
+
+
+def _test_loop_policies():
     if os.name != "posix":
         return _selector_loop_policies()
-    return {"libuv": _LibuvEventLoopPolicy()}
+    policies = {"libuv": _LibuvEventLoopPolicy()}
+    if sys.platform.startswith("linux"):
+        policies["uring"] = _UringEventLoopPolicy()
+    return policies
 
 
 def _platform_loop_factories():
@@ -144,8 +164,8 @@ def pytest_asyncio_loop_factories(config, item):
         return _platform_loop_factories()
     if "selector_loop" in fixture_names:
         return _selector_loop_factories()
-    if "libuv_loop" in fixture_names:
-        return _libuv_loop_factories()
+    if "test_loop" in fixture_names:
+        return _test_loop_factories()
     return {"asyncio": _new_selector_event_loop}
 
 
@@ -169,8 +189,8 @@ def pytest_generate_tests(metafunc):
         policies = _platform_loop_policies()
     elif "selector_loop" in fixture_names:
         policies = _selector_loop_policies()
-    elif "libuv_loop" in fixture_names:
-        policies = _libuv_loop_policies()
+    elif "test_loop" in fixture_names:
+        policies = _test_loop_policies()
     else:
         return
 

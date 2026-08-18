@@ -39,7 +39,6 @@ macros = [("CYTHON_TRACE", "1"),
           ("CYTHON_TRACE_NOGIL", "1"),
           ("CYTHON_USE_SYS_MONITORING", "0")] if with_coverage else None
 
-
 if os.name == 'nt' and with_debug:
     extra_compile_args = ['/Zi']
     extra_link_args = ['/DEBUG']
@@ -101,6 +100,18 @@ if os.name == 'posix':
             extra_link_args=extra_link_args,
         ),
     ))
+    if sys.platform.startswith('linux'):
+        # io_uring/liburing is Linux-only.
+        extensions.append(
+            Extension(
+                "tests.uring_loop",
+                ["tests/uring_loop.pyx", "tests/uring_backend.c"],
+                libraries=[*libs, "uring"],
+                define_macros=macros,
+                extra_compile_args=extra_compile_args,
+                extra_link_args=extra_link_args,
+            )
+        )
 elif os.name == 'nt':
     extensions.append(
         make_extension(

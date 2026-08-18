@@ -11,7 +11,7 @@ import pytest
 
 from tests.utils import AsyncClient, ConnectionType, SocketPair, TestClient, TestServer, make_test_ssl_contexts
 
-pytestmark = pytest.mark.skipif(os.name != "posix", reason="the libuv test backend is Unix-only")
+pytestmark = pytest.mark.skipif(os.name != "posix", reason="the libuv/uring test backends are Unix-only")
 
 
 def _tcp_socketpair():
@@ -26,28 +26,26 @@ def _tcp_socketpair():
     return server, client
 
 
-async def test_run_until_complete_and_timer_cancel(libuv_loop):
+async def test_run_until_complete_and_timer_cancel(test_loop):
     called = []
 
-    timer = libuv_loop.call_later(3600, called.append, "cancelled")
+    timer = test_loop.call_later(3600, called.append, "cancelled")
     timer.cancel()
-    libuv_loop.call_soon(called.append, "soon")
+    test_loop.call_soon(called.append, "soon")
     await asyncio.sleep(0.01)
     assert called == ["soon"]
 
 
-async def test_loop_is_standalone_extension_type(libuv_loop):
-    assert not isinstance(libuv_loop, asyncio.BaseEventLoop)
-    assert isinstance(libuv_loop, asyncio.AbstractEventLoop)
+async def test_loop_is_standalone_extension_type(test_loop):
+    assert not isinstance(test_loop, asyncio.BaseEventLoop)
+    assert isinstance(test_loop, asyncio.AbstractEventLoop)
 
-    assert asyncio.get_running_loop() is libuv_loop
-    assert asyncio.get_event_loop() is libuv_loop
+    assert asyncio.get_running_loop() is test_loop
+    assert asyncio.get_event_loop() is test_loop
 
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="asyncio.Runner was added in Python 3.11")
-async def test_asyncio_runner_lifecycle(libuv_loop):
-    from tests.libuv_loop import new_event_loop
-
+async def test_asyncio_runner_lifecycle(test_loop, loop_module):
     async def main():
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, sum, [1, 2, 3])
@@ -55,13 +53,13 @@ async def test_asyncio_runner_lifecycle(libuv_loop):
         return await task
 
     def run_runner():
-        with asyncio.Runner(loop_factory=new_event_loop) as runner:
+        with asyncio.Runner(loop_factory=loop_module.new_event_loop) as runner:
             return runner.run(main())
 
     assert await asyncio.to_thread(run_runner) == 6
 
 
-async def test_native_handle_compatibility(libuv_loop):
+async def test_native_handle_compatibility(test_loop):
     value = contextvars.ContextVar("value", default="unset")
     called = []
     value.set("captured")
@@ -70,14 +68,14 @@ async def test_native_handle_compatibility(libuv_loop):
         called.append(value.get())
         value.set("callback")
 
-    handle = libuv_loop.call_soon(callback)
+    handle = test_loop.call_soon(callback)
     explicit_context = contextvars.copy_context()
     explicit_context.run(value.set, "explicit")
-    libuv_loop.call_soon(lambda: called.append(value.get()), context=explicit_context)
+    test_loop.call_soon(lambda: called.append(value.get()), context=explicit_context)
     value.set("caller")
 
-    first = libuv_loop.call_at(libuv_loop.time() + 3600, lambda: None)
-    second = libuv_loop.call_at(first.when() + 1, lambda: None)
+    first = test_loop.call_at(test_loop.time() + 3600, lambda: None)
+    second = test_loop.call_at(first.when() + 1, lambda: None)
     try:
         assert type(handle) is not type(first)
         assert isinstance(first, type(handle))
@@ -97,14 +95,14 @@ async def test_native_handle_compatibility(libuv_loop):
     assert value.get() == "caller"
 
 
-async def test_native_handle_reports_callback_exception(libuv_loop):
+async def test_native_handle_reports_callback_exception(test_loop):
     contexts = []
-    libuv_loop.set_exception_handler(lambda loop, context: contexts.append(context))
+    test_loop.set_exception_handler(lambda loop, context: contexts.append(context))
 
     def fail():
         raise RuntimeError("callback failed")
 
-    handle = libuv_loop.call_soon(fail)
+    handle = test_loop.call_soon(fail)
     await asyncio.sleep(0)
 
     assert contexts[0]["handle"] is handle
@@ -112,13 +110,13 @@ async def test_native_handle_reports_callback_exception(libuv_loop):
     assert contexts[0]["message"].startswith("Exception in callback")
 
 
-async def test_call_soon_threadsafe_wakes_loop(libuv_loop):
+async def test_call_soon_threadsafe_wakes_loop(test_loop):
     called = []
-    done = libuv_loop.create_future()
+    done = test_loop.create_future()
 
     def submit():
-        libuv_loop.call_soon_threadsafe(called.append, "thread")
-        libuv_loop.call_soon_threadsafe(done.set_result, None)
+        test_loop.call_soon_threadsafe(called.append, "thread")
+        test_loop.call_soon_threadsafe(done.set_result, None)
 
     thread = threading.Thread(target=submit)
     thread.start()
@@ -128,10 +126,10 @@ async def test_call_soon_threadsafe_wakes_loop(libuv_loop):
     assert called == ["thread"]
 
 
-async def test_call_soon_pipe_capacity_is_reported(libuv_loop):
+async def test_call_soon_pipe_capacity_is_reported(test_loop):
     for submitted in range(100_000):
         try:
-            libuv_loop.call_soon_threadsafe(lambda: None)
+            test_loop.call_soon_threadsafe(lambda: None)
         except RuntimeError as exc:
             assert str(exc) == "call_soon_threadsafe failed: callback pipe is full"
             break
@@ -141,44 +139,42 @@ async def test_call_soon_pipe_capacity_is_reported(libuv_loop):
     assert submitted > 0
 
 
-async def test_call_soon_preserves_order(libuv_loop):
+async def test_call_soon_preserves_order(test_loop):
     called = []
-    done = libuv_loop.create_future()
+    done = test_loop.create_future()
     for value in range(1_000):
-        libuv_loop.call_soon(called.append, value)
-    libuv_loop.call_soon(done.set_result, None)
+        test_loop.call_soon(called.append, value)
+    test_loop.call_soon(done.set_result, None)
 
     await done
     assert called == list(range(1_000))
 
 
-async def test_cancel_removes_scheduled_action(libuv_loop):
+async def test_cancel_removes_scheduled_action(test_loop):
     called = []
-    done = libuv_loop.create_future()
-    handle = libuv_loop.call_soon(called.append, True)
+    done = test_loop.create_future()
+    handle = test_loop.call_soon(called.append, True)
     handle.cancel()
-    libuv_loop.call_soon(done.set_result, None)
+    test_loop.call_soon(done.set_result, None)
 
     await done
     assert called == []
 
 
-async def test_call_soon_threadsafe_preserves_order_across_pipe_batches(libuv_loop):
+async def test_call_soon_threadsafe_preserves_order_across_pipe_batches(test_loop):
     called = []
-    done = libuv_loop.create_future()
+    done = test_loop.create_future()
     for value in range(1_000):
-        libuv_loop.call_soon_threadsafe(called.append, value)
-    libuv_loop.call_soon_threadsafe(done.set_result, None)
+        test_loop.call_soon_threadsafe(called.append, value)
+    test_loop.call_soon_threadsafe(done.set_result, None)
 
     await done
     assert called == list(range(1_000))
 
 
-async def test_close_cancels_calls_still_in_pipe(libuv_loop):
-    from tests.libuv_loop import new_event_loop
-
+async def test_close_cancels_calls_still_in_pipe(test_loop, loop_module):
     called = []
-    loop = new_event_loop()
+    loop = loop_module.new_event_loop()
     try:
         loop.call_soon_threadsafe(called.append, True)
         loop.close()
@@ -187,11 +183,9 @@ async def test_close_cancels_calls_still_in_pipe(libuv_loop):
         loop.close()
 
 
-async def test_close_cancels_pending_backend_actions(libuv_loop):
-    from tests.libuv_loop import new_event_loop
-
+async def test_close_cancels_pending_backend_actions(test_loop, loop_module):
     called = []
-    loop = new_event_loop()
+    loop = loop_module.new_event_loop()
     soon = loop.call_soon(called.append, "soon")
     timer = loop.call_later(3600, called.append, "timer")
 
@@ -205,13 +199,13 @@ async def test_close_cancels_pending_backend_actions(libuv_loop):
     assert timer.cancelled()
 
 
-async def test_fd_readiness_calls_reader_directly(libuv_loop):
+async def test_fd_readiness_calls_reader_directly(test_loop):
     reader, writer = _tcp_socketpair()
     try:
         reader.setblocking(False)
         called = []
-        readable = libuv_loop.create_future()
-        deferred = libuv_loop.create_future()
+        readable = test_loop.create_future()
+        deferred = test_loop.create_future()
 
         def on_deferred():
             called.append("deferred")
@@ -220,9 +214,9 @@ async def test_fd_readiness_calls_reader_directly(libuv_loop):
         def on_readable():
             called.append(reader.recv(1))
             readable.set_result(None)
-            libuv_loop.call_soon(on_deferred)
+            test_loop.call_soon(on_deferred)
 
-        libuv_loop.add_reader(reader, on_readable)
+        test_loop.add_reader(reader, on_readable)
         writer.send(b"x")
         await readable
 
@@ -230,16 +224,16 @@ async def test_fd_readiness_calls_reader_directly(libuv_loop):
 
         await deferred
         assert called == [b"x", "deferred"]
-        assert libuv_loop.remove_reader(reader)
+        assert test_loop.remove_reader(reader)
     finally:
         reader.close()
         writer.close()
 
 
-async def test_native_signal_handler_runs_directly_and_can_remove_itself(libuv_loop):
+async def test_native_signal_handler_runs_directly_and_can_remove_itself(test_loop):
     called = []
-    signal_received = libuv_loop.create_future()
-    deferred = libuv_loop.create_future()
+    signal_received = test_loop.create_future()
+    deferred = test_loop.create_future()
 
     def on_deferred():
         called.append("deferred")
@@ -247,69 +241,69 @@ async def test_native_signal_handler_runs_directly_and_can_remove_itself(libuv_l
 
     def on_signal():
         called.append("signal")
-        assert libuv_loop.remove_signal_handler(signal.SIGUSR1)
+        assert test_loop.remove_signal_handler(signal.SIGUSR1)
         signal_received.set_result(None)
-        libuv_loop.call_soon(on_deferred)
+        test_loop.call_soon(on_deferred)
 
-    libuv_loop.add_signal_handler(signal.SIGUSR1, on_signal)
+    test_loop.add_signal_handler(signal.SIGUSR1, on_signal)
     os.kill(os.getpid(), signal.SIGUSR1)
     await signal_received
 
     assert called[0] == "signal"
-    assert not libuv_loop.remove_signal_handler(signal.SIGUSR1)
+    assert not test_loop.remove_signal_handler(signal.SIGUSR1)
 
     await deferred
     assert called == ["signal", "deferred"]
 
 
-async def test_native_signal_handler_can_be_replaced(libuv_loop):
+async def test_native_signal_handler_can_be_replaced(test_loop):
     called = []
-    signal_received = libuv_loop.create_future()
+    signal_received = test_loop.create_future()
 
     def on_signal(value):
         called.append(value)
         signal_received.set_result(None)
 
-    libuv_loop.add_signal_handler(signal.SIGUSR1, on_signal, "old")
-    libuv_loop.add_signal_handler(signal.SIGUSR1, on_signal, "new")
+    test_loop.add_signal_handler(signal.SIGUSR1, on_signal, "old")
+    test_loop.add_signal_handler(signal.SIGUSR1, on_signal, "new")
     os.kill(os.getpid(), signal.SIGUSR1)
     await signal_received
 
     assert called == ["new"]
-    assert libuv_loop.remove_signal_handler(signal.SIGUSR1)
+    assert test_loop.remove_signal_handler(signal.SIGUSR1)
 
 
-async def test_reader_can_cancel_simultaneously_ready_writer(libuv_loop):
+async def test_reader_can_cancel_simultaneously_ready_writer(test_loop):
     reader, writer = _tcp_socketpair()
     try:
         reader.setblocking(False)
         called = []
-        done = libuv_loop.create_future()
+        done = test_loop.create_future()
 
         def on_readable():
             called.append("read")
             reader.recv(1)
-            assert libuv_loop.remove_writer(reader)
+            assert test_loop.remove_writer(reader)
             done.set_result(None)
 
         def on_writable():
             called.append("write")
 
-        libuv_loop.add_reader(reader, on_readable)
-        libuv_loop.add_writer(reader, on_writable)
+        test_loop.add_reader(reader, on_readable)
+        test_loop.add_writer(reader, on_writable)
         writer.send(b"x")
         await done
 
         # libuv does not define the order of simultaneously active events, but
         # deleting the writer from the reader callback suppresses a pending call.
         assert called[-1] == "read"
-        assert libuv_loop.remove_reader(reader)
+        assert test_loop.remove_reader(reader)
     finally:
         reader.close()
         writer.close()
 
 
-async def test_aiofastnet_socket_transport(libuv_loop):
+async def test_aiofastnet_socket_transport(test_loop):
     from aiofastnet.proactor_transport import ProactorSocketTransport
 
     peer, client = _tcp_socketpair()
@@ -327,15 +321,15 @@ async def test_aiofastnet_socket_transport(libuv_loop):
         def data_received(self, data):
             self.done.set_result(data)
 
-    done = libuv_loop.create_future()
+    done = test_loop.create_future()
     transport = None
 
     def echo():
         peer.send(peer.recv(1024))
 
-    libuv_loop.add_reader(peer, echo)
+    test_loop.add_reader(peer, echo)
     try:
-        transport, _protocol = await libuv_loop.create_connection(lambda: ClientProtocol(done), sock=client)
+        transport, _protocol = await test_loop.create_connection(lambda: ClientProtocol(done), sock=client)
         assert isinstance(transport, ProactorSocketTransport)
         assert await done == b"request"
     finally:
@@ -343,14 +337,14 @@ async def test_aiofastnet_socket_transport(libuv_loop):
             client.close()
         else:
             transport.close()
-        libuv_loop.remove_reader(peer)
+        test_loop.remove_reader(peer)
         await asyncio.sleep(0)
 
     peer.close()
 
 
 @pytest.mark.parametrize("buffered", [False, True])
-async def test_proactor_socket_transport_stream_io(libuv_loop, buffered):
+async def test_proactor_socket_transport_stream_io(test_loop, buffered):
     from aiofastnet.proactor_transport import ProactorSocketTransport
 
     async with TestServer(ct=ConnectionType("tcp")) as server:
@@ -362,8 +356,11 @@ async def test_proactor_socket_transport_stream_io(libuv_loop, buffered):
             assert await client.readn(len(data)) == data
 
 
-async def test_proactor_socket_transport_sendfile(libuv_loop):
-    header = b"h" * (256 * 1024)
+async def test_proactor_socket_transport_sendfile(test_loop, loop_module):
+    if loop_module.__name__ == "tests.uring_loop":
+        pytest.skip("sendfile is not implemented for the uring test backend yet")
+
+    header = b"h" * (1024 * 1024)
     payload = b"p" * (1024 * 1024)
     tail = b"t" * (256 * 1024)
 
@@ -383,7 +380,10 @@ async def test_proactor_socket_transport_sendfile(libuv_loop):
                 assert await client.readn(len(expected)) == expected
 
 
-async def test_proactor_socket_transport_sendfile_validates_request(libuv_loop):
+async def test_proactor_socket_transport_sendfile_validates_request(test_loop, loop_module):
+    if loop_module.__name__ == "tests.uring_loop":
+        pytest.skip("sendfile is not implemented for the uring test backend yet")
+
     async with TestServer(ct=ConnectionType("tcp")) as server:
         async with TestClient(server) as client:
             with tempfile.TemporaryFile() as file:
@@ -405,7 +405,7 @@ async def test_proactor_socket_transport_sendfile_validates_request(libuv_loop):
                     client.transport.sendfile(file, 0, 1)
 
 
-async def test_proactor_socket_transport_ssl_layer(libuv_loop):
+async def test_proactor_socket_transport_ssl_layer(test_loop):
     from aiofastnet.ssl_transport import SSLTransport_Transport
 
     server_context, client_context = make_test_ssl_contexts("tests/test.crt", "tests/test.key", True)
@@ -420,7 +420,7 @@ async def test_proactor_socket_transport_ssl_layer(libuv_loop):
             assert await client.readn(len(data)) == data
 
 
-async def test_proactor_socket_transport_read_control_and_eof(libuv_loop):
+async def test_proactor_socket_transport_read_control_and_eof(test_loop):
     async with TestServer(ct=ConnectionType("tcp")) as server:
         async with TestClient(server) as client:
             assert client.transport.is_reading()
@@ -437,7 +437,7 @@ async def test_proactor_socket_transport_read_control_and_eof(libuv_loop):
             assert client.is_eof_received
 
 
-async def test_proactor_datagram_transport_io(libuv_loop):
+async def test_proactor_datagram_transport_io(test_loop):
     from aiofastnet.proactor_transport import ProactorDatagramTransport
 
     class DatagramClient(AsyncClient):
@@ -476,7 +476,7 @@ async def test_proactor_datagram_transport_io(libuv_loop):
             assert await client.readn(len(paused_payload)) == paused_payload
 
 
-async def test_proactor_socket_transport_abort_pending_write(libuv_loop):
+async def test_proactor_socket_transport_abort_pending_write(test_loop):
     async with TestServer(ct=ConnectionType("tcp")) as server:
         async with TestClient(server) as client:
             client.write(b"x" * 2_000_000)
@@ -484,7 +484,7 @@ async def test_proactor_socket_transport_abort_pending_write(libuv_loop):
             await client.wait_closed()
 
 
-async def test_proactor_pipe_transports(libuv_loop, conn_type_pipe):
+async def test_proactor_pipe_transports(test_loop, conn_type_pipe):
     from aiofastnet.proactor_transport import ProactorReadPipeTransport, ProactorWritePipeTransport
 
     async with SocketPair(conn_type_pipe) as (reader, writer):
@@ -501,7 +501,7 @@ async def test_proactor_pipe_transports(libuv_loop, conn_type_pipe):
         assert reader.is_eof_received
 
 
-async def test_unix_socket_transport_uses_reactor(libuv_loop):
+async def test_unix_socket_transport_uses_reactor(test_loop):
     from aiofastnet.selector_transport import SelectorSocketTransport
 
     async with TestServer(ct=ConnectionType("unix")) as server:
@@ -512,34 +512,34 @@ async def test_unix_socket_transport_uses_reactor(libuv_loop):
             assert await client.readn(16) == b"reactor fallback"
 
 
-async def test_proactor_sock_connect_recv_sendall(libuv_loop):
+async def test_proactor_sock_connect_recv_sendall(test_loop):
     async with TestServer(ct=ConnectionType("tcp")) as server:
         client = socket.socket()
         client.setblocking(False)
         try:
-            await libuv_loop.sock_connect(client, (server.host, server.port))
+            await test_loop.sock_connect(client, (server.host, server.port))
             for _ in range(1000):
-                await libuv_loop.sock_sendall(client, b"hello")
-                assert await libuv_loop.sock_recv(client, 5) == b"hello"
+                await test_loop.sock_sendall(client, b"hello")
+                assert await test_loop.sock_recv(client, 5) == b"hello"
         finally:
             client.close()
 
 
-async def test_proactor_sock_recv_into(libuv_loop):
+async def test_proactor_sock_recv_into(test_loop):
     async with TestServer(ct=ConnectionType("tcp")) as server:
         client = socket.socket()
         client.setblocking(False)
         try:
-            await libuv_loop.sock_connect(client, (server.host, server.port))
-            await libuv_loop.sock_sendall(client, b"data!")
+            await test_loop.sock_connect(client, (server.host, server.port))
+            await test_loop.sock_sendall(client, b"data!")
             buffer = bytearray(5)
-            assert await libuv_loop.sock_recv_into(client, buffer) == 5
+            assert await test_loop.sock_recv_into(client, buffer) == 5
             assert buffer == b"data!"
         finally:
             client.close()
 
 
-async def test_proactor_datagram_recvfrom_sendto(libuv_loop):
+async def test_proactor_datagram_recvfrom_sendto(test_loop):
     server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     server.setblocking(False)
@@ -548,14 +548,14 @@ async def test_proactor_datagram_recvfrom_sendto(libuv_loop):
     client.bind(("127.0.0.1", 0))
     try:
         address = server.getsockname()
-        assert await libuv_loop.sock_sendto(client, b"hello", address) == 5
-        data, sender = await libuv_loop.sock_recvfrom(server, 5)
+        assert await test_loop.sock_sendto(client, b"hello", address) == 5
+        data, sender = await test_loop.sock_recvfrom(server, 5)
         assert data == b"hello"
         assert sender == client.getsockname()
 
-        assert await libuv_loop.sock_sendto(client, b"world", address) == 5
+        assert await test_loop.sock_sendto(client, b"world", address) == 5
         buffer = bytearray(5)
-        count, sender = await libuv_loop.sock_recvfrom_into(server, buffer)
+        count, sender = await test_loop.sock_recvfrom_into(server, buffer)
         assert count == 5
         assert buffer == b"world"
         assert sender == client.getsockname()
@@ -564,13 +564,11 @@ async def test_proactor_datagram_recvfrom_sendto(libuv_loop):
         client.close()
 
 
-async def test_loop_base_is_abstract_event_loop(libuv_loop):
-    from tests.libuv_loop import LibuvLoop
-
-    assert isinstance(libuv_loop, asyncio.AbstractEventLoop)
-    assert isinstance(libuv_loop, LibuvLoop)
+async def test_loop_base_is_abstract_event_loop(test_loop, loop_module):
+    assert isinstance(test_loop, asyncio.AbstractEventLoop)
+    assert isinstance(test_loop, loop_module.EventLoop)
 
 
-async def test_addrinfo(libuv_loop):
-    res = await libuv_loop.getaddrinfo("google.com", 80)
+async def test_addrinfo(test_loop):
+    res = await test_loop.getaddrinfo("google.com", 80)
     print(res)

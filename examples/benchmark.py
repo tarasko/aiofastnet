@@ -10,6 +10,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import tests.libuv_loop
+import tests.uring_loop
 
 import aiofastnet
 from examples.utils import build_ssl_contexts, run_pair, set_socket_sndbuf
@@ -34,7 +35,7 @@ except ImportError:
 
 UDP_MAX_PAYLOAD_SIZE = 65507
 SUPPORTED_TRANSPORTS = ["ssl", "tcp", "udp"]
-SUPPORTED_LOOPS = ["asyncio", "uvloop", "blazio", "libuv", "zuvloop"]
+SUPPORTED_LOOPS = ["asyncio", "uvloop", "blazio", "libuv", "uring", "zuvloop"]
 
 
 def _round_msg_size(msg_size: int, chunks: int) -> int:
@@ -374,6 +375,8 @@ def main():
                         loop_factory = zuvloop.new_event_loop
                     elif loop_kind == "libuv":
                         loop_factory = tests.libuv_loop.new_event_loop
+                    elif loop_kind == "uring":
+                        loop_factory = tests.uring_loop.new_event_loop
                     else:
                         loop_factory = asyncio.SelectorEventLoop
                     rps = asyncio.run(

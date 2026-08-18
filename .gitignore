@@ -16,5 +16,7 @@ playground.py
 !certdecode.c
 !aiofastnet/openssl_compat.c
 !tests/libuv_backend.c
+!tests/uring_backend.c
 .coverage
 uv.lock
+.mcp.json
