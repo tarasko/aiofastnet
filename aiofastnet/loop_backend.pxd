@@ -20,9 +20,7 @@ cdef extern from "loop_backend.h":
 
     const char *AIOFN_LOOP_BACKEND_CAPSULE_NAME
 
-    ctypedef struct aiofn_loop_action_t
-
-    ctypedef void (*aiofn_loop_callback_fn)(aiofn_loop_action_t *) noexcept nogil
+    ctypedef void (*aiofn_loop_callback_fn)(void *) noexcept nogil
 
     ctypedef struct aiofn_loop_action_t:
         aiofn_loop_callback_fn callback
@@ -150,7 +148,8 @@ cdef extern from "loop_backend.h":
 
         aiofn_loop_status (*call_soon)(void *, aiofn_loop_action_t *) noexcept nogil
         aiofn_loop_status (*call_at)(void *, aiofn_loop_action_t *, uint64_t) noexcept nogil
-        aiofn_loop_status (*action_cancel)(void *, aiofn_loop_action_t *) noexcept nogil
+        aiofn_loop_status (*call_soon_cancel)(void *, aiofn_loop_action_t *) noexcept nogil
+        aiofn_loop_status (*call_at_cancel)(void *, aiofn_loop_action_t *) noexcept nogil
 
         aiofn_loop_status (*signal_watch)(void *, int, aiofn_loop_signal_watch_t *) noexcept nogil
         aiofn_loop_status (*signal_unwatch)(void *, aiofn_loop_signal_watch_t *) noexcept nogil

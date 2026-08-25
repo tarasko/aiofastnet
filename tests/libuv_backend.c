@@ -86,7 +86,7 @@ static void aiofn_libuv_on_action(uv_timer_t *timer) {
     action->backend_token = NULL;
     uv_timer_stop(timer);
     uv_close((uv_handle_t *)timer, aiofn_libuv_free_handle);
-    action->callback(action);
+    action->callback(action->callback_data);
 }
 
 
@@ -194,7 +194,11 @@ static aiofn_loop_status aiofn_libuv_call_at(void *data, aiofn_loop_action_t *ac
 }
 
 
-static aiofn_loop_status aiofn_libuv_action_cancel(void *data, aiofn_loop_action_t *action) {
+// call_soon() and call_at() both go through aiofn_libuv_schedule() onto the
+// same uv_timer_t (delay=0 for call_soon), so there is nothing kind-specific
+// to cancel - this one function backs both call_soon_cancel and
+// call_at_cancel below.
+static aiofn_loop_status aiofn_libuv_timer_cancel(void *data, aiofn_loop_action_t *action) {
     aiofn_libuv_state_t *state = data;
     uv_timer_t *timer = action->backend_token;
     int result = uv_timer_stop(timer);
@@ -956,7 +960,8 @@ aiofn_loop_backend_t *aiofn_libuv_backend_new(void) {
     state->backend.now_ns = aiofn_libuv_now_ns;
     state->backend.call_soon = aiofn_libuv_call_soon;
     state->backend.call_at = aiofn_libuv_call_at;
-    state->backend.action_cancel = aiofn_libuv_action_cancel;
+    state->backend.call_soon_cancel = aiofn_libuv_timer_cancel;
+    state->backend.call_at_cancel = aiofn_libuv_timer_cancel;
 
     state->reactor.struct_size = AIOFN_REACTOR_BACKEND_CURRENT_SIZE;
     state->reactor.add_reader = aiofn_libuv_add_reader;

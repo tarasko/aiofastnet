@@ -170,8 +170,11 @@ cdef class Handle:
             self._callback = None
             self._args = None
             if self._is_pending:
-                self._loop._check_status(self._loop._backend.action_cancel(self._loop._backend.state, &self._action))
+                self._loop._check_status(self._backend_cancel())
                 self._loop._unlink_handle(self)
+
+    cdef aiofn_loop_status _backend_cancel(self):
+        return self._loop._backend.call_soon_cancel(self._loop._backend.state, &self._action)
 
     cpdef bint cancelled(self):
         return self._is_cancelled
@@ -230,6 +233,9 @@ cdef class Handle:
 
 cdef class TimerHandle(Handle):
     # Use create_timer_handle to construct instances
+
+    cdef aiofn_loop_status _backend_cancel(self):
+        return self._loop._backend.call_at_cancel(self._loop._backend.state, &self._action)
 
     def __hash__(self):
         return hash(self._when)
@@ -476,9 +482,9 @@ cdef class _SelfPipe:
         return NoResult.OK
 
 
-cdef void _action_callback(aiofn_loop_action_t *action) noexcept with gil:
+cdef void _action_callback(void *callback_data) noexcept with gil:
     cdef:
-        Handle handle = <Handle>action.callback_data
+        Handle handle = <Handle>callback_data
         LoopBase loop = handle._loop
     try:
         loop._unlink_handle(handle)
@@ -598,8 +604,8 @@ cdef class LoopBase:
         # An intrusive list of callbacks registered in the backend with call_soon and call_at.
         # * it keeps each Handle alive while the backend retains a pointer to its embedded aiofn_loop_action_t.
         #   The caller may immediately discard the returned Python handle.
-        # * it lets LoopBase.close() enumerate pending actions, call action_cancel(), and release backend-native
-        #   resources before closing the backend.
+        # * it lets LoopBase.close() enumerate pending actions, call call_soon_cancel()/call_at_cancel(), and
+        #   release backend-native resources before closing the backend.
         # * this simplifies backend implementation as it does not have to keep a list of active events
         Handle _pending_handles
 
@@ -662,7 +668,7 @@ cdef class LoopBase:
 
         if (backend_ptr.state == NULL or backend_ptr.run == NULL or backend_ptr.stop == NULL or backend_ptr.close == NULL or
                 backend_ptr.now_ns == NULL or backend_ptr.call_soon == NULL or backend_ptr.call_at == NULL or
-                backend_ptr.action_cancel == NULL or
+                backend_ptr.call_soon_cancel == NULL or backend_ptr.call_at_cancel == NULL or
                 backend_ptr.signal_watch == NULL or
                 backend_ptr.signal_unwatch == NULL):
             raise ValueError("loop backend is missing a required operation")

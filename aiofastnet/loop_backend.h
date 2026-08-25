@@ -27,32 +27,21 @@ enum {
     AIOFN_LOOP_NOT_SUPPORTED = 3
 };
 
-
-typedef struct aiofn_loop_action aiofn_loop_action_t;
-
-typedef void (*aiofn_loop_callback_fn)(aiofn_loop_action_t *action);
-
 // Frontend-owned storage shared with the backend for one-shot callbacks and
 // timers. The frontend initializes callback and callback_data. The backend
 // stores its native cancellation token in backend_token while the action is
 // pending and clears it before invoking callback or successfully cancelling it.
-typedef struct aiofn_loop_action {
-    aiofn_loop_callback_fn callback;
+typedef struct {
+    void (*callback)(void *callback_data);
     void *callback_data;
     void *backend_token;
 } aiofn_loop_action_t;
-
-
-typedef void (*aiofn_loop_signal_fn)(
-    void *callback_data,
-    int signum
-);
 
 // Frontend-owned storage for one persistent signal watch. The frontend
 // initializes callback and callback_data. The backend stores its native
 // registration token in backend_token while the watch is active.
 typedef struct {
-    aiofn_loop_signal_fn callback;
+    void (*callback)(void *callback_data, int signum);
     void *callback_data;
     void *backend_token;
 } aiofn_loop_signal_watch_t;
@@ -118,50 +107,42 @@ typedef struct {
 
     // Schedule action. action->callback must not be called inline. Successive
     // calls are delivered in FIFO order. On success, the backend borrows action
-    // until completion or action_cancel() succeeds and stores a non-NULL native
-    // token in action->backend_token. On failure, it does not retain action and
-    // leaves backend_token NULL.
-    aiofn_loop_status (*call_soon)(
-        void *state,
-        aiofn_loop_action_t *action
-    );
+    // until completion or call_soon_cancel() succeeds and stores a non-NULL
+    // native token in action->backend_token. On failure, it does not retain
+    // action and leaves backend_token NULL.
+    aiofn_loop_status (*call_soon)(void *state, aiofn_loop_action_t *action);
 
     // Schedule action once at an absolute deadline on the now_ns() clock. A
     // deadline at or before now is still deferred. The ownership and token
-    // rules are the same as call_soon().
-    aiofn_loop_status (*call_at)(
-        void *state,
-        aiofn_loop_action_t *action,
-        uint64_t deadline_ns
-    );
+    // rules are the same as call_soon(), except cancellation goes through
+    // call_at_cancel() instead.
+    aiofn_loop_status (*call_at)(void *state, aiofn_loop_action_t *action, uint64_t deadline_ns);
 
-    // Notify the backend that an action registered by call_soon() or call_at()
-    // was cancelled. User-visible cancellation is owned by the frontend, which
+    // Notify the backend that an action registered by call_soon() was
+    // cancelled. User-visible cancellation is owned by the frontend, which
     // will never execute a cancelled action. On success, the backend clears
     // backend_token and synchronously guarantees that it will neither invoke
     // callback nor access action later, allowing the frontend to release it
     // immediately. It does not call callback.
-    aiofn_loop_status (*action_cancel)(void *state, aiofn_loop_action_t *action);
+    aiofn_loop_status (*call_soon_cancel)(void *state, aiofn_loop_action_t *action);
+
+    // Notify the backend that an action registered by call_at() was
+    // cancelled. Same contract as call_soon_cancel(), for actions scheduled
+    // through call_at() instead.
+    aiofn_loop_status (*call_at_cancel)(void *state, aiofn_loop_action_t *action);
 
     // Add a persistent watch for signum. The frontend owns watch and keeps it
     // alive until signal_unwatch() succeeds. The callback runs during normal
     // event dispatch, never directly from an OS signal handler and never inline
     // from signal_watch(). There is at most one watch for each signal number.
     // Aiofastnet retains ownership of callback_data.
-    aiofn_loop_status (*signal_watch)(
-        void *state,
-        int signum,
-        aiofn_loop_signal_watch_t *watch
-    );
+    aiofn_loop_status (*signal_watch)(void *state, int signum, aiofn_loop_signal_watch_t *watch);
 
     // Remove a signal watch. On success, its callback will not be called
     // later, the adapter no longer accesses callback_data, watch becomes
     // invalid, and the process-level disposition for signum is restored to
     // what it was before signal_watch().
-    aiofn_loop_status (*signal_unwatch)(
-        void *state,
-        aiofn_loop_signal_watch_t *watch
-    );
+    aiofn_loop_status (*signal_unwatch)(void *state, aiofn_loop_signal_watch_t *watch);
 
     // Optional diagnostic for the most recent failed operation. The returned
     // UTF-8 string remains valid until the next backend operation. It may be
