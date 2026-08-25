@@ -7,7 +7,7 @@ from aiofastnet.loop_backend cimport AIOFN_LOOP_BACKEND_CAPSULE_NAME, aiofn_loop
 
 
 cdef extern from "uring_backend.h":
-    aiofn_loop_backend_t *aiofn_uring_backend_new() noexcept nogil
+    aiofn_loop_backend_t *aiofn_uring_backend_new(int busy_poll, int sqpoll) noexcept nogil
     void aiofn_uring_backend_free(aiofn_loop_backend_t *) noexcept nogil
 
 
@@ -24,10 +24,27 @@ class UringLoop(LoopBase, asyncio.AbstractEventLoop):
 EventLoop = UringLoop
 
 
-def new_event_loop():
-    """Create an aiofastnet event loop backed directly by liburing."""
-    cdef aiofn_loop_backend_t *backend = aiofn_uring_backend_new()
+def new_event_loop(bint busy_poll=False, bint sqpoll=False):
+    """Create an aiofastnet event loop backed directly by liburing.
+
+    busy_poll=True spins on the completion queue instead of blocking in the
+    kernel between events: no wake-up scheduling latency, at the cost of one
+    CPU core pegged at 100% for as long as the loop runs, idle or not.
+
+    sqpoll=True offloads SQE submission to a dedicated kernel polling
+    thread (IORING_SETUP_SQPOLL), removing the submission-side syscall too.
+    Independent of busy_poll; combine both for the fewest syscalls on the
+    hot path. May need a newer kernel or elevated privileges depending on
+    the host's io_uring restrictions.
+    """
+    cdef aiofn_loop_backend_t *backend = aiofn_uring_backend_new(busy_poll, sqpoll)
     if backend == NULL:
+        if sqpoll:
+            raise MemoryError(
+                "could not initialize the uring backend with sqpoll=True "
+                "(IORING_SETUP_SQPOLL may need a newer kernel or elevated "
+                "privileges on this host)"
+            )
         raise MemoryError("could not initialize the uring backend")
 
     try:

@@ -1,3 +1,4 @@
+import cython
 from libc.stdint cimport int64_t, intptr_t
 
 from .loop_backend cimport aiofn_loop_buffer_t
@@ -110,6 +111,8 @@ cdef class Protocol:
     cpdef Py_ssize_t get_local_write_buffer_size(self) except -1
 
 
+@cython.no_gc_clear
+@cython.freelist(256)
 cdef class WriteRequest:
     cdef:
         object data

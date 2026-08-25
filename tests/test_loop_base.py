@@ -572,3 +572,81 @@ async def test_loop_base_is_abstract_event_loop(test_loop, loop_module):
 async def test_addrinfo(test_loop):
     res = await test_loop.getaddrinfo("google.com", 80)
     print(res)
+
+
+async def _uring_mode_scenario(loop):
+    """Exercises call_soon, a timer, and a proactor read/write round trip -
+    shared by the uring busy_poll/sqpoll mode tests below, none of which go
+    through the libuv/uring test_loop fixture since new_event_loop() there
+    takes extra kwargs that only tests.uring_loop understands."""
+    called = []
+    loop.call_soon(called.append, "soon")
+
+    timer_done = loop.create_future()
+    loop.call_later(0.01, timer_done.set_result, "timer")
+    assert await timer_done == "timer"
+    assert called == ["soon"]
+
+    peer, client = _tcp_socketpair()
+    peer.setblocking(False)
+    client.setblocking(False)
+
+    class ClientProtocol(asyncio.Protocol):
+        def connection_made(self, transport):
+            transport.write(b"uring mode smoke test")
+
+        def data_received(self, data):
+            echoed.set_result(data)
+
+    echoed = loop.create_future()
+    loop.add_reader(peer, lambda: peer.send(peer.recv(1024)))
+    transport = None
+    try:
+        transport, _protocol = await loop.create_connection(ClientProtocol, sock=client)
+        assert await echoed == b"uring mode smoke test"
+    finally:
+        if transport is None:
+            client.close()
+        else:
+            transport.close()
+        loop.remove_reader(peer)
+        await asyncio.sleep(0)
+    peer.close()
+
+
+def _run_uring_mode(**kwargs):
+    from tests.uring_loop import new_event_loop
+
+    try:
+        loop = new_event_loop(**kwargs)
+    except MemoryError as exc:
+        pytest.skip(f"uring backend rejected new_event_loop({kwargs}): {exc}")
+        return
+    try:
+        loop.run_until_complete(_uring_mode_scenario(loop))
+    finally:
+        loop.close()
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the uring test backend is Linux-only")
+def test_uring_busy_poll_mode():
+    """busy_poll=True must never block in the kernel; see
+    aiofn_uring_run_busy_poll() in tests/uring_backend.c."""
+    _run_uring_mode(busy_poll=True)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the uring test backend is Linux-only")
+def test_uring_sqpoll_mode():
+    """sqpoll=True (IORING_SETUP_SQPOLL) offloads SQE submission to a kernel
+    poll thread. Not every kernel/container allows it - observed -EINVAL for
+    SQPOLL combined with DEFER_TASKRUN or COOP_TASKRUN, which is why
+    aiofn_uring_backend_new() drops both when sqpoll is requested - so skip
+    rather than fail if this host rejects it outright."""
+    _run_uring_mode(sqpoll=True)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the uring test backend is Linux-only")
+def test_uring_busy_poll_and_sqpoll_mode():
+    """The combination that matters most for latency-sensitive use (e.g.
+    HFT): no blocking wait on the completion side, no syscall on submission."""
+    _run_uring_mode(busy_poll=True, sqpoll=True)

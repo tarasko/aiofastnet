@@ -141,6 +141,13 @@ typedef struct aiofn_uring_handle {
 
     aiofn_loop_proactor_op_t *write_op;
     struct msghdr write_msg; /* only used for a socket write with >1 buffer */
+    /* Mutable working copy of the frontend's buffers, trimmed as partial
+       completions land; see aiofn_uring_write()/aiofn_uring_issue_write().
+       Sized to match AIOFN_MAX_IOVEC (aiofastnet/utils.pxd), the frontend's
+       own cap on buffers passed to write() in one call. */
+    struct iovec write_iov[256];
+    size_t write_iov_count;
+    size_t write_total; /* sum of all buffer lengths at submission time */
 
     aiofn_loop_proactor_op_t *sendto_op;
     aiofn_loop_proactor_op_t *connect_op;
@@ -156,6 +163,7 @@ typedef struct {
     struct io_uring ring;
     int closed;
     int stop_requested;
+    int busy_poll;
     char last_error[256];
 
     aiofn_uring_ready_node_t *ready_head;
@@ -318,9 +326,70 @@ static uint64_t aiofn_uring_now_ns(void *data) {
 
 static void aiofn_uring_dispatch_cqe(aiofn_uring_state_t *state, struct io_uring_cqe *cqe);
 
+/* A pause/yield instruction for spin-wait loops: tells the CPU this is a
+   busy-wait, which cuts power draw a little and (on hyperthreaded parts)
+   frees the physical core's other logical thread, without adding any real
+   latency to noticing new work - unlike sched_yield(), it never gives the
+   CPU away. */
+static inline void aiofn_uring_spin_hint(void) {
+#if defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#elif defined(__aarch64__)
+    __asm__ __volatile__("yield");
+#endif
+}
+
+/* Busy-poll run loop: never blocks in the kernel, for the lowest possible
+   completion-to-dispatch latency (no sleep/wake scheduling delay) at the
+   cost of pegging one CPU core at 100% for as long as the loop runs, even
+   when idle. Intended for latency-sensitive deployments (e.g. HFT) willing
+   to trade a dedicated core for shaving off wake-up latency.
+
+   io_uring_submit_and_get_events() - not a plain non-blocking submit - is
+   required here: this ring is set up with IORING_SETUP_DEFER_TASKRUN, which
+   means completions are *not* posted to the CQE ring until the application
+   explicitly asks via IORING_ENTER_GETEVENTS. A pure userspace spin on the
+   CQE ring's memory alone would just hang forever - nothing kernel-side
+   would ever wake it, since we've told the kernel not to interrupt us. This
+   call still traps into the kernel every iteration (so it isn't a truly
+   syscall-free spin), but it never sleeps: it always returns immediately,
+   which is what removes the scheduler wake-up latency a blocking wait pays. */
+static aiofn_loop_status aiofn_uring_run_busy_poll(aiofn_uring_state_t *state) {
+    while (!state->stop_requested) {
+        aiofn_uring_drain_ready(state);
+        if (state->stop_requested) {
+            break;
+        }
+
+        int ret = io_uring_submit_and_get_events(&state->ring);
+        if (ret < 0 && ret != -EAGAIN && ret != -EINTR) {
+            aiofn_uring_set_error(state, "io_uring_submit_and_get_events", ret);
+            return AIOFN_LOOP_ERROR;
+        }
+
+        unsigned head;
+        unsigned count = 0;
+        struct io_uring_cqe *c;
+        io_uring_for_each_cqe(&state->ring, head, c) {
+            aiofn_uring_dispatch_cqe(state, c);
+            count++;
+        }
+        if (count > 0) {
+            io_uring_cq_advance(&state->ring, count);
+        } else {
+            aiofn_uring_spin_hint();
+        }
+    }
+    return AIOFN_LOOP_OK;
+}
+
 static aiofn_loop_status aiofn_uring_run(void *data) {
     aiofn_uring_state_t *state = data;
     state->stop_requested = 0;
+
+    if (state->busy_poll) {
+        return aiofn_uring_run_busy_poll(state);
+    }
 
     while (!state->stop_requested) {
         aiofn_uring_drain_ready(state);
@@ -662,6 +731,55 @@ static aiofn_loop_status aiofn_uring_connect(
 
 /* ---- proactor: write ---- */
 
+/* Submit handle->write_iov[0 .. write_iov_count) as one SQE. Used both for
+   the initial submission and to re-arm after a partial completion. */
+static aiofn_loop_status aiofn_uring_issue_write(aiofn_uring_state_t *state, aiofn_uring_handle_t *handle) {
+    struct io_uring_sqe *sqe = aiofn_uring_get_sqe(state);
+    if (sqe == NULL) {
+        return AIOFN_LOOP_NO_MEMORY;
+    }
+    handle->pending_sqes++;
+    /* send/sendmsg measurably outperform write/writev on sockets, so use
+       them there; pipes (and other non-socket fds) don't support send(2) at
+       all (ENOTSOC), so they still go through write/writev. POLL_FIRST
+       skips the initial "try the transfer, arm poll on EAGAIN" attempt in
+       favor of waiting for readiness upfront - the same "unneeded read that
+       returns EAGAIN" cost we traced back at the very start of this backend
+       also applies to sends, and this flag is the direct fix for it. */
+    if (handle->kind == AIOFN_LOOP_PROACTOR_HANDLE_SOCKET) {
+        if (handle->write_iov_count == 1) {
+            io_uring_prep_send(sqe, handle->fd, handle->write_iov[0].iov_base, handle->write_iov[0].iov_len, 0);
+        } else {
+            memset(&handle->write_msg, 0, sizeof(handle->write_msg));
+            handle->write_msg.msg_iov = handle->write_iov;
+            handle->write_msg.msg_iovlen = handle->write_iov_count;
+            io_uring_prep_sendmsg(sqe, handle->fd, &handle->write_msg, 0);
+        }
+        sqe->ioprio |= IORING_RECVSEND_POLL_FIRST;
+    } else {
+        io_uring_prep_writev(sqe, handle->fd, handle->write_iov, (unsigned)handle->write_iov_count, 0);
+    }
+    io_uring_sqe_set_data64(sqe, aiofn_uring_tag(handle, AIOFN_URING_KIND_HANDLE_WRITE));
+    return AIOFN_LOOP_OK;
+}
+
+/* Trim n fully/partially-consumed bytes off the front of iov[0 .. *count). */
+static void aiofn_uring_advance_iovec(struct iovec *iov, size_t *count, size_t n) {
+    size_t consumed = 0;
+    while (consumed < *count && n >= iov[consumed].iov_len) {
+        n -= iov[consumed].iov_len;
+        consumed++;
+    }
+    if (consumed > 0) {
+        memmove(iov, iov + consumed, (*count - consumed) * sizeof(*iov));
+        *count -= consumed;
+    }
+    if (*count > 0 && n > 0) {
+        iov[0].iov_base = (char *)iov[0].iov_base + n;
+        iov[0].iov_len -= n;
+    }
+}
+
 static aiofn_loop_status aiofn_uring_write(
     void *data,
     aiofn_loop_proactor_handle_t *frontend,
@@ -672,42 +790,27 @@ static aiofn_loop_status aiofn_uring_write(
     aiofn_uring_state_t *state = data;
     aiofn_uring_handle_t *handle = frontend->backend_token;
 
+    /* aiofn_loop_buffer_t is layout-identical to struct iovec (see the ABI
+       header). Copy into our own working array: the frontend's buffers[]
+       pointer/contents are only guaranteed to outlive this call, but we may
+       resubmit several times (on partial completions) before calling back. */
+    handle->write_total = 0;
+    for (size_t i = 0; i < buffer_count; i++) {
+        handle->write_iov[i].iov_base = buffers[i].iov_base;
+        handle->write_iov[i].iov_len = buffers[i].iov_len;
+        handle->write_total += buffers[i].iov_len;
+    }
+    handle->write_iov_count = buffer_count;
+
     handle->write_op = op;
     op->backend_token = handle;
 
-    struct io_uring_sqe *sqe = aiofn_uring_get_sqe(state);
-    if (sqe == NULL) {
+    aiofn_loop_status status = aiofn_uring_issue_write(state, handle);
+    if (status != AIOFN_LOOP_OK) {
         handle->write_op = NULL;
         op->backend_token = NULL;
-        return AIOFN_LOOP_NO_MEMORY;
     }
-    handle->pending_sqes++;
-    /* aiofn_loop_buffer_t is layout-identical to struct iovec (see the ABI
-       header); a partial completion here is fine - the frontend already
-       consumes op->transferred and resubmits the remainder itself.
-
-       send/sendmsg measurably outperform write/writev on sockets, so use
-       them there; pipes (and other non-socket fds) don't support send(2) at
-       all (ENOTSOCK), so they still go through write/writev. POLL_FIRST
-       skips the initial "try the transfer, arm poll on EAGAIN" attempt in
-       favor of waiting for readiness upfront - the same "unneeded read that
-       returns EAGAIN" cost we traced back at the very start of this backend
-       also applies to sends, and this flag is the direct fix for it. */
-    if (handle->kind == AIOFN_LOOP_PROACTOR_HANDLE_SOCKET) {
-        if (buffer_count == 1) {
-            io_uring_prep_send(sqe, handle->fd, buffers[0].iov_base, buffers[0].iov_len, 0);
-        } else {
-            memset(&handle->write_msg, 0, sizeof(handle->write_msg));
-            handle->write_msg.msg_iov = (struct iovec *)buffers;
-            handle->write_msg.msg_iovlen = buffer_count;
-            io_uring_prep_sendmsg(sqe, handle->fd, &handle->write_msg, 0);
-        }
-        sqe->ioprio |= IORING_RECVSEND_POLL_FIRST;
-    } else {
-        io_uring_prep_writev(sqe, handle->fd, (const struct iovec *)buffers, (unsigned)buffer_count, 0);
-    }
-    io_uring_sqe_set_data64(sqe, aiofn_uring_tag(handle, AIOFN_URING_KIND_HANDLE_WRITE));
-    return AIOFN_LOOP_OK;
+    return status;
 }
 
 /* ---- proactor: sendto ---- */
@@ -771,11 +874,45 @@ static aiofn_loop_status aiofn_uring_cancel(void *data, aiofn_loop_proactor_op_t
     return AIOFN_LOOP_OK;
 }
 
+/* Stream write completion: re-arms on a partial send/write and only reports
+   back to the frontend once the whole buffer set has gone out (or it fails).
+   This keeps every intermediate partial completion inside the backend - no
+   Cython/GIL round trip per kernel-level partial send - matching how
+   blazio/zio's Zig transport handles it and avoiding the per-chunk overhead
+   that dominates large writes under a constrained SO_SNDBUF. */
 static void aiofn_uring_handle_write_completed(aiofn_uring_state_t *state, aiofn_uring_handle_t *handle, int res) {
     handle->pending_sqes--;
 
-    aiofn_loop_proactor_op_t *op = handle->write_op != NULL ? handle->write_op : handle->sendto_op;
-    handle->write_op = NULL;
+    if (handle->write_op != NULL) {
+        aiofn_loop_proactor_op_t *op = handle->write_op;
+
+        if (res < 0) {
+            handle->write_op = NULL;
+            aiofn_uring_set_error(state, "write", res);
+            aiofn_uring_complete(op, AIOFN_LOOP_ERROR, 0);
+            aiofn_uring_maybe_free_handle(handle);
+            return;
+        }
+
+        aiofn_uring_advance_iovec(handle->write_iov, &handle->write_iov_count, (size_t)res);
+        if (handle->write_iov_count > 0) {
+            aiofn_loop_status status = aiofn_uring_issue_write(state, handle);
+            if (status != AIOFN_LOOP_OK) {
+                handle->write_op = NULL;
+                aiofn_uring_set_error(state, "write", -ENOMEM);
+                aiofn_uring_complete(op, AIOFN_LOOP_ERROR, 0);
+            }
+            aiofn_uring_maybe_free_handle(handle);
+            return;
+        }
+
+        handle->write_op = NULL;
+        aiofn_uring_complete(op, AIOFN_LOOP_OK, handle->write_total);
+        aiofn_uring_maybe_free_handle(handle);
+        return;
+    }
+
+    aiofn_loop_proactor_op_t *op = handle->sendto_op;
     handle->sendto_op = NULL;
     if (op == NULL) {
         aiofn_uring_maybe_free_handle(handle);
@@ -1121,21 +1258,52 @@ static const char *aiofn_uring_last_error(void *data) {
     return state->last_error[0] == '\0' ? "unknown uring backend error" : state->last_error;
 }
 
-aiofn_loop_backend_t *aiofn_uring_backend_new(void) {
+aiofn_loop_backend_t *aiofn_uring_backend_new(int busy_poll, int sqpoll) {
     aiofn_uring_state_t *state = calloc(1, sizeof(*state));
     if (state == NULL) {
         return NULL;
     }
     state->signal_pipe_read = -1;
     state->signal_pipe_write = -1;
+    state->busy_poll = busy_poll;
 
     /* Every backend operation runs on the loop thread only (see the ABI's
        threading contract), so the modern single-issuer flags are always
        safe here: no locking, no cross-CPU wakeups, task work only runs when
-       we explicitly ask for it via io_uring_submit_and_wait_timeout(). */
+       we explicitly ask for it via io_uring_submit_and_wait_timeout() (or,
+       in busy-poll mode, io_uring_submit_and_get_events()).
+
+       sqpoll (IORING_SETUP_SQPOLL) hands submission to a dedicated kernel
+       thread that polls the SQ ring on its own: liburing's submit helpers
+       already skip the enter() syscall whenever that thread hasn't gone
+       idle (see sq_ring_needs_enter() in liburing), so every
+       io_uring_get_sqe()+prep call site in this file benefits automatically,
+       with no other changes needed here.
+
+       It does NOT compose with DEFER_TASKRUN or COOP_TASKRUN, though -
+       verified empirically, not just from docs: io_uring_queue_init_params()
+       returns -EINVAL for SQPOLL|DEFER_TASKRUN and for SQPOLL|COOP_TASKRUN
+       alike (both interrupt/task-work-delivery flags assume the *calling*
+       thread is the one running submissions; under SQPOLL that's the kernel
+       poll thread instead, so drop both and fall back to task work being
+       delivered the traditional way - an immediate interrupt to whichever
+       thread owns the ring). io_uring_submit_and_get_events() (used by
+       busy-poll mode) stays correct regardless: its GETEVENTS flag always
+       flushes whatever's ready without blocking, whether or not
+       DEFER_TASKRUN is in play.
+
+       May need a newer kernel or elevated privileges depending on the
+       distro's io_uring restrictions; io_uring_queue_init_params() below
+       simply fails if so, and the Python-level new_event_loop() surfaces
+       that. */
     struct io_uring_params params;
     memset(&params, 0, sizeof(params));
-    params.flags = IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN | IORING_SETUP_COOP_TASKRUN;
+    params.flags = IORING_SETUP_SINGLE_ISSUER;
+    if (sqpoll) {
+        params.flags |= IORING_SETUP_SQPOLL;
+    } else {
+        params.flags |= IORING_SETUP_DEFER_TASKRUN | IORING_SETUP_COOP_TASKRUN;
+    }
 
     int result = io_uring_queue_init_params(256, &state->ring, &params);
     if (result < 0) {

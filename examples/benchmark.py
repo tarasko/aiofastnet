@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import functools
 import logging
 import math
 import socket
@@ -35,7 +36,9 @@ except ImportError:
 
 UDP_MAX_PAYLOAD_SIZE = 65507
 SUPPORTED_TRANSPORTS = ["ssl", "tcp", "udp"]
-SUPPORTED_LOOPS = ["asyncio", "uvloop", "blazio", "libuv", "uring", "zuvloop"]
+SUPPORTED_LOOPS = [
+    "asyncio", "uvloop", "blazio", "libuv", "uring", "uring-busy", "uring-sqpoll", "uring-busy-sqpoll", "zuvloop",
+]
 
 
 def _round_msg_size(msg_size: int, chunks: int) -> int:
@@ -377,6 +380,14 @@ def main():
                         loop_factory = tests.libuv_loop.new_event_loop
                     elif loop_kind == "uring":
                         loop_factory = tests.uring_loop.new_event_loop
+                    elif loop_kind == "uring-busy":
+                        loop_factory = functools.partial(tests.uring_loop.new_event_loop, busy_poll=True)
+                    elif loop_kind == "uring-sqpoll":
+                        loop_factory = functools.partial(tests.uring_loop.new_event_loop, sqpoll=True)
+                    elif loop_kind == "uring-busy-sqpoll":
+                        loop_factory = functools.partial(
+                            tests.uring_loop.new_event_loop, busy_poll=True, sqpoll=True
+                        )
                     else:
                         loop_factory = asyncio.SelectorEventLoop
                     rps = asyncio.run(
