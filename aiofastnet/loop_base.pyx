@@ -203,6 +203,10 @@ cdef class Handle:
         return format_helpers._format_callback_source(self._callback, self._args)
 
 
+cdef class SignalHandle(Handle):
+    cdef object _old_handler
+
+
 # Handles created by call_soon and call_at are chained via linked list.
 # This is done in order to keep track of them and properly destroy them when loop.close() is called
 # Loop doesn't use a regular container for like list because inserting and deleting is more expensive
@@ -307,6 +311,13 @@ cdef inline Handle create_handle(callback, args, LoopBase loop, context=None):
     return self
 
 
+cdef inline SignalHandle create_signal_handle(callback, args, LoopBase loop, old_handler):
+    cdef SignalHandle self = <SignalHandle>SignalHandle.__new__(SignalHandle)
+    self._init(callback, args, loop, None)
+    self._old_handler = old_handler
+    return self
+
+
 cdef inline PendingHandle create_pending_handle(callback, args, LoopBase loop, context=None):
     cdef PendingHandle self = <PendingHandle>PendingHandle.__new__(PendingHandle)
     self._init_pending_handle(callback, args, loop, context)
@@ -354,20 +365,6 @@ cdef class _FDCallbacks:
         self.writer = None
         self.reader_fileobj = None
         self.writer_fileobj = None
-
-
-cdef class _SignalCallback:
-    cdef:
-        Handle handle
-        int signum
-        # Value to pass back to signal.signal() on removal, restoring
-        # whatever disposition was in place before add_signal_handler().
-        object old_handler
-
-    def __init__(self, Handle handle, int signum, object old_handler):
-        self.handle = handle
-        self.signum = signum
-        self.old_handler = old_handler
 
 
 cdef void _threadsafe_ready_callback(void *callback_data, int read_ready, int write_ready) noexcept with gil:
@@ -595,7 +592,7 @@ cdef class _SignalPipe:
             Py_ssize_t idx
             int last_error
             int signum
-            _SignalCallback signal_callback
+            SignalHandle signal_handle
 
         while True:
             with nogil:
@@ -611,9 +608,9 @@ cdef class _SignalPipe:
 
         for idx in range(bytes_read):
             signum = buf[idx]
-            signal_callback = self.loop._signal_handlers.get(signum)
-            if signal_callback is not None:
-                signal_callback.handle._run()
+            signal_handle = self.loop._signal_handlers.get(signum)
+            if signal_handle is not None:
+                signal_handle._run()
         return NoResult.OK
 
     cdef inline NoResult close(self) except NoResult.EXC:
@@ -735,7 +732,7 @@ cdef class LoopBase:
         object _backend_fatal_error
 
         dict _fd_callbacks      # Dict[Fileno, _FDCallbacks]
-        dict _signal_handlers   # Dict[Signal, _SignalCallback]
+        dict _signal_handlers   # Dict[Signal, SignalHandle]
 
         # An intrusive list of callbacks registered in the backend with call_soon and call_at.
         # * it keeps each Handle alive while the backend retains a pointer to its embedded aiofn_loop_action_t.
@@ -1074,7 +1071,8 @@ cdef class LoopBase:
     cpdef close(self):
         cdef:
             _FDCallbacks fd_callback
-            _SignalCallback signal_callback
+            int signum
+            SignalHandle signal_handle
 
         self._self_pipe.acquire()
         try:
@@ -1089,8 +1087,8 @@ cdef class LoopBase:
 
         self._self_pipe.close()
 
-        for signal_callback in self._signal_handlers.values():
-            signal.signal(signal_callback.signum, signal_callback.old_handler)
+        for signum, signal_handle in self._signal_handlers.items():
+            signal.signal(signum, signal_handle._old_handler)
         self._signal_handlers = None
         if self._signal_pipe is not None:
             self._signal_pipe.close()
@@ -1367,33 +1365,34 @@ cdef class LoopBase:
         self._check_closed()
 
         cdef:
-            Handle handle = create_handle(callback, args, self)
-            _SignalCallback signal_callback = self._signal_handlers.get(sig)
+            SignalHandle signal_handle = self._signal_handlers.get(sig)
+            SignalHandle new_handle
 
-        if signal_callback is not None:
-            signal_callback.handle.cancel()
-            signal_callback.handle = handle
+        if signal_handle is not None:
+            new_handle = create_signal_handle(callback, args, self, signal_handle._old_handler)
+            self._signal_handlers[sig] = new_handle
+            signal_handle.cancel()
             return
 
         old_handler = signal.signal(sig, _signal_noop_handler)
         try:
             if self._signal_pipe is None:
                 self._signal_pipe = _SignalPipe(self)
+            self._signal_handlers[sig] = create_signal_handle(callback, args, self, old_handler)
         except:
             signal.signal(sig, old_handler)
             raise
-        self._signal_handlers[sig] = _SignalCallback(handle, sig, old_handler)
 
     def remove_signal_handler(self, sig):
         self._check_signal(sig)
         self._check_thread()
         self._check_closed()
 
-        cdef _SignalCallback signal_callback = self._signal_handlers.get(sig)
-        if signal_callback is None:
+        cdef SignalHandle signal_handle = self._signal_handlers.get(sig)
+        if signal_handle is None:
             return False
 
-        signal.signal(sig, signal_callback.old_handler)
+        signal.signal(sig, signal_handle._old_handler)
         self._signal_handlers.pop(sig, None)
         return True
 
