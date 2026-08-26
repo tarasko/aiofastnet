@@ -386,7 +386,7 @@ def main():
                         loop_factory = functools.partial(tests.uring_loop.new_event_loop, sqpoll=True)
                     elif loop_kind == "uring-busy-sqpoll":
                         loop_factory = functools.partial(
-                            tests.uring_loop.new_event_loop, busy_poll=True, sqpoll=True
+                            tests.uring_loop.new_event_loop, busy_poll=True, sqpoll=False
                         )
                     else:
                         loop_factory = asyncio.SelectorEventLoop

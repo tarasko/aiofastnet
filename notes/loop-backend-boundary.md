@@ -42,7 +42,7 @@ On successful scheduling, the backend borrows the action until callback invocati
 
 The frontend-owned `_SelfPipe` implements `SelectorLoopBase.call_soon_threadsafe()` by writing an owned handle pointer to a private nonblocking pipe. It owns the lifecycle lock, pipe descriptors, and persistent backend fd watch. Its readiness callback executes a bounded batch immediately on the loop thread, and closing the loop cancels every handle still in the pipe. The pipe is therefore both the cross-thread queue and wakeup mechanism; adapters implement no cross-thread operation.
 
-The fd adapter calls `callback(callback_data, events)` immediately when readiness is reported. The function executes the current Python reader and/or writer handle before returning to the native backend. It must not route the handle through `call_soon()` or add another native scheduling round trip. This keeps the transport read and write paths on the native readiness callback's critical path.
+The fd adapter calls `callback(callback_data, read_ready, write_ready)` immediately when readiness is reported. The function executes the current Python reader and/or writer handle before returning to the native backend. It must not route the handle through `call_soon()` or add another native scheduling round trip. This keeps the transport read and write paths on the native readiness callback's critical path.
 
 If READ and WRITE are reported together, `SelectorLoopBase` snapshots the registrations and invokes the reader first. It must revalidate the watch and writer registration after the reader returns because the reader may close the fd, remove the writer, or replace either callback. A callback installed during readiness dispatch is not eligible for the event currently being dispatched.
 

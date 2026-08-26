@@ -39,8 +39,6 @@ from .loop_backend cimport (
     AIOFN_LOOP_BACKEND_MIN_SIZE,
     AIOFN_REACTOR_BACKEND_MIN_SIZE,
     AIOFN_PROACTOR_BACKEND_MIN_SIZE,
-    AIOFN_LOOP_FD_READ,
-    AIOFN_LOOP_FD_WRITE,
     AIOFN_LOOP_NOT_SUPPORTED,
     AIOFN_LOOP_NO_MEMORY,
     AIOFN_LOOP_OK,
@@ -74,7 +72,7 @@ from cpython.pythread cimport (
     PyThread_type_lock,
 )
 from libc.errno cimport EAGAIN, EINTR, errno
-from libc.stdint cimport uint32_t, uint64_t, uint8_t
+from libc.stdint cimport uint64_t, uint8_t
 from posix.unistd cimport close as posix_close, read as posix_read, write as posix_write
 
 cdef:
@@ -332,10 +330,10 @@ cdef class _SignalCallback:
         self.signum = signum
 
 
-cdef void _threadsafe_ready_callback(void *callback_data, uint32_t events) noexcept with gil:
+cdef void _threadsafe_ready_callback(void *callback_data, int read_ready, int write_ready) noexcept with gil:
     cdef _SelfPipe self_pipe = <_SelfPipe>callback_data
     try:
-        if events & AIOFN_LOOP_FD_READ:
+        if read_ready:
             self_pipe.process(True)
     except BaseException as exc:
         self_pipe.loop._backend_failed(exc)
@@ -557,12 +555,12 @@ cdef class ProactorHandle:
     pass
 
 
-cdef void _fd_ready_callback(void *callback_data, uint32_t events) noexcept with gil:
+cdef void _fd_ready_callback(void *callback_data, int read_ready, int write_ready) noexcept with gil:
     cdef _FDCallbacks callbacks = <_FDCallbacks>callback_data
     try:
-        if events & AIOFN_LOOP_FD_READ and callbacks.reader is not None:
+        if read_ready and callbacks.reader is not None:
             callbacks.reader._run()
-        if events & AIOFN_LOOP_FD_WRITE and callbacks.writer is not None:
+        if write_ready and callbacks.writer is not None:
             callbacks.writer._run()
     except BaseException as exc:
         callbacks.loop._backend_failed(exc)

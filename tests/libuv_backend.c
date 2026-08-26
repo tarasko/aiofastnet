@@ -92,23 +92,20 @@ static void aiofn_libuv_on_action(uv_timer_t *timer) {
 
 static void aiofn_libuv_on_fd(uv_poll_t *poll, int status, int events) {
     aiofn_loop_fd_watch_t *watch = poll->data;
-    uint32_t ready = 0;
+    int read_ready = 0;
+    int write_ready = 0;
     if (status < 0) {
-        if (watch->backend_read_token == poll) {
-            ready |= AIOFN_LOOP_FD_READ;
-        }
-        if (watch->backend_write_token == poll) {
-            ready |= AIOFN_LOOP_FD_WRITE;
-        }
+        read_ready = watch->backend_read_token == poll;
+        write_ready = watch->backend_write_token == poll;
     }
     if ((events & UV_READABLE) != 0 || (events & UV_DISCONNECT) != 0) {
-        ready |= AIOFN_LOOP_FD_READ;
+        read_ready = 1;
     }
     if ((events & UV_WRITABLE) != 0) {
-        ready |= AIOFN_LOOP_FD_WRITE;
+        write_ready = 1;
     }
-    if (ready != 0) {
-        watch->callback(watch->callback_data, ready);
+    if (read_ready || write_ready) {
+        watch->callback(watch->callback_data, read_ready, write_ready);
     }
 }
 

@@ -302,71 +302,47 @@ static inline void aiofn_uring_spin_hint(void) {
 #endif
 }
 
-// Busy-poll run loop: never blocks in the kernel, for the lowest possible
-// completion-to-dispatch latency (no sleep/wake scheduling delay) at the
-// cost of pegging one CPU core at 100% for as long as the loop runs, even
-// when idle. Intended for latency-sensitive deployments (e.g. HFT) willing
-// to trade a dedicated core for shaving off wake-up latency.
-//
-// io_uring_submit_and_get_events() - not a plain non-blocking submit - is
-// required here: this ring is set up with IORING_SETUP_DEFER_TASKRUN, which
-// means completions are *not* posted to the CQE ring until the application
-// explicitly asks via IORING_ENTER_GETEVENTS. A pure userspace spin on the
-// CQE ring's memory alone would just hang forever - nothing kernel-side
-// would ever wake it, since we've told the kernel not to interrupt us. This
-// call still traps into the kernel every iteration (so it isn't a truly
-// syscall-free spin), but it never sleeps: it always returns immediately,
-// which is what removes the scheduler wake-up latency a blocking wait pays.
-static aiofn_loop_status aiofn_uring_run_busy_poll(aiofn_uring_state_t *state) {
-    while (!state->stop_requested) {
-        aiofn_uring_drain_ready(state);
-        if (state->stop_requested) {
-            break;
-        }
-
-        int ret = io_uring_submit_and_get_events(&state->ring);
-        if (ret < 0 && ret != -EAGAIN && ret != -EINTR) {
-            aiofn_uring_set_error(state, "io_uring_submit_and_get_events", ret);
-            return AIOFN_LOOP_ERROR;
-        }
-
-        unsigned head;
-        unsigned count = 0;
-        struct io_uring_cqe *c;
-        io_uring_for_each_cqe(&state->ring, head, c) {
-            aiofn_uring_dispatch_cqe(state, c);
-            count++;
-        }
-        if (count > 0) {
-            io_uring_cq_advance(&state->ring, count);
-        } else {
-            aiofn_uring_spin_hint();
-        }
-    }
-    return AIOFN_LOOP_OK;
-}
-
+// busy_poll trades one fully-pegged CPU core for the lowest possible
+// completion-to-dispatch latency (no sleep/wake scheduling delay), for as
+// long as the loop runs, even when idle. Intended for latency-sensitive
+// deployments (e.g. HFT) willing to trade a dedicated core for shaving off
+// wake-up latency. Otherwise, the loop blocks in the kernel until the next
+// completion or timeout.
 static aiofn_loop_status aiofn_uring_run(void *data) {
     aiofn_uring_state_t *state = data;
     state->stop_requested = 0;
 
-    if (state->busy_poll) {
-        return aiofn_uring_run_busy_poll(state);
-    }
-
     while (!state->stop_requested) {
         aiofn_uring_drain_ready(state);
         if (state->stop_requested) {
             break;
         }
 
-        struct io_uring_cqe *cqe = NULL;
-        struct __kernel_timespec zero_ts = {0, 0};
-        int has_more_ready = state->ready_head != NULL;
-        int ret = io_uring_submit_and_wait_timeout(&state->ring, &cqe, 1, has_more_ready ? &zero_ts : NULL, NULL);
-        if (ret < 0 && ret != -ETIME && ret != -EINTR) {
-            aiofn_uring_set_error(state, "io_uring_submit_and_wait_timeout", ret);
-            return AIOFN_LOOP_ERROR;
+        int ret;
+        if (state->busy_poll) {
+            // io_uring_submit_and_get_events() - not a plain non-blocking submit - is
+            // required here: this ring is set up with IORING_SETUP_DEFER_TASKRUN, which
+            // means completions are *not* posted to the CQE ring until the application
+            // explicitly asks via IORING_ENTER_GETEVENTS. A pure userspace spin on the
+            // CQE ring's memory alone would just hang forever - nothing kernel-side
+            // would ever wake it, since we've told the kernel not to interrupt us. This
+            // call still traps into the kernel every iteration (so it isn't a truly
+            // syscall-free spin), but it never sleeps: it always returns immediately,
+            // which is what removes the scheduler wake-up latency a blocking wait pays.
+            ret = io_uring_submit_and_get_events(&state->ring);
+            if (ret < 0 && ret != -EAGAIN && ret != -EINTR) {
+                aiofn_uring_set_error(state, "io_uring_submit_and_get_events", ret);
+                return AIOFN_LOOP_ERROR;
+            }
+        } else {
+            struct io_uring_cqe *cqe = NULL;
+            struct __kernel_timespec zero_ts = {0, 0};
+            int has_more_ready = state->ready_head != NULL;
+            ret = io_uring_submit_and_wait_timeout(&state->ring, &cqe, 1, has_more_ready ? &zero_ts : NULL, NULL);
+            if (ret < 0 && ret != -ETIME && ret != -EINTR) {
+                aiofn_uring_set_error(state, "io_uring_submit_and_wait_timeout", ret);
+                return AIOFN_LOOP_ERROR;
+            }
         }
 
         unsigned head;
@@ -378,6 +354,8 @@ static aiofn_loop_status aiofn_uring_run(void *data) {
         }
         if (count > 0) {
             io_uring_cq_advance(&state->ring, count);
+        } else if (state->busy_poll) {
+            aiofn_uring_spin_hint();
         }
     }
     return AIOFN_LOOP_OK;
@@ -609,7 +587,7 @@ static void aiofn_uring_fd_watch_completed(aiofn_uring_state_t *state, aiofn_uri
 
     int want = is_read ? fw->reading : fw->writing;
     if (res >= 0 && res != -ECANCELED && want) {
-        fw->watch->callback(fw->watch->callback_data, is_read ? AIOFN_LOOP_FD_READ : AIOFN_LOOP_FD_WRITE);
+        fw->watch->callback(fw->watch->callback_data, is_read, !is_read);
     }
 
     // Re-read after the callback: it may have reentrantly called

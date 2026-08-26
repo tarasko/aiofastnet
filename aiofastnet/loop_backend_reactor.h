@@ -5,25 +5,14 @@
 extern "C" {
 #endif
 
-typedef uint32_t aiofn_loop_fd_events;
-enum {
-    AIOFN_LOOP_FD_READ = 1u << 0,
-    AIOFN_LOOP_FD_WRITE = 1u << 1
-};
-
-typedef void (*aiofn_loop_fd_ready_fn)(
-    void *callback_data,
-    uint32_t events
-);
-
 // Frontend-owned storage shared by the independent read and write watches for
 // one fd. The frontend initializes fd, callback, and callback_data. The backend
 // stores non-NULL native tokens for active directions and clears each token
 // when that direction is removed. A backend with one combined registration
 // may store the same native pointer in both token fields.
-typedef struct aiofn_loop_fd_watch {
+typedef struct {
     int fd;
-    aiofn_loop_fd_ready_fn callback;
+    void (*callback)(void *callback_data, int read_ready, int write_ready);
     void *callback_data;
     void *backend_read_token;
     void *backend_write_token;
