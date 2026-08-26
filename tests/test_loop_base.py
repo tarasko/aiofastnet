@@ -357,9 +357,6 @@ async def test_proactor_socket_transport_stream_io(test_loop, buffered):
 
 
 async def test_proactor_socket_transport_sendfile(test_loop, loop_module):
-    if loop_module.__name__ == "tests.uring_loop":
-        pytest.skip("sendfile is not implemented for the uring test backend yet")
-
     header = b"h" * (1024 * 1024)
     payload = b"p" * (1024 * 1024)
     tail = b"t" * (256 * 1024)
@@ -381,9 +378,6 @@ async def test_proactor_socket_transport_sendfile(test_loop, loop_module):
 
 
 async def test_proactor_socket_transport_sendfile_validates_request(test_loop, loop_module):
-    if loop_module.__name__ == "tests.uring_loop":
-        pytest.skip("sendfile is not implemented for the uring test backend yet")
-
     async with TestServer(ct=ConnectionType("tcp")) as server:
         async with TestClient(server) as client:
             with tempfile.TemporaryFile() as file:

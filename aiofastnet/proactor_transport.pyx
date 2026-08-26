@@ -56,6 +56,11 @@ cdef class ProactorSocketTransport(StreamTransport):
         size_t _write_submitted_size
         aiofn_loop_proactor_op_t _write_op
 
+        # True when the backend implements a native async sendfile op. False
+        # when sendfile is instead falling back to the reactor write-readiness
+        # path below (see _try_sendfile/_start_backlog_writing/_write_ready).
+        bint _sendfile_native
+
         object _close_exc
 
     def __init__(self, ProactorContext context, loop, sock, protocol, waiter=None, server=None, bint is_pipe=False):
@@ -74,7 +79,11 @@ cdef class ProactorSocketTransport(StreamTransport):
         self._write_op.transferred = 0
 
         self._close_exc = None
-        self._sendfile_compatible = not is_pipe and context.proactor.sendfile != NULL
+        self._sendfile_native = context.proactor.sendfile != NULL
+        # No native async sendfile op: fall back to the same write-readiness
+        # driven os.sendfile() loop selector transports use, as long as this
+        # backend also exposes a reactor (add_writer/remove_writer) to wait on.
+        self._sendfile_compatible = not is_pipe and (self._sendfile_native or context.backend.reactor != NULL)
 
         if is_pipe:
             self._proactor_handle = context.wrap_pipe(sock)
@@ -184,6 +193,9 @@ cdef class ProactorSocketTransport(StreamTransport):
         self._finalizing_close = True
         self._close_exc = exc
 
+        if self._write_ready_registered:
+            self._stop_backlog_writing()
+
         if self._write_submitted_size == 0:
             self._clear_write_backlog(exc)
             self._schedule_finalize_close(exc)
@@ -191,6 +203,7 @@ cdef class ProactorSocketTransport(StreamTransport):
     cdef NoResult _release_backend_resources(self) except NoResult.EXC:
         assert self._read_paused
         assert self._write_submitted_size == 0
+        assert not self._write_ready_registered
 
         try:
             self._proactor_handle.context.unwrap_handle(self._proactor_handle)
@@ -200,17 +213,60 @@ cdef class ProactorSocketTransport(StreamTransport):
             self._close_exc = None
 
     cdef NoResult _start_backlog_writing(self) except NoResult.EXC:
+        if isinstance(self._write_backlog[0], SendFileRequest) and not self._sendfile_native:
+            # No native async sendfile op on this backend: wait for write
+            # readiness through the reactor instead, exactly like a selector
+            # transport would, and drive it via the inherited _write_ready().
+            if not self._write_ready_registered and not self._finalizing_close:
+                self._write_ready_registered = True
+                self._loop.add_writer(self._fileno_obj, self._write_ready)
+            return NoResult.OK
+
         if self._write_submitted_size == 0:
             if isinstance(self._write_backlog[0], SendFileRequest):
                 self._submit_sendfile()
             else:
                 self._submit_write()
 
+    def _write_ready(self):
+        # Only ever reached while draining a SendFileRequest without native
+        # backend support (see _start_backlog_writing); regular writes always
+        # go through the proactor's own async write() and never register here.
+        if unlikely(self._is_debug):
+            _logger.debug("%r: sendfile write_ready event", self)
+
+        if self._finalizing_close:
+            return
+
+        cdef bint all_sent = True
+
+        try:
+            while (all_sent and self._write_backlog_size > 0
+                   and isinstance(self._write_backlog[0], SendFileRequest)):
+                all_sent = self._try_sendfile_from_backlog_top()
+        except:
+            self._handle_error('Fatal sendfile error on transport')
+            return
+
+        self._maybe_resume_protocol()
+
+        if self._write_backlog_size == 0 or not isinstance(self._write_backlog[0], SendFileRequest):
+            self._stop_backlog_writing()
+            if self._write_backlog_size > 0:
+                self._start_backlog_writing()
+            elif self._closing:
+                if not self._finalizing_close:
+                    self._schedule_finalize_close(self._close_exc)
+            elif self._write_eof:
+                self._write_eof_now()
+
     # cdef WriteRequest _try_write(self, object data, char *ptr, Py_ssize_t size):
     #     return make_write_request_tail(data, ptr, size)
 
     cdef bint _try_sendfile(self, SendFileRequest request) except -1:
-        return False
+        if self._sendfile_native:
+            return False
+        return StreamTransport._try_sendfile(self, request)
 
     cdef NoResult _submit_write(self) except NoResult.EXC:
         cdef:
