@@ -89,6 +89,8 @@ cdef:
 cdef class LoopBase
 cdef class _SelfPipe
 cdef class _SignalPipe
+
+
 cdef class Handle:
     # Use create_handle to construct instances
 
@@ -99,47 +101,25 @@ cdef class Handle:
         object _args
         object _context
         LoopBase _loop
-        double _when
 
         bint _is_cancelled
-
-        # If True then this Handle has been registered through backend's call_soon, call_at
-        # Such handles are added to the loop._pending_handles linked list.
-        # They must be removed from the list upon completion or cancellation
-        bint _is_pending
-        aiofn_loop_action_t _action
 
         object _repr
         object _source_traceback
 
-        # Handles created by call_soon and call_at are chained via linked list.
-        # This is done in order to keep track of them and properly destroy them when loop.close() is called
-        # Loop doesn't use a regular container for like list because inserting and deleting is more expensive
-        # with list then just assigning a reference.
-        Handle _pending_previous
-        Handle _pending_next
-
-    cdef inline NoResult _init(self, callback, args, LoopBase loop, context, double when) except NoResult.EXC:
+    cdef inline NoResult _init(self, callback, args, LoopBase loop, context) except NoResult.EXC:
         self._callback = callback
         self._args = args if args else None
         self._context = PyContext_CopyCurrent() if context is None else context
         self._loop = loop
-        self._when = when
 
         self._is_cancelled = False
-
-        self._is_pending = False
-        self._action.callback = _action_callback
-        self._action.callback_data = <void *>self
-        self._action.backend_token = NULL
 
         self._repr = None
         if loop._debug:
             self._source_traceback = format_helpers.extract_stack(sys._getframe(1))
         else:
             self._source_traceback = None
-        self._pending_previous = None
-        self._pending_next = None
 
     def __repr__(self):
         cdef list info
@@ -148,8 +128,6 @@ cdef class Handle:
         info = [self.__class__.__name__]
         if self._is_cancelled:
             info.append("cancelled")
-        if self._when != 0:
-            info.append(f"when={self._when}")
         if self._callback is not None:
             info.append(self._format_callback_source())
         if self._source_traceback:
@@ -167,17 +145,15 @@ cdef class Handle:
                 self._repr = repr(self)
             self._callback = None
             self._args = None
-            if self._is_pending:
-                self._loop._check_status(self._backend_cancel())
-                self._loop._unlink_handle(self)
+            self._backend_cancel()
 
-    cdef aiofn_loop_status _backend_cancel(self):
-        return self._loop._backend.call_soon_cancel(self._loop._backend.state, &self._action)
+    cdef NoResult _backend_cancel(self) except NoResult.EXC:
+        pass
 
     cpdef bint cancelled(self):
         return self._is_cancelled
 
-    cdef inline NoResult _run(self) except NoResult.EXC:
+    cdef NoResult _run(self) except NoResult.EXC:
         if unlikely(self._is_cancelled):
             return NoResult.OK
 
@@ -221,19 +197,79 @@ cdef class Handle:
         finally:
             self._loop._current_handle_source_traceback = None
 
-        return NoResult.OK
-
     cdef inline object _format_callback_source(self):
         if _FORMAT_CALLBACK_HAS_DEBUG:
             return format_helpers._format_callback_source(self._callback, self._args, debug=self._loop.get_debug())
         return format_helpers._format_callback_source(self._callback, self._args)
 
 
-cdef class TimerHandle(Handle):
+# Handles created by call_soon and call_at are chained via linked list.
+# This is done in order to keep track of them and properly destroy them when loop.close() is called
+# Loop doesn't use a regular container for like list because inserting and deleting is more expensive
+# with list then just assigning a reference.
+cdef class PendingHandle(Handle):
+    cdef:
+        aiofn_loop_action_t _action
+        PendingHandle _pending_previous
+        PendingHandle _pending_next
+
+    cdef inline NoResult _init_pending_handle(self, callback, args, LoopBase loop, context) except NoResult.EXC:
+        Handle._init(self, callback, args, loop, context)
+        self._action.callback = _action_callback
+        self._action.callback_data = <void *>self
+        self._action.backend_token = NULL
+
+        self._loop.backend_call_soon(&self._action)
+        self._link_handle()
+
+    cdef NoResult _backend_cancel(self) except NoResult.EXC:
+        if self._action.backend_token != NULL:
+            self._loop.backend_cancel_call_soon(&self._action)
+            self._unlink_handle()
+
+    cdef inline void _link_handle(self) noexcept:
+        self._pending_next = self._loop._pending_handles
+        if self._pending_next is not None:
+            self._pending_next._pending_previous = self
+        self._loop._pending_handles = self
+
+    cdef inline void _unlink_handle(self) noexcept:
+        if self._pending_previous is None:
+            self._loop._pending_handles = self._pending_next
+        else:
+            self._pending_previous._pending_next = self._pending_next
+        if self._pending_next is not None:
+            self._pending_next._pending_previous = self._pending_previous
+        self._pending_previous = None
+        self._pending_next = None
+
+    cdef NoResult _run(self) except NoResult.EXC:
+        self._unlink_handle()
+        Handle._run(self)
+
+
+cdef class TimerHandle(PendingHandle):
     # Use create_timer_handle to construct instances
 
-    cdef aiofn_loop_status _backend_cancel(self):
-        return self._loop._backend.call_at_cancel(self._loop._backend.state, &self._action)
+    cdef:
+        double _when
+
+    cdef inline NoResult _init_timer_handle(self, callback, args, LoopBase loop, context, double when) except NoResult.EXC:
+        Handle._init(self, callback, args, loop, context)
+        self._action.callback = _action_callback
+        self._action.callback_data = <void *>self
+        self._action.backend_token = NULL
+
+        self._when = when
+
+        cdef uint64_t deadline_ns = max(0, int(when * 1_000_000_000))
+        self._loop.backend_call_at(&self._action, deadline_ns)
+        self._link_handle()
+
+    cdef NoResult _backend_cancel(self) except NoResult.EXC:
+        if self._action.backend_token != NULL:
+            self._loop.backend_cancel_call_at(&self._action)
+            self._unlink_handle()
 
     def __hash__(self):
         return hash(self._when)
@@ -267,13 +303,19 @@ cdef class TimerHandle(Handle):
 
 cdef inline Handle create_handle(callback, args, LoopBase loop, context=None):
     cdef Handle self = <Handle>Handle.__new__(Handle)
-    self._init(callback, args, loop, context, 0.0)
+    self._init(callback, args, loop, context)
+    return self
+
+
+cdef inline PendingHandle create_pending_handle(callback, args, LoopBase loop, context=None):
+    cdef PendingHandle self = <PendingHandle>PendingHandle.__new__(PendingHandle)
+    self._init_pending_handle(callback, args, loop, context)
     return self
 
 
 cdef inline TimerHandle create_timer_handle(callback, args, LoopBase loop, double when, context=None):
     cdef TimerHandle self = <TimerHandle>TimerHandle.__new__(TimerHandle)
-    self._init(callback, args, loop, context, when)
+    self._init_timer_handle(callback, args, loop, context, when)
     return self
 
 
@@ -334,7 +376,7 @@ cdef void _threadsafe_ready_callback(void *callback_data, int read_ready, int wr
         if read_ready:
             self_pipe.process(True)
     except BaseException as exc:
-        self_pipe.loop._backend_failed(exc)
+        self_pipe.loop.backend_mark_failed(exc)
 
 
 cdef class _SelfPipe:
@@ -367,7 +409,7 @@ cdef class _SelfPipe:
             self.watch.fd = reader
             self.watch.callback = _threadsafe_ready_callback
             self.watch.callback_data = <void *>self
-            loop._check_status(loop._reactor.add_reader(loop._backend.state, &self.watch))
+            loop.backend_add_reader(&self.watch)
         except:
             posix_close(self.reader)
             posix_close(self.writer)
@@ -462,7 +504,7 @@ cdef class _SelfPipe:
 
     cdef inline NoResult close(self) except NoResult.EXC:
         if self.watch.backend_read_token != NULL:
-            self.loop._check_status(self.loop._reactor.remove_reader(self.loop._backend.state, &self.watch))
+            self.loop.backend_remove_reader(&self.watch)
 
         while self.process(False) != 0:
             pass
@@ -486,7 +528,7 @@ cdef void _signal_ready_callback(void *callback_data, int read_ready, int write_
         if read_ready:
             signal_pipe.process()
     except BaseException as exc:
-        signal_pipe.loop._backend_failed(exc)
+        signal_pipe.loop.backend_mark_failed(exc)
 
 
 cdef class _SignalPipe:
@@ -527,7 +569,7 @@ cdef class _SignalPipe:
             self.watch.fd = reader
             self.watch.callback = _signal_ready_callback
             self.watch.callback_data = <void *>self
-            loop._check_status(loop._reactor.add_reader(loop._backend.state, &self.watch))
+            loop.backend_add_reader(&self.watch)
             # warn_on_full_buffer=False: a full pipe just means we drain the
             # rest on the next readiness callback, not a real error.
             self.old_wakeup_fd = signal.set_wakeup_fd(writer, warn_on_full_buffer=False)
@@ -576,7 +618,7 @@ cdef class _SignalPipe:
 
     cdef inline NoResult close(self) except NoResult.EXC:
         if self.watch.backend_read_token != NULL:
-            self.loop._check_status(self.loop._reactor.remove_reader(self.loop._backend.state, &self.watch))
+            self.loop.backend_remove_reader(&self.watch)
 
         signal.set_wakeup_fd(self.old_wakeup_fd)
 
@@ -591,10 +633,9 @@ cdef void _action_callback(void *callback_data) noexcept with gil:
         Handle handle = <Handle>callback_data
         LoopBase loop = handle._loop
     try:
-        loop._unlink_handle(handle)
         handle._run()
     except BaseException as exc:
-        loop._backend_failed(exc)
+        loop.backend_mark_failed(exc)
 
 
 cdef class ProactorContext:
@@ -603,7 +644,7 @@ cdef class ProactorContext:
         return NoResult.OK
 
     cdef inline NoResult backend_failed(self, object exc) except NoResult.EXC:
-        (<LoopBase>self.loop)._backend_failed(exc)
+        (<LoopBase>self.loop).backend_mark_failed(exc)
         return NoResult.OK
 
     cdef inline ProactorHandle wrap_socket(self, object sock):
@@ -669,7 +710,7 @@ cdef void _fd_ready_callback(void *callback_data, int read_ready, int write_read
         if write_ready and callbacks.writer is not None:
             callbacks.writer._run()
     except BaseException as exc:
-        callbacks.loop._backend_failed(exc)
+        callbacks.loop.backend_mark_failed(exc)
 
 
 def _run_until_complete_cb(future):
@@ -702,7 +743,7 @@ cdef class LoopBase:
         # * it lets LoopBase.close() enumerate pending actions, call call_soon_cancel()/call_at_cancel(), and
         #   release backend-native resources before closing the backend.
         # * this simplifies backend implementation as it does not have to keep a list of active events
-        Handle _pending_handles
+        PendingHandle _pending_handles
 
         # Lets exception reports raised indirectly during a callback include where that callback's handle was scheduled.
         object _current_handle_source_traceback
@@ -841,25 +882,6 @@ cdef class LoopBase:
         else:
             raise RuntimeError(message)
 
-    cdef inline void _link_handle(self, Handle handle) noexcept:
-        handle._pending_next = self._pending_handles
-        if self._pending_handles is not None:
-            self._pending_handles._pending_previous = handle
-        self._pending_handles = handle
-        handle._is_pending = True
-
-    cdef inline void _unlink_handle(self, Handle handle) noexcept:
-        if handle._is_pending:
-            if handle._pending_previous is None:
-                self._pending_handles = handle._pending_next
-            else:
-                handle._pending_previous._pending_next = handle._pending_next
-            if handle._pending_next is not None:
-                handle._pending_next._pending_previous = handle._pending_previous
-            handle._pending_previous = None
-            handle._pending_next = None
-            handle._is_pending = False
-
     cdef inline NoResult _check_closed(self) except NoResult.EXC:
         if self._closed:
             raise RuntimeError("Event loop is closed")
@@ -949,11 +971,34 @@ cdef class LoopBase:
             raise RuntimeError("Event loop stopped before Future completed.")
         return future.result()
 
-    cdef inline NoResult _backend_failed(self, object exc) except NoResult.EXC:
+    cdef inline NoResult backend_mark_failed(self, object exc) except NoResult.EXC:
         if self._backend_fatal_error is None:
             self._backend_fatal_error = exc
         self._backend.stop(self._backend.state)
-        return NoResult.OK
+
+    cdef inline NoResult backend_call_soon(self, aiofn_loop_action_t* action):
+        self._check_status(self._backend.call_soon(self._backend.state, action))
+
+    cdef inline NoResult backend_cancel_call_soon(self, aiofn_loop_action_t* action):
+        self._check_status(self._backend.call_soon_cancel(self._backend.state, action))
+
+    cdef inline NoResult backend_call_at(self, aiofn_loop_action_t* action, uint64_t deadline_ns):
+        self._check_status(self._backend.call_at(self._backend.state, action, deadline_ns))
+
+    cdef inline NoResult backend_cancel_call_at(self, aiofn_loop_action_t* action):
+        self._check_status(self._backend.call_at_cancel(self._backend.state, action))
+
+    cdef inline NoResult backend_add_reader(self, aiofn_loop_fd_watch_t* watch) except NoResult.EXC:
+        self._check_status(self._reactor.add_reader(self._backend.state, watch))
+
+    cdef inline NoResult backend_add_writer(self, aiofn_loop_fd_watch_t* watch) except NoResult.EXC:
+        self._check_status(self._reactor.add_writer(self._backend.state, watch))
+
+    cdef inline NoResult backend_remove_reader(self, aiofn_loop_fd_watch_t* watch) except NoResult.EXC:
+        self._check_status(self._reactor.remove_reader(self._backend.state, watch))
+
+    cdef inline NoResult backend_remove_writer(self, aiofn_loop_fd_watch_t* watch) except NoResult.EXC:
+        self._check_status(self._reactor.remove_writer(self._backend.state, watch))
 
     def call_soon(self, callback, *args, context=None):
         cdef Handle handle
@@ -962,10 +1007,7 @@ cdef class LoopBase:
         if self._debug:
             self._check_thread()
             self._check_callback(callback, "call_soon")
-        handle = create_handle(callback, args, self, context)
-        self._check_status(self._backend.call_soon(self._backend.state, &handle._action))
-        self._link_handle(handle)
-        return handle
+        return create_pending_handle(callback, args, self, context)
 
     def call_soon_threadsafe(self, callback, *args, context=None):
         cdef Handle handle
@@ -995,11 +1037,7 @@ cdef class LoopBase:
         if self._debug:
             self._check_thread()
             self._check_callback(callback, "call_at")
-        handle = create_timer_handle(callback, args, self, when, context)
-        deadline_ns = max(0, int(when * 1_000_000_000))
-        self._check_status(self._backend.call_at(self._backend.state, &handle._action, deadline_ns))
-        self._link_handle(handle)
-        return handle
+        return create_timer_handle(callback, args, self, when, context)
 
     cpdef double time(self):
         return self._backend.now_ns(self._backend.state) / 1_000_000_000
@@ -1067,7 +1105,7 @@ cdef class LoopBase:
             self._proactor_context = None
 
         while self._pending_handles is not None:
-            # Handle.cancel unlinks handle from _pending_handles
+            # PendingHandle.cancel unlinks handle from _pending_handles
             self._pending_handles.cancel()
 
         self._backend.close(self._backend.state)
@@ -1119,7 +1157,7 @@ cdef class LoopBase:
                 else:
                     callbacks.reader = handle
                     callbacks.reader_fileobj = fileobj
-                    self._check_status(self._reactor.add_reader(self._backend.state, &callbacks.watch))
+                    self.backend_add_reader(&callbacks.watch)
             else:
                 if callbacks.writer is not None:
                     callbacks.writer.cancel()
@@ -1128,7 +1166,7 @@ cdef class LoopBase:
                 else:
                     callbacks.writer = handle
                     callbacks.writer_fileobj = fileobj
-                    self._check_status(self._reactor.add_writer(self._backend.state, &callbacks.watch))
+                    self.backend_add_writer(&callbacks.watch)
         except BaseException:
             if reader:
                 callbacks.reader = None
@@ -1156,13 +1194,13 @@ cdef class LoopBase:
         if reader:
             if callbacks.reader is None:
                 return False
-            self._check_status(self._reactor.remove_reader(self._backend.state, &callbacks.watch))
+            self.backend_remove_reader(&callbacks.watch)
             callbacks.reader = None
             callbacks.reader_fileobj = None
         else:
             if callbacks.writer is None:
                 return False
-            self._check_status(self._reactor.remove_writer(self._backend.state, &callbacks.watch))
+            self.backend_remove_writer(&callbacks.watch)
             callbacks.writer = None
             callbacks.writer_fileobj = None
 
@@ -1173,12 +1211,12 @@ cdef class LoopBase:
 
     cdef inline NoResult _remove_fd(self, _FDCallbacks callbacks) except NoResult.EXC:
         if callbacks.reader is not None:
-            self._check_status(self._reactor.remove_reader(self._backend.state, &callbacks.watch))
+            self.backend_remove_reader(&callbacks.watch)
             callbacks.reader = None
             callbacks.reader_fileobj = None
 
         if callbacks.writer is not None:
-            self._check_status(self._reactor.remove_writer(self._backend.state, &callbacks.watch))
+            self.backend_remove_writer(&callbacks.watch)
             callbacks.writer = None
             callbacks.writer_fileobj = None
 
