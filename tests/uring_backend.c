@@ -22,7 +22,7 @@
 // lookup table.
 
 typedef enum {
-    AIOFN_URING_KIND_IGNORE = 0, // a cancel/remove op's own completion
+    AIOFN_URING_KIND_RELEASE = 0, // a cancel/remove op's own completion; see aiofn_uring_release()
     AIOFN_URING_KIND_TIMER = 1,
     AIOFN_URING_KIND_SIGNAL = 2,
     AIOFN_URING_KIND_FD_READ = 3,
@@ -48,6 +48,73 @@ static inline void *aiofn_uring_tag_ptr(__u64 ud) {
     return (void *)(uintptr_t)(ud & ~(__u64)AIOFN_URING_TAG_MASK);
 }
 
+// Common prefix embedded as the first member of every object a tagged SQE
+// can point at (timers, fd watches, proactor handles) - mirrors libuv's
+// uv_handle_t, which puts a "type" field first in every concrete handle
+// struct so any callback can safely cast a raw handle pointer back to its
+// real type. "kind" plays that role here. pending_sqes is our own addition:
+// unlike libuv, which always defers actual handle destruction to the next
+// loop tick regardless of what's outstanding, io_uring completions can stay
+// genuinely in flight across many loop iterations (a persistent read, a
+// cancel racing the op it targets, ...), so freeing has to wait for every
+// SQE that ever referenced this object to complete.
+typedef enum {
+    AIOFN_URING_OBJECT_TIMER,
+    AIOFN_URING_OBJECT_FD_WATCH,
+    AIOFN_URING_OBJECT_HANDLE,
+} aiofn_uring_object_kind_t;
+
+typedef struct {
+    aiofn_uring_object_kind_t kind;
+    int pending_sqes;
+} aiofn_uring_object_t;
+
+// aiofn_uring_maybe_free_timer/_fd_watch/_handle are defined near their own
+// sections further down; forward-declared so aiofn_uring_release() (used by
+// every *_cancel/*_stop site) can reach whichever one applies. The bare tags
+// are declared first at file scope so these prototypes refer to the same
+// type the later typedef'd struct definitions complete, rather than each
+// parameter list silently introducing its own incompatible prototype-scoped
+// tag (an easy-to-miss C rule - the compiler only warns, not errors, if you
+// get this wrong, then fails later with a confusing "conflicting types").
+struct aiofn_uring_timer;
+struct aiofn_uring_fd_watch;
+struct aiofn_uring_handle;
+static void aiofn_uring_maybe_free_timer(struct aiofn_uring_timer *timer);
+static void aiofn_uring_maybe_free_fd_watch(struct aiofn_uring_fd_watch *fw);
+static void aiofn_uring_maybe_free_handle(struct aiofn_uring_handle *handle);
+
+// Completion for a cancel/remove SQE's own completion (tagged KIND_RELEASE):
+// decrement the owning object's pending_sqes and, once every SQE that ever
+// referenced it has completed, hand off to whichever kind-specific check
+// decides it's actually safe to free. Centralizing this is what fixes a leak
+// that used to be repeated at every *_cancel/*_stop call site: each one used
+// to tag its own cancel SQE's completion AIOFN_URING_KIND_IGNORE, which the
+// dispatch switch did nothing with, so the increment paired with submitting
+// that very SQE was never balanced by a matching decrement.
+static void aiofn_uring_release(aiofn_uring_object_t *object) {
+    object->pending_sqes--;
+    switch (object->kind) {
+    case AIOFN_URING_OBJECT_TIMER:
+        aiofn_uring_maybe_free_timer((struct aiofn_uring_timer *)object);
+        break;
+    case AIOFN_URING_OBJECT_FD_WATCH:
+        aiofn_uring_maybe_free_fd_watch((struct aiofn_uring_fd_watch *)object);
+        break;
+    case AIOFN_URING_OBJECT_HANDLE:
+        aiofn_uring_maybe_free_handle((struct aiofn_uring_handle *)object);
+        break;
+    }
+}
+
+// Tags a cancel/remove SQE's own completion so it always reaches
+// aiofn_uring_release() above. Call after the SQE's target has already been
+// set via io_uring_prep_cancel64()/io_uring_prep_timeout_remove().
+static inline void aiofn_uring_tag_release(struct io_uring_sqe *sqe, aiofn_uring_object_t *object) {
+    object->pending_sqes++;
+    io_uring_sqe_set_data64(sqe, aiofn_uring_tag(object, AIOFN_URING_KIND_RELEASE));
+}
+
 // Same-thread call_soon(): a plain intrusive FIFO list, no syscall involved.
 typedef struct aiofn_uring_ready_node {
     aiofn_loop_action_t *action;         // NULL once cancelled; node freed at drain
@@ -59,9 +126,9 @@ typedef struct aiofn_uring_ready_node {
 // wait never needs a computed "time until next timer" - it can always block
 // indefinitely, because every pending deadline already has its own wakeup.
 typedef struct aiofn_uring_timer {
+    aiofn_uring_object_t object;         // object.kind == AIOFN_URING_OBJECT_TIMER; must stay first
     aiofn_loop_action_t *action;         // NULL once cancelled
     struct __kernel_timespec ts;         // must outlive the SQE until submitted
-    int pending_sqes;                    // timeout SQE, plus briefly a remove SQE
 } aiofn_uring_timer_t;
 
 // Signals. sigprocmask()/signalfd only cover the calling thread's mask - a
@@ -85,10 +152,10 @@ typedef struct aiofn_uring_signal {
 // the frontend's own aiofn_loop_fd_watch_t, which already carries one token
 // per direction for the same fd.
 typedef struct aiofn_uring_fd_watch {
+    aiofn_uring_object_t object;         // object.kind == AIOFN_URING_OBJECT_FD_WATCH; must stay first
     aiofn_loop_fd_watch_t *watch;
     int reading;
     int writing;
-    int pending_sqes;
 } aiofn_uring_fd_watch_t;
 
 // Proactor handle. The native fd is never dup()'d: unlike libuv/asio we do
@@ -96,13 +163,13 @@ typedef struct aiofn_uring_fd_watch {
 // so there is nothing to compensate for. unwrap_handle() simply stops using
 // the fd; the frontend closes it, exactly as the ABI requires.
 typedef struct aiofn_uring_handle {
+    aiofn_uring_object_t object;         // object.kind == AIOFN_URING_OBJECT_HANDLE; must stay first
     int fd;
     aiofn_loop_proactor_handle_kind_t kind;
     int socktype;
     aiofn_loop_proactor_handle_t *frontend;
 
     int unwrapped;
-    int pending_sqes;
 
     aiofn_loop_read_alloc_fn read_alloc;
     aiofn_loop_read_callback_fn read_callback;
@@ -206,13 +273,14 @@ static aiofn_loop_status aiofn_uring_call_at(void *data, aiofn_loop_action_t *ac
         return AIOFN_LOOP_NO_MEMORY;
     }
 
+    timer->object.kind = AIOFN_URING_OBJECT_TIMER;
     timer->action = action;
     timer->ts.tv_sec = (time_t)(deadline_ns / 1000000000ull);
     timer->ts.tv_nsec = (long)(deadline_ns % 1000000000ull);
 
     struct io_uring_sqe *sqe = aiofn_uring_get_sqe(state);
     if (sqe != NULL) {
-        timer->pending_sqes++;
+        timer->object.pending_sqes++;
         io_uring_prep_timeout(sqe, &timer->ts, 0, IORING_TIMEOUT_ABS);
         io_uring_sqe_set_data64(sqe, aiofn_uring_tag(timer, AIOFN_URING_KIND_TIMER));
     }
@@ -240,25 +308,30 @@ static aiofn_loop_status aiofn_uring_call_at_cancel(void *data, aiofn_loop_actio
 
     struct io_uring_sqe *sqe = aiofn_uring_get_sqe(state);
     if (sqe != NULL) {
-        timer->pending_sqes++;
         io_uring_prep_timeout_remove(sqe, aiofn_uring_tag(timer, AIOFN_URING_KIND_TIMER), 0);
-        io_uring_sqe_set_data64(sqe, aiofn_uring_tag(NULL, AIOFN_URING_KIND_IGNORE));
+        aiofn_uring_tag_release(sqe, &timer->object);
     }
     return AIOFN_LOOP_OK;
 }
 
+static void aiofn_uring_maybe_free_timer(aiofn_uring_timer_t *timer) {
+    if (timer->object.pending_sqes != 0) {
+        return;
+    }
+    if (timer->action != NULL) {
+        aiofn_loop_action_t *action = timer->action;
+        free(timer);
+        action->backend_token = NULL;
+        action->callback(action->callback_data);
+        return;
+    }
+    free(timer);
+}
+
 static void aiofn_uring_timer_completed(aiofn_uring_timer_t *timer, int res) {
     (void)res;
-    if (--timer->pending_sqes == 0) {
-        if (timer->action != NULL) {
-            aiofn_loop_action_t *action = timer->action;
-            free(timer);
-            action->backend_token = NULL;
-            action->callback(action->callback_data);
-            return;
-        }
-        free(timer);
-    }
+    timer->object.pending_sqes--;
+    aiofn_uring_maybe_free_timer(timer);
 }
 
 static void aiofn_uring_drain_ready(aiofn_uring_state_t *state) {
@@ -494,7 +567,7 @@ static void aiofn_uring_issue_fd_poll(aiofn_uring_state_t *state, aiofn_uring_fd
     if (sqe == NULL) {
         return;
     }
-    fw->pending_sqes++;
+    fw->object.pending_sqes++;
     // Single-shot, reissued after every completion (see
     // aiofn_uring_fd_watch_completed) rather than multishot: multishot poll
     // only refires on a fresh wakeup edge, not merely because the fd is
@@ -508,7 +581,7 @@ static void aiofn_uring_issue_fd_poll(aiofn_uring_state_t *state, aiofn_uring_fd
 }
 
 static void aiofn_uring_maybe_free_fd_watch(aiofn_uring_fd_watch_t *fw) {
-    if (!fw->reading && !fw->writing && fw->pending_sqes == 0) {
+    if (!fw->reading && !fw->writing && fw->object.pending_sqes == 0) {
         free(fw);
     }
 }
@@ -523,6 +596,7 @@ static aiofn_loop_status aiofn_uring_add_reader(void *data, aiofn_loop_fd_watch_
         if (fw == NULL) {
             return AIOFN_LOOP_NO_MEMORY;
         }
+        fw->object.kind = AIOFN_URING_OBJECT_FD_WATCH;
         fw->watch = watch;
     }
     fw->reading = 1;
@@ -541,6 +615,7 @@ static aiofn_loop_status aiofn_uring_add_writer(void *data, aiofn_loop_fd_watch_
         if (fw == NULL) {
             return AIOFN_LOOP_NO_MEMORY;
         }
+        fw->object.kind = AIOFN_URING_OBJECT_FD_WATCH;
         fw->watch = watch;
     }
     fw->writing = 1;
@@ -557,9 +632,8 @@ static aiofn_loop_status aiofn_uring_remove_reader(void *data, aiofn_loop_fd_wat
 
     struct io_uring_sqe *sqe = aiofn_uring_get_sqe(state);
     if (sqe != NULL) {
-        fw->pending_sqes++;
         io_uring_prep_cancel64(sqe, aiofn_uring_tag(fw, AIOFN_URING_KIND_FD_READ), 0);
-        io_uring_sqe_set_data64(sqe, aiofn_uring_tag(NULL, AIOFN_URING_KIND_IGNORE));
+        aiofn_uring_tag_release(sqe, &fw->object);
     }
     aiofn_uring_maybe_free_fd_watch(fw);
     return AIOFN_LOOP_OK;
@@ -573,9 +647,8 @@ static aiofn_loop_status aiofn_uring_remove_writer(void *data, aiofn_loop_fd_wat
 
     struct io_uring_sqe *sqe = aiofn_uring_get_sqe(state);
     if (sqe != NULL) {
-        fw->pending_sqes++;
         io_uring_prep_cancel64(sqe, aiofn_uring_tag(fw, AIOFN_URING_KIND_FD_WRITE), 0);
-        io_uring_sqe_set_data64(sqe, aiofn_uring_tag(NULL, AIOFN_URING_KIND_IGNORE));
+        aiofn_uring_tag_release(sqe, &fw->object);
     }
     aiofn_uring_maybe_free_fd_watch(fw);
     return AIOFN_LOOP_OK;
@@ -583,7 +656,7 @@ static aiofn_loop_status aiofn_uring_remove_writer(void *data, aiofn_loop_fd_wat
 
 static void aiofn_uring_fd_watch_completed(aiofn_uring_state_t *state, aiofn_uring_fd_watch_t *fw, int is_read, int res, unsigned flags) {
     (void)flags; // always single-shot here; see aiofn_uring_issue_fd_poll
-    fw->pending_sqes--;
+    fw->object.pending_sqes--;
 
     int want = is_read ? fw->reading : fw->writing;
     if (res >= 0 && res != -ECANCELED && want) {
@@ -617,6 +690,7 @@ static aiofn_loop_status aiofn_uring_wrap_handle(void *data, aiofn_loop_proactor
         return AIOFN_LOOP_NO_MEMORY;
     }
 
+    handle->object.kind = AIOFN_URING_OBJECT_HANDLE;
     handle->fd = (int)frontend->native_handle;
     handle->kind = frontend->kind;
     handle->socktype = frontend->socktype;
@@ -627,7 +701,7 @@ static aiofn_loop_status aiofn_uring_wrap_handle(void *data, aiofn_loop_proactor
 }
 
 static void aiofn_uring_maybe_free_handle(aiofn_uring_handle_t *handle) {
-    if (handle->unwrapped && handle->pending_sqes == 0) {
+    if (handle->unwrapped && handle->object.pending_sqes == 0) {
         free(handle);
     }
 }
@@ -664,7 +738,7 @@ static aiofn_loop_status aiofn_uring_connect(
         op->backend_token = NULL;
         return AIOFN_LOOP_NO_MEMORY;
     }
-    handle->pending_sqes++;
+    handle->object.pending_sqes++;
     io_uring_prep_connect(sqe, handle->fd, (const struct sockaddr *)&handle->connect_addr, (socklen_t)address_len);
     io_uring_sqe_set_data64(sqe, aiofn_uring_tag(handle, AIOFN_URING_KIND_HANDLE_CONNECT));
     return AIOFN_LOOP_OK;
@@ -686,7 +760,7 @@ static aiofn_loop_status aiofn_uring_write(
     if (sqe == NULL) {
         return AIOFN_LOOP_NO_MEMORY;
     }
-    handle->pending_sqes++;
+    handle->object.pending_sqes++;
     handle->write_op = op;
     op->backend_token = handle;
 
@@ -744,7 +818,7 @@ static aiofn_loop_status aiofn_uring_sendto(
         op->backend_token = NULL;
         return AIOFN_LOOP_NO_MEMORY;
     }
-    handle->pending_sqes++;
+    handle->object.pending_sqes++;
     if (address != NULL) {
         memcpy(&handle->sendto_addr, address, address_len);
         io_uring_prep_sendto(sqe, handle->fd, buffer, buffer_len, MSG_NOSIGNAL,
@@ -776,9 +850,8 @@ static aiofn_loop_status aiofn_uring_cancel(void *data, aiofn_loop_proactor_op_t
     if (sqe == NULL) {
         return AIOFN_LOOP_ERROR;
     }
-    handle->pending_sqes++;
     io_uring_prep_cancel64(sqe, aiofn_uring_tag(handle, kind), 0);
-    io_uring_sqe_set_data64(sqe, aiofn_uring_tag(NULL, AIOFN_URING_KIND_IGNORE));
+    aiofn_uring_tag_release(sqe, &handle->object);
     return AIOFN_LOOP_OK;
 }
 
@@ -786,7 +859,7 @@ static aiofn_loop_status aiofn_uring_cancel(void *data, aiofn_loop_proactor_op_t
 // the frontend, whether the send/write was full or partial. See the comment
 // in aiofn_uring_write() for why partial writes aren't retried here.
 static void aiofn_uring_handle_write_completed(aiofn_uring_state_t *state, aiofn_uring_handle_t *handle, int res) {
-    handle->pending_sqes--;
+    handle->object.pending_sqes--;
 
     if (handle->write_op != NULL) {
         aiofn_loop_proactor_op_t *op = handle->write_op;
@@ -819,7 +892,7 @@ static void aiofn_uring_handle_write_completed(aiofn_uring_state_t *state, aiofn
 }
 
 static void aiofn_uring_handle_connect_completed(aiofn_uring_state_t *state, aiofn_uring_handle_t *handle, int res) {
-    handle->pending_sqes--;
+    handle->object.pending_sqes--;
 
     aiofn_loop_proactor_op_t *op = handle->connect_op;
     handle->connect_op = NULL;
@@ -854,7 +927,7 @@ static void aiofn_uring_issue_read(aiofn_uring_state_t *state, aiofn_uring_handl
         handle->reading = 0;
         return;
     }
-    handle->pending_sqes++;
+    handle->object.pending_sqes++;
     // recv() measurably outperforms read() on sockets; pipes (and other
     // non-socket fds) don't support recv(2) at all (ENOTSOC), so they still
     // go through read(). POLL_FIRST: see aiofn_uring_write() for why.
@@ -891,15 +964,14 @@ static aiofn_loop_status aiofn_uring_read_stop(void *data, aiofn_loop_proactor_h
 
     struct io_uring_sqe *sqe = aiofn_uring_get_sqe(state);
     if (sqe != NULL) {
-        handle->pending_sqes++;
         io_uring_prep_cancel64(sqe, aiofn_uring_tag(handle, AIOFN_URING_KIND_HANDLE_READ), 0);
-        io_uring_sqe_set_data64(sqe, aiofn_uring_tag(NULL, AIOFN_URING_KIND_IGNORE));
+        aiofn_uring_tag_release(sqe, &handle->object);
     }
     return AIOFN_LOOP_OK;
 }
 
 static void aiofn_uring_handle_read_completed(aiofn_uring_state_t *state, aiofn_uring_handle_t *handle, int res) {
-    handle->pending_sqes--;
+    handle->object.pending_sqes--;
     void *buf = handle->read_buf;
     handle->read_buf = NULL;
 
@@ -945,7 +1017,7 @@ static void aiofn_uring_issue_recvfrom(aiofn_uring_state_t *state, aiofn_uring_h
         handle->reading = 0;
         return;
     }
-    handle->pending_sqes++;
+    handle->object.pending_sqes++;
     io_uring_prep_recvmsg(sqe, handle->fd, &handle->recv_msg, 0);
     sqe->ioprio |= IORING_RECVSEND_POLL_FIRST;
     io_uring_sqe_set_data64(sqe, aiofn_uring_tag(handle, AIOFN_URING_KIND_HANDLE_READ));
@@ -975,9 +1047,8 @@ static aiofn_loop_status aiofn_uring_recvfrom_stop(void *data, aiofn_loop_proact
 
     struct io_uring_sqe *sqe = aiofn_uring_get_sqe(state);
     if (sqe != NULL) {
-        handle->pending_sqes++;
         io_uring_prep_cancel64(sqe, aiofn_uring_tag(handle, AIOFN_URING_KIND_HANDLE_READ), 0);
-        io_uring_sqe_set_data64(sqe, aiofn_uring_tag(NULL, AIOFN_URING_KIND_IGNORE));
+        aiofn_uring_tag_release(sqe, &handle->object);
     }
     return AIOFN_LOOP_OK;
 }
@@ -985,7 +1056,7 @@ static aiofn_loop_status aiofn_uring_recvfrom_stop(void *data, aiofn_loop_proact
 // Both read_start and recvfrom_start tag their SQEs as HANDLE_READ; dispatch
 // to the right frontend callback by which one is currently set.
 static void aiofn_uring_handle_recv_completed(aiofn_uring_state_t *state, aiofn_uring_handle_t *handle, int res) {
-    handle->pending_sqes--;
+    handle->object.pending_sqes--;
     void *buf = handle->read_buf;
     handle->read_buf = NULL;
 
@@ -1014,7 +1085,7 @@ static void aiofn_uring_issue_accept(aiofn_uring_state_t *state, aiofn_uring_han
     if (sqe == NULL) {
         return;
     }
-    handle->pending_sqes++;
+    handle->object.pending_sqes++;
     io_uring_prep_multishot_accept(sqe, handle->fd, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
     io_uring_sqe_set_data64(sqe, aiofn_uring_tag(handle, AIOFN_URING_KIND_HANDLE_ACCEPT));
 }
@@ -1041,9 +1112,8 @@ static aiofn_loop_status aiofn_uring_accept_stop(void *data, aiofn_loop_proactor
 
     struct io_uring_sqe *sqe = aiofn_uring_get_sqe(state);
     if (sqe != NULL) {
-        handle->pending_sqes++;
         io_uring_prep_cancel64(sqe, aiofn_uring_tag(handle, AIOFN_URING_KIND_HANDLE_ACCEPT), 0);
-        io_uring_sqe_set_data64(sqe, aiofn_uring_tag(NULL, AIOFN_URING_KIND_IGNORE));
+        aiofn_uring_tag_release(sqe, &handle->object);
     }
     return AIOFN_LOOP_OK;
 }
@@ -1063,6 +1133,7 @@ static void aiofn_uring_handle_accept_completed(aiofn_uring_state_t *state, aiof
                 close(new_fd);
                 handle->accept_callback(handle->accept_callback_data, AIOFN_LOOP_NO_MEMORY, NULL, NULL, 0);
             } else {
+                accepted->object.kind = AIOFN_URING_OBJECT_HANDLE;
                 accepted->fd = new_fd;
                 accepted->kind = AIOFN_LOOP_PROACTOR_HANDLE_SOCKET;
                 accepted->socktype = SOCK_STREAM;
@@ -1083,7 +1154,7 @@ static void aiofn_uring_handle_accept_completed(aiofn_uring_state_t *state, aiof
     }
 
     if ((flags & IORING_CQE_F_MORE) == 0) {
-        handle->pending_sqes--;
+        handle->object.pending_sqes--;
         if (handle->accepting) {
             aiofn_uring_issue_accept(state, handle);
         } else {
@@ -1100,7 +1171,8 @@ static void aiofn_uring_dispatch_cqe(aiofn_uring_state_t *state, struct io_uring
     void *ptr = aiofn_uring_tag_ptr(ud);
 
     switch (kind) {
-    case AIOFN_URING_KIND_IGNORE:
+    case AIOFN_URING_KIND_RELEASE:
+        aiofn_uring_release((aiofn_uring_object_t *)ptr);
         break;
     case AIOFN_URING_KIND_TIMER:
         aiofn_uring_timer_completed((aiofn_uring_timer_t *)ptr, cqe->res);

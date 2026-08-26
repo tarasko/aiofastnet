@@ -30,8 +30,8 @@ def selector_loop():
 
 @pytest_asyncio.fixture
 async def test_loop():
-    if os.name != "posix":
-        pytest.skip("the libuv/uring test backends are not available on Windows")
+    if not sys.platform.startswith("linux"):
+        pytest.skip("the libuv/uring test backends are only available on Linux")
     return asyncio.get_running_loop()
 
 
@@ -47,15 +47,16 @@ def _new_selector_event_loop():
     return asyncio.new_event_loop()
 
 
-def _test_loop_factories():
-    if os.name != "posix":
-        return _selector_loop_factories()
+def _native_loop_factories():
     from .libuv_loop import new_event_loop as new_libuv_loop
-    factories = {"libuv": new_libuv_loop}
-    if sys.platform.startswith("linux"):
-        from .uring_loop import new_event_loop as new_uring_loop
-        factories["uring"] = new_uring_loop
-    return factories
+    from .uring_loop import new_event_loop as new_uring_loop
+    return {"libuv": new_libuv_loop, "uring": new_uring_loop}
+
+
+def _test_loop_factories():
+    if not sys.platform.startswith("linux"):
+        return _selector_loop_factories()
+    return _native_loop_factories()
 
 
 def _selector_loop_factories():
@@ -88,13 +89,14 @@ class _UringEventLoopPolicy(asyncio.DefaultEventLoopPolicy):
         return new_event_loop()
 
 
+def _native_loop_policies():
+    return {"libuv": _LibuvEventLoopPolicy(), "uring": _UringEventLoopPolicy()}
+
+
 def _test_loop_policies():
-    if os.name != "posix":
+    if not sys.platform.startswith("linux"):
         return _selector_loop_policies()
-    policies = {"libuv": _LibuvEventLoopPolicy()}
-    if sys.platform.startswith("linux"):
-        policies["uring"] = _UringEventLoopPolicy()
-    return policies
+    return _native_loop_policies()
 
 
 def _platform_loop_factories():
@@ -119,6 +121,10 @@ def _platform_loop_factories():
         pass
     else:
         factories["uvloop"] = uvloop.new_event_loop
+
+    if sys.platform.startswith("linux"):
+        factories.update(_native_loop_factories())
+
     return factories
 
 
@@ -144,6 +150,10 @@ def _platform_loop_policies():
         pass
     else:
         policies["uvloop"] = uvloop.EventLoopPolicy()
+
+    if sys.platform.startswith("linux"):
+        policies.update(_native_loop_policies())
+
     return policies
 
 

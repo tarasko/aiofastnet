@@ -26,6 +26,13 @@ typedef struct {
     aiofn_loop_read_callback_fn read_callback;
     aiofn_loop_recvfrom_callback_fn recvfrom_callback;
     void *read_callback_data;
+    // True for the duration of a call out to read_alloc from
+    // aiofn_libuv_alloc_read. See aiofn_libuv_read_stop for why this matters.
+    int in_alloc_cb;
+    // Set instead of calling uv_read_stop()/uv_udp_recv_stop() immediately
+    // when read_stop() is invoked reentrantly from within alloc_cb; applied
+    // at the next safe entry into alloc_cb/read_cb.
+    int read_stop_deferred;
 
     uv_write_t write_request;
     aiofn_loop_proactor_op_t *write_op;
@@ -306,11 +313,41 @@ static aiofn_loop_status aiofn_libuv_unwrap_handle(void *data, aiofn_loop_proact
 }
 
 
+// Actually stops reading. Called either directly from read_stop() or, when
+// read_stop() had to defer (see there), from the next safe alloc_cb/read_cb
+// entry.
+static void aiofn_libuv_apply_deferred_read_stop(aiofn_libuv_handle_t *socket) {
+    socket->read_stop_deferred = 0;
+    if (socket->frontend->socktype == SOCK_DGRAM) {
+        uv_udp_recv_stop(&socket->handle.udp);
+    } else {
+        uv_read_stop((uv_stream_t *)&socket->handle.tcp);
+    }
+}
+
+
 static void aiofn_libuv_alloc_read(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buffer) {
     aiofn_libuv_handle_t *socket = (aiofn_libuv_handle_t *)handle;
+
+    if (socket->read_stop_deferred) {
+        aiofn_libuv_apply_deferred_read_stop(socket);
+    }
+
+    // read_alloc is NULL once read_stop() has run (deferred or not); nothing
+    // left to do until a fresh read_start()/recvfrom_start() reinstalls it.
+    if (socket->read_alloc == NULL) {
+        buffer->base = NULL;
+        buffer->len = 0;
+        return;
+    }
+
     void *base = NULL;
     size_t length = 0;
+    // Guards read_stop() against a reentrant uv_read_stop()/uv_udp_recv_stop()
+    // call from within this same read_alloc() - see the comment there.
+    socket->in_alloc_cb = 1;
     socket->read_alloc(socket->read_callback_data, suggested_size, &base, &length);
+    socket->in_alloc_cb = 0;
     buffer->base = base;
     buffer->len = length;
 }
@@ -318,7 +355,16 @@ static void aiofn_libuv_alloc_read(uv_handle_t *handle, size_t suggested_size, u
 
 static void aiofn_libuv_on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buffer) {
     aiofn_libuv_handle_t *socket = (aiofn_libuv_handle_t *)stream;
-    assert(socket->read_callback != NULL);
+
+    if (socket->read_stop_deferred) {
+        aiofn_libuv_apply_deferred_read_stop(socket);
+    }
+
+    // read_stop() may have run (deferred or not) since this read was issued;
+    // nothing to dispatch to in that case.
+    if (socket->read_callback == NULL) {
+        return;
+    }
 
     // From libuv docs:
     // nread might be 0, which does not indicate an error or EOF.
@@ -348,7 +394,13 @@ static void aiofn_libuv_on_udp_read(
     aiofn_libuv_handle_t *socket = (aiofn_libuv_handle_t *)handle;
     (void)flags;
 
-    assert(socket->recvfrom_callback != NULL);
+    if (socket->read_stop_deferred) {
+        aiofn_libuv_apply_deferred_read_stop(socket);
+    }
+
+    if (socket->recvfrom_callback == NULL) {
+        return;
+    }
 
     // libuv reports an EAGAIN receive as nread == 0 with no source address;
     // an empty datagram also has nread == 0, but carries a valid address.
@@ -428,14 +480,28 @@ static aiofn_loop_status aiofn_libuv_recvfrom_start(
 
 static aiofn_loop_status aiofn_libuv_read_stop(void *data, aiofn_loop_proactor_handle_t *frontend) {
     aiofn_libuv_handle_t *socket = frontend->backend_token;
+    socket->read_alloc = NULL;
+    socket->read_callback = NULL;
+    socket->recvfrom_callback = NULL;
+
+    if (socket->in_alloc_cb) {
+        // A frontend read_alloc callback can synchronously trigger an error
+        // path that calls back into read_stop() (e.g. a protocol's
+        // get_buffer() raising). Calling uv_read_stop()/uv_udp_recv_stop()
+        // right here would null out libuv's own stream->read_cb while
+        // uv__read() is still executing this same alloc_cb call and is
+        // about to invoke read_cb next for this same iteration - that next
+        // call would jump through a NULL pointer. Defer the real stop to the
+        // next alloc_cb/read_cb entry, which is a safe place to make it.
+        socket->read_stop_deferred = 1;
+        return AIOFN_LOOP_OK;
+    }
+
     int result = frontend->socktype == SOCK_DGRAM ? uv_udp_recv_stop(&socket->handle.udp) : uv_read_stop((uv_stream_t *)socket);
     if (result != 0) {
         aiofn_libuv_set_error((aiofn_libuv_state_t *)data, "read_stop", result);
         return AIOFN_LOOP_ERROR;
     }
-    socket->read_alloc = NULL;
-    socket->read_callback = NULL;
-    socket->recvfrom_callback = NULL;
     return AIOFN_LOOP_OK;
 }
 
