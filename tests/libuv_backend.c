@@ -117,12 +117,6 @@ static void aiofn_libuv_on_fd(uv_poll_t *poll, int status, int events) {
 }
 
 
-static void aiofn_libuv_on_signal(uv_signal_t *signal, int signum) {
-    aiofn_loop_signal_watch_t *watch = signal->data;
-    watch->callback(watch->callback_data, signum);
-}
-
-
 static aiofn_loop_status aiofn_libuv_run(void *data) {
     aiofn_libuv_state_t *state = data;
     uv_run(&state->loop, UV_RUN_DEFAULT);
@@ -945,53 +939,6 @@ static aiofn_loop_status aiofn_libuv_remove_writer(void *data, aiofn_loop_fd_wat
 }
 
 
-/* Signal operations. */
-static aiofn_loop_status aiofn_libuv_signal_watch(
-    void *data,
-    int signum,
-    aiofn_loop_signal_watch_t *watch
-) {
-    aiofn_libuv_state_t *state = data;
-    uv_signal_t *signal = calloc(1, sizeof(*signal));
-    int result;
-    if (signal == NULL) {
-        return AIOFN_LOOP_NO_MEMORY;
-    }
-
-    result = uv_signal_init(&state->loop, signal);
-    if (result == 0) {
-        signal->data = watch;
-        result = uv_signal_start(signal, aiofn_libuv_on_signal, signum);
-    }
-    if (result != 0) {
-        aiofn_libuv_set_error(state, "uv_signal_start", result);
-        if (signal->loop != NULL) {
-            uv_close((uv_handle_t *)signal, aiofn_libuv_free_handle);
-        } else {
-            free(signal);
-        }
-        return AIOFN_LOOP_ERROR;
-    }
-    watch->backend_token = signal;
-    return AIOFN_LOOP_OK;
-}
-
-
-static aiofn_loop_status aiofn_libuv_signal_unwatch(void *data, aiofn_loop_signal_watch_t *watch) {
-    aiofn_libuv_state_t *state = data;
-    uv_signal_t *signal = watch->backend_token;
-    int result = uv_signal_stop(signal);
-    if (result != 0) {
-        aiofn_libuv_set_error(state, "uv_signal_stop", result);
-        return AIOFN_LOOP_ERROR;
-    }
-    watch->backend_token = NULL;
-    signal->data = NULL;
-    uv_close((uv_handle_t *)signal, aiofn_libuv_free_handle);
-    return AIOFN_LOOP_OK;
-}
-
-
 static const char *aiofn_libuv_last_error(void *data) {
     aiofn_libuv_state_t *state = data;
     return state->last_error[0] == '\0' ? NULL : state->last_error;
@@ -1050,8 +997,6 @@ aiofn_loop_backend_t *aiofn_libuv_backend_new(void) {
     state->backend.proactor = &state->proactor;
 
     state->backend.last_error = aiofn_libuv_last_error;
-    state->backend.signal_watch = aiofn_libuv_signal_watch;
-    state->backend.signal_unwatch = aiofn_libuv_signal_unwatch;
     return &state->backend;
 }
 

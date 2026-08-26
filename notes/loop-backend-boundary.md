@@ -18,7 +18,6 @@ The native adapter owns only:
 - scheduling and ordering of `call_soon()` callbacks;
 - the loop's monotonic clock and native timers;
 - persistent file-descriptor readiness watches;
-- persistent native signal watches;
 
 The interface contains no `PyObject *`, and the adapter never calls the Python C API. An `aiofn_loop_action_t` is embedded in an aiofastnet-owned handle. Its opaque `callback_data` may refer back to Python state; the `callback` function is responsible for entering the Python runtime.
 
@@ -50,7 +49,7 @@ One frontend-owned `aiofn_loop_fd_watch_t` is embedded in the `_FDCallbacks` obj
 
 Each successful registration stores a non-NULL backend-native token in the corresponding watch field and each successful removal clears it. After both directions are removed, the adapter guarantees that it will no longer access the watch, callback, or context, even if its native library completes cancellation asynchronously. The adapter must reproduce level-triggered behavior even if its native loop uses edge-triggered or one-shot readiness internally. Hangup and error notifications are reported as whichever of READ and WRITE are currently requested; the aiofastnet callback performs the socket operation and observes EOF or the concrete socket error.
 
-A signal watch is persistent until removed. `signal_watch()` returns an opaque backend-native token used by `signal_unwatch()`. The adapter must deliver the callback on the loop thread during normal event dispatch, never from the asynchronous OS signal handler. There is at most one watch for each signal number. On successful removal, the adapter guarantees that it will no longer access the callback or context. `SelectorLoopBase` owns signal-number validation, Python handles, handler replacement, and restoration of the Python-visible default disposition.
+Signal handling is not part of this boundary. `SelectorLoopBase` implements `add_signal_handler()`/`remove_signal_handler()` entirely on the frontend side, via `signal.set_wakeup_fd()` and a pipe read through the reactor's `add_reader()` - the same mechanism `_SelfPipe` already uses for `call_soon_threadsafe()`. No adapter operation is involved.
 
 `after_fork()` reinitializes native state inherited by a child process while preserving registered actions and watches. The loop must be open and inactive, and it must be the first backend operation in the child. The operation is present at the ABI boundary, but `LoopBase` does not invoke it yet because frontend-owned locks, the threadsafe pipe, executors, and thread state also need a defined child-reset policy.
 

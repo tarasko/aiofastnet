@@ -48,7 +48,6 @@ from .loop_backend cimport (
     aiofn_reactor_backend_t,
     aiofn_loop_action_t,
     aiofn_loop_fd_watch_t,
-    aiofn_loop_signal_watch_t,
     aiofn_loop_status,
 )
 from .utils cimport (
@@ -89,6 +88,7 @@ cdef:
 
 cdef class LoopBase
 cdef class _SelfPipe
+cdef class _SignalPipe
 cdef class Handle:
     # Use create_handle to construct instances
 
@@ -316,18 +316,16 @@ cdef class _FDCallbacks:
 
 cdef class _SignalCallback:
     cdef:
-        LoopBase loop
         Handle handle
-        aiofn_loop_signal_watch_t watch
         int signum
+        # Value to pass back to signal.signal() on removal, restoring
+        # whatever disposition was in place before add_signal_handler().
+        object old_handler
 
-    def __init__(self, LoopBase loop, int signum, Handle handle):
-        self.loop = loop
+    def __init__(self, Handle handle, int signum, object old_handler):
         self.handle = handle
-        self.watch.callback = _signal_callback
-        self.watch.callback_data = <void *>self
-        self.watch.backend_token = NULL
         self.signum = signum
+        self.old_handler = old_handler
 
 
 cdef void _threadsafe_ready_callback(void *callback_data, int read_ready, int write_ready) noexcept with gil:
@@ -394,12 +392,10 @@ cdef class _SelfPipe:
             acquired = PyThread_acquire_lock(self.lifecycle_lock, WAIT_LOCK)
         if not acquired:
             raise RuntimeError("could not acquire event loop lifecycle lock")
-        return NoResult.OK
 
     cdef inline NoResult release(self) except NoResult.EXC:
         with nogil:
             PyThread_release_lock(self.lifecycle_lock)
-        return NoResult.OK
 
     cdef inline NoResult submit(self, Handle handle) except NoResult.EXC:
         cdef:
@@ -428,8 +424,6 @@ cdef class _SelfPipe:
         if bytes_written != sizeof(handle_ptr):
             Py_DECREF(handle)
             raise RuntimeError("call_soon_threadsafe failed: partial pointer write")
-
-        return NoResult.OK
 
     cdef inline Py_ssize_t process(self, bint execute) except -1:
         cdef:
@@ -477,7 +471,119 @@ cdef class _SelfPipe:
         posix_close(self.writer)
         self.reader = -1
         self.writer = -1
+
+
+def _signal_noop_handler(signum, frame):
+    # Only installed to move the OS-level disposition away from SIG_DFL/
+    # SIG_IGN; real dispatch happens through _SignalPipe, driven by
+    # signal.set_wakeup_fd(), not by CPython actually invoking this.
+    pass
+
+
+cdef void _signal_ready_callback(void *callback_data, int read_ready, int write_ready) noexcept with gil:
+    cdef _SignalPipe signal_pipe = <_SignalPipe>callback_data
+    try:
+        if read_ready:
+            signal_pipe.process()
+    except BaseException as exc:
+        signal_pipe.loop._backend_failed(exc)
+
+
+cdef class _SignalPipe:
+    """Delivers OS signals to add_signal_handler() callbacks.
+
+    No signal handler of our own is installed. signal.set_wakeup_fd()
+    already does the one thing an async-signal-safe handler is allowed to
+    do - write the signal number as a single byte into a given fd - as part
+    of CPython's own C-level signal trampoline, for every signal that has a
+    Python-level disposition. We just read that fd through the reactor,
+    exactly like _SelfPipe does for call_soon_threadsafe().
+    """
+
+    cdef:
+        LoopBase loop
+        aiofn_loop_fd_watch_t watch
+        int reader
+        int writer
+        int old_wakeup_fd
+
+    def __cinit__(self):
+        self.watch.backend_read_token = NULL
+        self.watch.backend_write_token = NULL
+        self.reader = -1
+        self.writer = -1
+        self.old_wakeup_fd = -1
+
+    def __init__(self, LoopBase loop):
+        self.loop = loop
+        reader, writer = os.pipe()
+        self.reader = reader
+        self.writer = writer
+        try:
+            os.set_blocking(reader, False)
+            os.set_blocking(writer, False)
+            os.set_inheritable(reader, False)
+            os.set_inheritable(writer, False)
+            self.watch.fd = reader
+            self.watch.callback = _signal_ready_callback
+            self.watch.callback_data = <void *>self
+            loop._check_status(loop._reactor.add_reader(loop._backend.state, &self.watch))
+            # warn_on_full_buffer=False: a full pipe just means we drain the
+            # rest on the next readiness callback, not a real error.
+            self.old_wakeup_fd = signal.set_wakeup_fd(writer, warn_on_full_buffer=False)
+        except:
+            posix_close(self.reader)
+            posix_close(self.writer)
+            self.reader = -1
+            self.writer = -1
+            raise
+
+    def __dealloc__(self):
+        if self.reader >= 0:
+            posix_close(self.reader)
+            self.reader = -1
+        if self.writer >= 0:
+            posix_close(self.writer)
+            self.writer = -1
+
+    cdef inline NoResult process(self) except NoResult.EXC:
+        cdef:
+            uint8_t buf[256]
+            Py_ssize_t bytes_read
+            Py_ssize_t idx
+            int last_error
+            int signum
+            _SignalCallback signal_callback
+
+        while True:
+            with nogil:
+                bytes_read = posix_read(self.reader, buf, sizeof(buf))
+            if bytes_read >= 0:
+                break
+            last_error = errno
+            if last_error == EINTR:
+                continue
+            if last_error == EAGAIN:
+                return NoResult.OK
+            raise OSError(last_error, os.strerror(last_error))
+
+        for idx in range(bytes_read):
+            signum = buf[idx]
+            signal_callback = self.loop._signal_handlers.get(signum)
+            if signal_callback is not None:
+                signal_callback.handle._run()
         return NoResult.OK
+
+    cdef inline NoResult close(self) except NoResult.EXC:
+        if self.watch.backend_read_token != NULL:
+            self.loop._check_status(self.loop._reactor.remove_reader(self.loop._backend.state, &self.watch))
+
+        signal.set_wakeup_fd(self.old_wakeup_fd)
+
+        posix_close(self.reader)
+        posix_close(self.writer)
+        self.reader = -1
+        self.writer = -1
 
 
 cdef void _action_callback(void *callback_data) noexcept with gil:
@@ -566,15 +672,6 @@ cdef void _fd_ready_callback(void *callback_data, int read_ready, int write_read
         callbacks.loop._backend_failed(exc)
 
 
-cdef void _signal_callback(void *callback_data, int signum) noexcept with gil:
-    cdef _SignalCallback callback = <_SignalCallback>callback_data
-    try:
-        if signum == callback.signum:
-            callback.handle._run()
-    except BaseException as exc:
-        callback.loop._backend_failed(exc)
-
-
 def _run_until_complete_cb(future):
     if not future.cancelled():
         exc = future.exception()
@@ -631,6 +728,11 @@ cdef class LoopBase:
         # The Handle is not pushed through the usual call_soon machinery.
         _SelfPipe _self_pipe
 
+        # Created lazily on the first add_signal_handler() call; most loops
+        # never register a signal handler, so there is no reason to pay for
+        # a pipe and a reactor registration up front like _self_pipe does.
+        _SignalPipe _signal_pipe
+
     connect_accepted_socket = connect_accepted_socket
     connect_read_pipe = connect_read_pipe
     connect_write_pipe = connect_write_pipe
@@ -666,9 +768,7 @@ cdef class LoopBase:
 
         if (backend_ptr.state == NULL or backend_ptr.run == NULL or backend_ptr.stop == NULL or backend_ptr.close == NULL or
                 backend_ptr.now_ns == NULL or backend_ptr.call_soon == NULL or backend_ptr.call_at == NULL or
-                backend_ptr.call_soon_cancel == NULL or backend_ptr.call_at_cancel == NULL or
-                backend_ptr.signal_watch == NULL or
-                backend_ptr.signal_unwatch == NULL):
+                backend_ptr.call_soon_cancel == NULL or backend_ptr.call_at_cancel == NULL):
             raise ValueError("loop backend is missing a required operation")
         if backend_ptr.reactor != NULL:
             if backend_ptr.reactor.struct_size < AIOFN_REACTOR_BACKEND_MIN_SIZE:
@@ -703,6 +803,7 @@ cdef class LoopBase:
         self._backend_fatal_error = None
         self._fd_callbacks = {}
         self._signal_handlers = {}
+        self._signal_pipe = None
         self._pending_handles = None
         self._current_handle_source_traceback = None
         self._closed = False
@@ -762,7 +863,6 @@ cdef class LoopBase:
     cdef inline NoResult _check_closed(self) except NoResult.EXC:
         if self._closed:
             raise RuntimeError("Event loop is closed")
-        return NoResult.OK
 
     cdef inline NoResult _check_running(self) except NoResult.EXC:
         if self._thread_id != 0:
@@ -952,8 +1052,11 @@ cdef class LoopBase:
         self._self_pipe.close()
 
         for signal_callback in self._signal_handlers.values():
-            self._check_status(self._backend.signal_unwatch(self._backend.state, &signal_callback.watch))
+            signal.signal(signal_callback.signum, signal_callback.old_handler)
         self._signal_handlers = None
+        if self._signal_pipe is not None:
+            self._signal_pipe.close()
+            self._signal_pipe = None
 
         for fd_callback in self._fd_callbacks.values():
             self._remove_fd(fd_callback)
@@ -1234,14 +1337,14 @@ cdef class LoopBase:
             signal_callback.handle = handle
             return
 
-        signal_callback = _SignalCallback(self, sig, handle)
-        self._signal_handlers[sig] = signal_callback
-
+        old_handler = signal.signal(sig, _signal_noop_handler)
         try:
-            self._check_status(self._backend.signal_watch(self._backend.state, sig, &signal_callback.watch))
+            if self._signal_pipe is None:
+                self._signal_pipe = _SignalPipe(self)
         except:
-            self._signal_handlers.pop(sig, None)
+            signal.signal(sig, old_handler)
             raise
+        self._signal_handlers[sig] = _SignalCallback(handle, sig, old_handler)
 
     def remove_signal_handler(self, sig):
         self._check_signal(sig)
@@ -1252,7 +1355,7 @@ cdef class LoopBase:
         if signal_callback is None:
             return False
 
-        self._check_status(self._backend.signal_unwatch(self._backend.state, &signal_callback.watch))
+        signal.signal(sig, signal_callback.old_handler)
         self._signal_handlers.pop(sig, None)
         return True
 
@@ -1261,7 +1364,6 @@ cdef class LoopBase:
             raise TypeError(f"sig must be an int, not {sig!r}")
         if not 1 <= sig < signal.NSIG:
             raise ValueError(f"sig {sig} out of range(1, {signal.NSIG})")
-        return NoResult.OK
 
     async def subprocess_shell(self, protocol_factory, cmd, *, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                                stderr=asyncio.subprocess.PIPE, universal_newlines=False, shell=True, bufsize=0, encoding=None, errors=None,

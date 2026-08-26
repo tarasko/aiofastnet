@@ -1,9 +1,7 @@
 #include "uring_backend.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <poll.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,7 +22,6 @@
 typedef enum {
     AIOFN_URING_KIND_RELEASE = 0, // a cancel/remove op's own completion; see aiofn_uring_release()
     AIOFN_URING_KIND_TIMER = 1,
-    AIOFN_URING_KIND_SIGNAL = 2,
     AIOFN_URING_KIND_FD_READ = 3,
     AIOFN_URING_KIND_FD_WRITE = 4,
     AIOFN_URING_KIND_HANDLE_READ = 5,
@@ -131,23 +128,6 @@ typedef struct aiofn_uring_timer {
     struct __kernel_timespec ts;         // must outlive the SQE until submitted
 } aiofn_uring_timer_t;
 
-// Signals. sigprocmask()/signalfd only cover the calling thread's mask - a
-// signal sent to the process (os.kill(getpid(), ...)) can land on ANY thread
-// that hasn't blocked it, and a Python process routinely has other threads
-// around (pytest, thread-pool workers, ...) that never call into this
-// backend at all. A signalfd-based design is therefore unsafe here. Instead,
-// install a real sigaction() handler - process-wide regardless of which
-// thread receives the signal - that does the one thing async-signal-safe
-// code is allowed to do: write() the signal number to a self-pipe, which the
-// loop polls normally.
-#define AIOFN_URING_MAX_SIGNUM 64
-
-typedef struct aiofn_uring_signal {
-    aiofn_loop_signal_watch_t *watch;
-    int signum;
-    struct sigaction old_action;
-} aiofn_uring_signal_t;
-
 // Reactor fd readiness: one persistent multishot poll per direction. Mirrors
 // the frontend's own aiofn_loop_fd_watch_t, which already carries one token
 // per direction for the same fd.
@@ -207,27 +187,7 @@ typedef struct {
 
     aiofn_uring_ready_node_t *ready_head;
     aiofn_uring_ready_node_t *ready_tail;
-
-    int signal_pipe_read;
-    int signal_pipe_write;
-    aiofn_uring_signal_t *signals_by_num[AIOFN_URING_MAX_SIGNUM];
 } aiofn_uring_state_t;
-
-// sigaction() handlers are plain C function pointers with no user-data slot,
-// so the handler needs some way to find the pipe to write to. Signals are
-// inherently process-global (only one handler can own a given signum at a
-// time; the ABI itself allows at most one watch per signal number), so at
-// most one backend instance's pipe is ever the active target at a time.
-static volatile int g_aiofn_uring_signal_pipe_write_fd = -1;
-
-static void aiofn_uring_signal_handler(int signum) {
-    int fd = g_aiofn_uring_signal_pipe_write_fd;
-    if (fd >= 0) {
-        unsigned char byte = (unsigned char)signum;
-        ssize_t ignored_result = write(fd, &byte, 1);
-        (void)ignored_result;
-    }
-}
 
 static void aiofn_uring_set_error(aiofn_uring_state_t *state, const char *operation, int err) {
     snprintf(state->last_error, sizeof(state->last_error), "%s: %s", operation, strerror(err < 0 ? -err : err));
@@ -441,123 +401,8 @@ static void aiofn_uring_stop(void *data) {
 
 static void aiofn_uring_close(void *data) {
     aiofn_uring_state_t *state = data;
-    if (state->signal_pipe_write >= 0 && g_aiofn_uring_signal_pipe_write_fd == state->signal_pipe_write) {
-        g_aiofn_uring_signal_pipe_write_fd = -1;
-    }
-    if (state->signal_pipe_read >= 0) {
-        close(state->signal_pipe_read);
-        close(state->signal_pipe_write);
-        state->signal_pipe_read = -1;
-        state->signal_pipe_write = -1;
-    }
     io_uring_queue_exit(&state->ring);
     state->closed = 1;
-}
-
-// ---- signals ----
-
-static void aiofn_uring_issue_signal_pipe_poll(aiofn_uring_state_t *state) {
-    struct io_uring_sqe *sqe = aiofn_uring_get_sqe(state);
-    if (sqe == NULL) {
-        return;
-    }
-    // Single-shot, reissued after every completion - see the reactor fd poll
-    // for why (level-triggered semantics: keep re-checking, don't rely on a
-    // multishot registration to refire for data that's already sitting
-    // there unread).
-    io_uring_prep_poll_add(sqe, state->signal_pipe_read, POLLIN);
-    io_uring_sqe_set_data64(sqe, aiofn_uring_tag(NULL, AIOFN_URING_KIND_SIGNAL));
-}
-
-static aiofn_loop_status aiofn_uring_ensure_signal_pipe(aiofn_uring_state_t *state) {
-    if (state->signal_pipe_read >= 0) {
-        return AIOFN_LOOP_OK;
-    }
-
-    int fds[2];
-    if (pipe(fds) != 0) {
-        aiofn_uring_set_error(state, "pipe", -errno);
-        return AIOFN_LOOP_ERROR;
-    }
-    fcntl(fds[0], F_SETFL, fcntl(fds[0], F_GETFL) | O_NONBLOCK);
-    fcntl(fds[1], F_SETFL, fcntl(fds[1], F_GETFL) | O_NONBLOCK);
-    fcntl(fds[0], F_SETFD, FD_CLOEXEC);
-    fcntl(fds[1], F_SETFD, FD_CLOEXEC);
-
-    state->signal_pipe_read = fds[0];
-    state->signal_pipe_write = fds[1];
-    g_aiofn_uring_signal_pipe_write_fd = fds[1];
-    aiofn_uring_issue_signal_pipe_poll(state);
-    return AIOFN_LOOP_OK;
-}
-
-static aiofn_loop_status aiofn_uring_signal_watch(void *data, int signum, aiofn_loop_signal_watch_t *watch) {
-    aiofn_uring_state_t *state = data;
-    if (signum < 0 || signum >= AIOFN_URING_MAX_SIGNUM) {
-        aiofn_uring_set_error(state, "signal_watch", -EINVAL);
-        return AIOFN_LOOP_ERROR;
-    }
-
-    aiofn_loop_status status = aiofn_uring_ensure_signal_pipe(state);
-    if (status != AIOFN_LOOP_OK) {
-        return status;
-    }
-
-    aiofn_uring_signal_t *sig = calloc(1, sizeof(*sig));
-    if (sig == NULL) {
-        return AIOFN_LOOP_NO_MEMORY;
-    }
-    sig->watch = watch;
-    sig->signum = signum;
-
-    struct sigaction action;
-    memset(&action, 0, sizeof(action));
-    action.sa_handler = aiofn_uring_signal_handler;
-    sigemptyset(&action.sa_mask);
-    action.sa_flags = SA_RESTART;
-    if (sigaction(signum, &action, &sig->old_action) != 0) {
-        aiofn_uring_set_error(state, "sigaction", -errno);
-        free(sig);
-        return AIOFN_LOOP_ERROR;
-    }
-
-    state->signals_by_num[signum] = sig;
-    watch->backend_token = sig;
-    return AIOFN_LOOP_OK;
-}
-
-static aiofn_loop_status aiofn_uring_signal_unwatch(void *data, aiofn_loop_signal_watch_t *watch) {
-    (void)data;
-    aiofn_uring_state_t *state = data;
-    aiofn_uring_signal_t *sig = watch->backend_token;
-    watch->backend_token = NULL;
-
-    state->signals_by_num[sig->signum] = NULL;
-    sigaction(sig->signum, &sig->old_action, NULL);
-    free(sig);
-    return AIOFN_LOOP_OK;
-}
-
-static void aiofn_uring_signal_pipe_completed(aiofn_uring_state_t *state, int res) {
-    if (res >= 0) {
-        unsigned char buf[64];
-        ssize_t n;
-        // We own both ends of this pipe (unlike the frontend's self-pipe),
-        // so draining fully here is safe and correct.
-        while ((n = read(state->signal_pipe_read, buf, sizeof(buf))) > 0) {
-            for (ssize_t i = 0; i < n; i++) {
-                int signum = buf[i];
-                if (signum < 0 || signum >= AIOFN_URING_MAX_SIGNUM) {
-                    continue;
-                }
-                aiofn_uring_signal_t *sig = state->signals_by_num[signum];
-                if (sig != NULL) {
-                    sig->watch->callback(sig->watch->callback_data, signum);
-                }
-            }
-        }
-    }
-    aiofn_uring_issue_signal_pipe_poll(state);
 }
 
 // ---- reactor fd readiness ----
@@ -1177,10 +1022,6 @@ static void aiofn_uring_dispatch_cqe(aiofn_uring_state_t *state, struct io_uring
     case AIOFN_URING_KIND_TIMER:
         aiofn_uring_timer_completed((aiofn_uring_timer_t *)ptr, cqe->res);
         break;
-    case AIOFN_URING_KIND_SIGNAL:
-        (void)ptr;
-        aiofn_uring_signal_pipe_completed(state, cqe->res);
-        break;
     case AIOFN_URING_KIND_FD_READ:
         aiofn_uring_fd_watch_completed(state, (aiofn_uring_fd_watch_t *)ptr, 1, cqe->res, cqe->flags);
         break;
@@ -1225,8 +1066,6 @@ aiofn_loop_backend_t *aiofn_uring_backend_new(int busy_poll, int sqpoll) {
     if (state == NULL) {
         return NULL;
     }
-    state->signal_pipe_read = -1;
-    state->signal_pipe_write = -1;
     state->busy_poll = busy_poll;
 
     // Every backend operation runs on the loop thread only (see the ABI's
@@ -1308,8 +1147,6 @@ aiofn_loop_backend_t *aiofn_uring_backend_new(int busy_poll, int sqpoll) {
     state->proactor.recvfrom_stop = aiofn_uring_recvfrom_stop;
     state->backend.proactor = &state->proactor;
 
-    state->backend.signal_watch = aiofn_uring_signal_watch;
-    state->backend.signal_unwatch = aiofn_uring_signal_unwatch;
     state->backend.last_error = aiofn_uring_last_error;
     return &state->backend;
 }

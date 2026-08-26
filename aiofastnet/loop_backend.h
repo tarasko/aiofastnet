@@ -37,15 +37,6 @@ typedef struct {
     void *backend_token;
 } aiofn_loop_action_t;
 
-// Frontend-owned storage for one persistent signal watch. The frontend
-// initializes callback and callback_data. The backend stores its native
-// registration token in backend_token while the watch is active.
-typedef struct {
-    void (*callback)(void *callback_data, int signum);
-    void *callback_data;
-    void *backend_token;
-} aiofn_loop_signal_watch_t;
-
 struct aiofn_reactor_backend;
 typedef struct aiofn_reactor_backend aiofn_reactor_backend_t;
 
@@ -97,9 +88,9 @@ typedef struct {
     void (*stop)(void *state);
 
     // Release backend-global resources. The frontend first cancels every
-    // action and removes every fd and signal watch, so no callback or frontend
-    // pointer remains registered when close() is called. close() is called
-    // only while run() is inactive and must not free state.
+    // action and removes every fd watch, so no callback or frontend pointer
+    // remains registered when close() is called. close() is called only
+    // while run() is inactive and must not free state.
     void (*close)(void *state);
 
     // Monotonic time in nanoseconds. This is the clock used by call_at().
@@ -130,19 +121,6 @@ typedef struct {
     // cancelled. Same contract as call_soon_cancel(), for actions scheduled
     // through call_at() instead.
     aiofn_loop_status (*call_at_cancel)(void *state, aiofn_loop_action_t *action);
-
-    // Add a persistent watch for signum. The frontend owns watch and keeps it
-    // alive until signal_unwatch() succeeds. The callback runs during normal
-    // event dispatch, never directly from an OS signal handler and never inline
-    // from signal_watch(). There is at most one watch for each signal number.
-    // Aiofastnet retains ownership of callback_data.
-    aiofn_loop_status (*signal_watch)(void *state, int signum, aiofn_loop_signal_watch_t *watch);
-
-    // Remove a signal watch. On success, its callback will not be called
-    // later, the adapter no longer accesses callback_data, watch becomes
-    // invalid, and the process-level disposition for signum is restored to
-    // what it was before signal_watch().
-    aiofn_loop_status (*signal_unwatch)(void *state, aiofn_loop_signal_watch_t *watch);
 
     // Optional diagnostic for the most recent failed operation. The returned
     // UTF-8 string remains valid until the next backend operation. It may be
