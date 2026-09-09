@@ -17,3 +17,4 @@ playground.py
 !aiofastnet/openssl_compat.c
 .coverage
 uv.lock
+.mcp.json

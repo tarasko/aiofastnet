@@ -2,6 +2,7 @@ import os
 import socket
 import sys
 
+from cython cimport unlikely
 from cpython.bytes cimport (
     PyBytes_AsStringAndSize, PyBytes_AS_STRING, PyBytes_CheckExact,
     PyBytes_FromObject, PyBytes_FromStringAndSize, PyBytes_GET_SIZE,

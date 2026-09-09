@@ -7,6 +7,7 @@ from asyncio.trsock import TransportSocket
 from logging import getLogger
 from typing import Optional
 
+from cython cimport unlikely
 from cpython.bytearray cimport PyByteArray_AS_STRING, PyByteArray_GET_SIZE, PyByteArray_FromStringAndSize
 from cpython.bytes cimport PyBytes_FromStringAndSize
 from cpython.object cimport PyObject
@@ -28,8 +29,6 @@ from .utils cimport (
     aiofn_finalize_bytes,
     aiofn_set_nodelay,
     aiofn_set_socket_extra_info,
-    aiofn_add_info_and_reraise,
-    unlikely
 )
 from .transport cimport Transport, Protocol, WriteWatermarks
 from .openssl_compat import OPENSSL_DYN_LIBS, create_transport_context
