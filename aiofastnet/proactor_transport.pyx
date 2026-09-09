@@ -16,6 +16,7 @@ from .loop_base cimport ProactorContext, ProactorHandle
 from .transport cimport (
     DatagramTransport,
     FDTransport,
+    Protocol,
     SendFileRequest,
     StreamTransport,
     WriteRequest,
@@ -24,6 +25,7 @@ from .transport cimport (
 from .utils cimport (
     AIOFN_MAX_IOVEC,
     NoResult,
+    aiofn_add_info_and_reraise,
     aiofn_allocate_bytes,
     aiofn_finalize_bytes,
     aiofn_pyaddr_to_sockaddr,
@@ -34,6 +36,7 @@ from .utils cimport (
 
 from .utils import aiofn_set_result_unless_cancelled
 
+from cpython.buffer cimport Py_buffer, PyBuffer_Release, PyObject_GetBuffer, PyBUF_WRITABLE
 from cpython.object cimport PyObject
 from cpython.ref cimport Py_XDECREF
 
@@ -51,7 +54,15 @@ cdef class ProactorSocketTransport(StreamTransport):
         ProactorHandle _proactor_handle
 
         object _read_buffer
+        Py_buffer _read_view
+        bint _read_view_acquired
         PyObject *_read_bytes
+        object _pending_read_data
+        size_t _pending_read_size
+        bint _read_result_pending
+        bint _read_started
+        bint _read_stopping
+        aiofn_loop_proactor_op_t _read_stop_op
 
         size_t _write_submitted_size
         aiofn_loop_proactor_op_t _write_op
@@ -62,12 +73,24 @@ cdef class ProactorSocketTransport(StreamTransport):
         bint _sendfile_native
 
         object _close_exc
+        bint _close_scheduled
 
     def __init__(self, ProactorContext context, loop, sock, protocol, waiter=None, server=None, bint is_pipe=False):
         StreamTransport.__init__(self, loop, sock, protocol, server)
 
         self._read_buffer = None
+        self._read_view_acquired = False
         self._read_bytes = NULL
+        self._pending_read_data = None
+        self._pending_read_size = 0
+        self._read_result_pending = False
+        self._read_started = False
+        self._read_stopping = False
+        self._read_stop_op.callback = _read_stop_callback_trampoline
+        self._read_stop_op.callback_data = <void *>self
+        self._read_stop_op.backend_token = NULL
+        self._read_stop_op.status = AIOFN_LOOP_OK
+        self._read_stop_op.transferred = 0
         # The scheduled initializer starts reading and then delivers connection_made().
         self._read_paused = True
 
@@ -79,6 +102,7 @@ cdef class ProactorSocketTransport(StreamTransport):
         self._write_op.transferred = 0
 
         self._close_exc = None
+        self._close_scheduled = False
         self._sendfile_native = context.proactor.sendfile != NULL
         # No native async sendfile op: fall back to the same write-readiness
         # driven os.sendfile() loop selector transports use, as long as this
@@ -97,8 +121,7 @@ cdef class ProactorSocketTransport(StreamTransport):
             self._loop.call_soon(aiofn_set_result_unless_cancelled, waiter, None)
 
     def __dealloc__(self):
-        Py_XDECREF(self._read_bytes)
-        self._read_bytes = NULL
+        self._release_read_buffer()
 
     cpdef _initialize(self):
         if self._closing:
@@ -112,24 +135,49 @@ cdef class ProactorSocketTransport(StreamTransport):
         self._call_protocol_connection_made()
 
     cdef NoResult _start_reading(self) except NoResult.EXC:
-        self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.read_start(
-            self._proactor_handle.context.backend.state,
-            &self._proactor_handle.backend_handle,
-            _read_alloc_trampoline,
-            _read_callback_trampoline,
-            <void *>self,
-        ))
+        if self._read_stopping:
+            return NoResult.OK
+
+        if self._read_result_pending:
+            self._deliver_read_result(self._pending_read_size)
+            if self._read_paused or self._closing:
+                return NoResult.OK
+
+        assert not self._read_started
+        self._read_started = True
+        try:
+            self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.read_start(
+                self._proactor_handle.context.backend.state,
+                &self._proactor_handle.backend_handle,
+                _read_alloc_trampoline,
+                _read_callback_trampoline,
+                <void *>self,
+            ))
+        except BaseException:
+            self._read_started = False
+            raise
 
     cdef NoResult _stop_reading(self) except NoResult.EXC:
-        self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.read_stop(
-            self._proactor_handle.context.backend.state,
-            &self._proactor_handle.backend_handle,
-        ))
-        self._release_read_buffer()
+        if not self._read_started or self._read_stopping:
+            return NoResult.OK
+
+        self._read_stopping = True
+        self._read_stop_op.backend_token = NULL
+        self._read_stop_op.status = AIOFN_LOOP_OK
+        self._read_stop_op.transferred = 0
+        try:
+            self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.read_stop(
+                self._proactor_handle.context.backend.state,
+                &self._proactor_handle.backend_handle,
+                &self._read_stop_op,
+            ))
+        except BaseException:
+            self._read_stopping = False
+            raise
 
     cdef NoResult _allocate_read_buffer(self, void **buffer, size_t *buffer_len) except NoResult.EXC:
         cdef:
-            char *data
+            char *data = NULL
             Py_ssize_t data_len
 
         # libuv may invoke its allocation callback for an EAGAIN read without
@@ -138,7 +186,20 @@ cdef class ProactorSocketTransport(StreamTransport):
         self._release_read_buffer()
 
         if self._protocol_buffered:
-            self._read_buffer = self._call_protocol_get_buffer(&data, &data_len)
+            try:
+                if self._protocol_aiofn:
+                    self._read_buffer = (<Protocol>self._protocol).get_buffer(-1)
+                else:
+                    self._read_buffer = self._protocol.get_buffer(-1)
+                PyObject_GetBuffer(self._read_buffer, &self._read_view, PyBUF_WRITABLE)
+                self._read_view_acquired = True
+                data = <char *>self._read_view.buf
+                data_len = self._read_view.len
+                if data_len == 0:
+                    raise RuntimeError('get_buffer() returned an empty buffer')
+            except:
+                self._release_read_buffer()
+                aiofn_add_info_and_reraise('Fatal error: protocol.get_buffer() call failed.')
         else:
             self._read_bytes = aiofn_allocate_bytes(_data_received_max_size, &data)
             data_len = _data_received_max_size
@@ -148,22 +209,47 @@ cdef class ProactorSocketTransport(StreamTransport):
         return NoResult.OK
 
     cdef inline void _release_read_buffer(self) noexcept:
+        if self._read_view_acquired:
+            PyBuffer_Release(&self._read_view)
+            self._read_view_acquired = False
         Py_XDECREF(self._read_bytes)
         self._read_bytes = NULL
         self._read_buffer = None
 
     cdef NoResult _read_completed(self, aiofn_loop_status status, size_t bytes_read) except NoResult.EXC:
+        if status != AIOFN_LOOP_OK:
+            self._release_read_buffer()
+            self._proactor_handle.context.check_status(status)
+
+        if self._closing:
+            self._release_read_buffer()
+            return NoResult.OK
+
+        if self._read_stopping or self._read_paused:
+            assert not self._read_result_pending
+            self._read_result_pending = True
+            self._pending_read_size = bytes_read
+            if bytes_read == 0:
+                self._release_read_buffer()
+            elif self._read_bytes != NULL:
+                self._pending_read_data = aiofn_finalize_bytes(self._read_bytes, <Py_ssize_t>bytes_read)
+                self._read_bytes = NULL
+            return NoResult.OK
+
+        self._deliver_read_result(bytes_read)
+
+    cdef NoResult _deliver_read_result(self, size_t bytes_read) except NoResult.EXC:
         cdef:
             PyObject *bytes_obj
             object buffer
             object data
             object keep_open
 
-        if status != AIOFN_LOOP_OK:
-            self._release_read_buffer()
-            self._proactor_handle.context.check_status(status)
+        self._read_result_pending = False
+        self._pending_read_size = 0
 
         if bytes_read == 0:
+            self._pending_read_data = None
             self._release_read_buffer()
             keep_open = self._call_protocol_eof_received()
             if keep_open:
@@ -172,8 +258,15 @@ cdef class ProactorSocketTransport(StreamTransport):
                 self.close()
             return NoResult.OK
 
-        if self._read_bytes == NULL:
+        if self._pending_read_data is not None:
+            data = self._pending_read_data
+            self._pending_read_data = None
+            self._call_protocol_data_received(data)
+        elif self._read_bytes == NULL:
             buffer = self._read_buffer
+            if self._read_view_acquired:
+                PyBuffer_Release(&self._read_view)
+                self._read_view_acquired = False
             self._read_buffer = None
             self._call_protocol_buffer_updated(<Py_ssize_t>bytes_read)
         else:
@@ -182,29 +275,75 @@ cdef class ProactorSocketTransport(StreamTransport):
             data = aiofn_finalize_bytes(bytes_obj, <Py_ssize_t>bytes_read)
             self._call_protocol_data_received(data)
 
+    cdef NoResult _read_stop_completed(self, aiofn_loop_status status) except NoResult.EXC:
+        assert self._read_stopping
+        self._read_stopping = False
+        self._read_started = False
+
+        if status != AIOFN_LOOP_OK:
+            self._release_read_buffer()
+            self._pending_read_data = None
+            self._read_result_pending = False
+            self._proactor_handle.context.check_status(status)
+
+        if not self._read_result_pending:
+            self._release_read_buffer()
+
+        if self._closing:
+            self._pending_read_data = None
+            self._read_result_pending = False
+            self._release_read_buffer()
+            self._maybe_schedule_finalize_close()
+        elif not self._read_paused:
+            self._start_reading()
+
+    cdef inline NoResult _maybe_schedule_finalize_close(self) except NoResult.EXC:
+        if (self._closing and not self._close_scheduled and not self._read_started and not self._read_stopping
+                and self._write_submitted_size == 0 and not self._write_ready_registered):
+            self._close_scheduled = True
+            self._schedule_finalize_close(self._close_exc)
+
+    cpdef close(self):
+        self._check_thread("close")
+        if self._closing:
+            return
+
+        self._closing = True
+        self._close_exc = None
+        self._pause_reading()
+        if self._write_backlog_size == 0:
+            self._maybe_schedule_finalize_close()
+
     cpdef _force_close(self, exc):
         if self._finalizing_close:
             return
 
+        # A synchronous read-stop completion can schedule finalization while
+        # _pause_reading() is still on the stack.
+        self._finalizing_close = True
+        self._close_exc = exc
+
         if not self._closing:
             self._closing = True
             self._pause_reading()
-
-        self._finalizing_close = True
-        self._close_exc = exc
 
         if self._write_ready_registered:
             self._stop_backlog_writing()
 
         if self._write_submitted_size == 0:
             self._clear_write_backlog(exc)
-            self._schedule_finalize_close(exc)
+            self._maybe_schedule_finalize_close()
 
     cdef NoResult _release_backend_resources(self) except NoResult.EXC:
         assert self._read_paused
+        assert not self._read_started
+        assert not self._read_stopping
         assert self._write_submitted_size == 0
         assert not self._write_ready_registered
 
+        self._pending_read_data = None
+        self._read_result_pending = False
+        self._release_read_buffer()
         try:
             self._proactor_handle.context.unwrap_handle(self._proactor_handle)
         finally:
@@ -255,8 +394,7 @@ cdef class ProactorSocketTransport(StreamTransport):
             if self._write_backlog_size > 0:
                 self._start_backlog_writing()
             elif self._closing:
-                if not self._finalizing_close:
-                    self._schedule_finalize_close(self._close_exc)
+                self._maybe_schedule_finalize_close()
             elif self._write_eof:
                 self._write_eof_now()
 
@@ -357,7 +495,7 @@ cdef class ProactorSocketTransport(StreamTransport):
         if self._finalizing_close:
             self._write_submitted_size = 0
             self._clear_write_backlog(self._close_exc)
-            self._schedule_finalize_close(self._close_exc)
+            self._maybe_schedule_finalize_close()
             return NoResult.OK
 
         if status != AIOFN_LOOP_OK:
@@ -392,8 +530,7 @@ cdef class ProactorSocketTransport(StreamTransport):
         self._maybe_resume_protocol()
         if self._write_backlog_size == 0:
             if self._closing:
-                if not self._finalizing_close:
-                    self._schedule_finalize_close(self._close_exc)
+                self._maybe_schedule_finalize_close()
             elif self._write_eof:
                 self._write_eof_now()
 
@@ -421,6 +558,13 @@ cdef class ProactorReadPipeTransport(FDTransport):
     cdef:
         ProactorHandle _proactor_handle
         PyObject *_read_bytes
+        object _pending_read_data
+        bint _read_result_pending
+        bint _read_started
+        bint _read_stopping
+        aiofn_loop_proactor_op_t _read_stop_op
+        object _close_exc
+        bint _close_scheduled
 
     def __init__(self, ProactorContext context, loop, pipe, protocol, waiter=None):
         mode = os.fstat(pipe.fileno()).st_mode
@@ -432,6 +576,17 @@ cdef class ProactorReadPipeTransport(FDTransport):
         self._extra['pipe'] = pipe
 
         self._read_bytes = NULL
+        self._pending_read_data = None
+        self._read_result_pending = False
+        self._read_started = False
+        self._read_stopping = False
+        self._read_stop_op.callback = _pipe_read_stop_callback_trampoline
+        self._read_stop_op.callback_data = <void *>self
+        self._read_stop_op.backend_token = NULL
+        self._read_stop_op.status = AIOFN_LOOP_OK
+        self._read_stop_op.transferred = 0
+        self._close_exc = None
+        self._close_scheduled = False
         self._read_paused = True
 
         self._proactor_handle = context.wrap_pipe(pipe)
@@ -443,8 +598,7 @@ cdef class ProactorReadPipeTransport(FDTransport):
             self._loop.call_soon(aiofn_set_result_unless_cancelled, waiter, None)
 
     def __dealloc__(self):
-        Py_XDECREF(self._read_bytes)
-        self._read_bytes = NULL
+        self._release_read_buffer()
 
     cpdef _initialize(self):
         if self._closing:
@@ -462,20 +616,45 @@ cdef class ProactorReadPipeTransport(FDTransport):
         self.abort()
 
     cdef NoResult _start_reading(self) except NoResult.EXC:
-        self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.read_start(
-            self._proactor_handle.context.backend.state,
-            &self._proactor_handle.backend_handle,
-            _pipe_read_alloc_trampoline,
-            _pipe_read_callback_trampoline,
-            <void *>self,
-        ))
+        if self._read_stopping:
+            return NoResult.OK
+
+        if self._read_result_pending:
+            self._deliver_read_result()
+            if self._read_paused or self._closing:
+                return NoResult.OK
+
+        assert not self._read_started
+        self._read_started = True
+        try:
+            self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.read_start(
+                self._proactor_handle.context.backend.state,
+                &self._proactor_handle.backend_handle,
+                _pipe_read_alloc_trampoline,
+                _pipe_read_callback_trampoline,
+                <void *>self,
+            ))
+        except BaseException:
+            self._read_started = False
+            raise
 
     cdef NoResult _stop_reading(self) except NoResult.EXC:
-        self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.read_stop(
-            self._proactor_handle.context.backend.state,
-            &self._proactor_handle.backend_handle,
-        ))
-        self._release_read_buffer()
+        if not self._read_started or self._read_stopping:
+            return NoResult.OK
+
+        self._read_stopping = True
+        self._read_stop_op.backend_token = NULL
+        self._read_stop_op.status = AIOFN_LOOP_OK
+        self._read_stop_op.transferred = 0
+        try:
+            self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.read_stop(
+                self._proactor_handle.context.backend.state,
+                &self._proactor_handle.backend_handle,
+                &self._read_stop_op,
+            ))
+        except BaseException:
+            self._read_stopping = False
+            raise
 
     cdef NoResult _allocate_read_buffer(self, void **buffer, size_t *buffer_len) except NoResult.EXC:
         cdef char *data
@@ -501,24 +680,93 @@ cdef class ProactorReadPipeTransport(FDTransport):
             self._release_read_buffer()
             self._proactor_handle.context.check_status(status)
 
-        if bytes_read == 0:
+        if self._closing:
             self._release_read_buffer()
-            if unlikely(self._is_debug):
-                _logger.info("%r was closed by peer", self)
-
-            self._call_protocol_eof_received()
-            self._force_close(None)
             return NoResult.OK
 
         assert self._read_bytes != NULL
         bytes_obj = self._read_bytes
         self._read_bytes = NULL
-        data = aiofn_finalize_bytes(bytes_obj, <Py_ssize_t>bytes_read)
-        self._call_protocol_data_received(data)
+        if bytes_read == 0:
+            Py_XDECREF(bytes_obj)
+            data = None
+        else:
+            data = aiofn_finalize_bytes(bytes_obj, <Py_ssize_t>bytes_read)
+
+        if self._read_stopping or self._read_paused:
+            assert not self._read_result_pending
+            self._pending_read_data = data
+            self._read_result_pending = True
+            return NoResult.OK
+
+        self._deliver_read_data(data)
+
+    cdef NoResult _deliver_read_result(self) except NoResult.EXC:
+        cdef object data = self._pending_read_data
+        self._pending_read_data = None
+        self._read_result_pending = False
+        self._deliver_read_data(data)
+
+    cdef NoResult _deliver_read_data(self, object data) except NoResult.EXC:
+        if data is None:
+            if unlikely(self._is_debug):
+                _logger.info("%r was closed by peer", self)
+
+            self._call_protocol_eof_received()
+            self._force_close(None)
+        else:
+            self._call_protocol_data_received(data)
+
+    cdef NoResult _read_stop_completed(self, aiofn_loop_status status) except NoResult.EXC:
+        assert self._read_stopping
+        self._read_stopping = False
+        self._read_started = False
+
+        if status != AIOFN_LOOP_OK:
+            self._pending_read_data = None
+            self._read_result_pending = False
+            self._release_read_buffer()
+            self._proactor_handle.context.check_status(status)
+
+        if not self._read_result_pending:
+            self._release_read_buffer()
+
+        if self._closing:
+            self._pending_read_data = None
+            self._read_result_pending = False
+            self._release_read_buffer()
+            self._maybe_schedule_finalize_close()
+        elif not self._read_paused:
+            self._start_reading()
+
+    cdef inline NoResult _maybe_schedule_finalize_close(self) except NoResult.EXC:
+        if self._closing and not self._close_scheduled and not self._read_started and not self._read_stopping:
+            self._close_scheduled = True
+            self._schedule_finalize_close(self._close_exc)
+
+    cpdef _force_close(self, exc):
+        if self._finalizing_close:
+            return
+
+        # A synchronous read-stop completion can schedule finalization while
+        # _pause_reading() is still on the stack.
+        self._finalizing_close = True
+        self._close_exc = exc
+
+        if not self._closing:
+            self._closing = True
+            self._pause_reading()
+
+        self._maybe_schedule_finalize_close()
 
     cpdef _finalize_close(self, exc):
         assert self._read_paused
+        assert not self._read_started
+        assert not self._read_stopping
 
+        self._pending_read_data = None
+        self._read_result_pending = False
+        self._release_read_buffer()
         try:
             self._call_protocol_connection_lost(exc)
         finally:
@@ -542,16 +790,33 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         bint _has_connection
 
         PyObject *_read_bytes
+        object _pending_read_data
+        object _pending_read_address
+        bint _read_result_pending
+        bint _read_started
+        bint _read_stopping
+        aiofn_loop_proactor_op_t _read_stop_op
 
         bint _send_pending
         aiofn_loop_proactor_op_t _send_op
 
         object _close_exc
+        bint _close_scheduled
 
     def __init__(self, ProactorContext context, loop, sock, protocol, address, waiter=None):
         DatagramTransport.__init__(self, loop, sock, protocol, address, 8)
 
         self._read_bytes = NULL
+        self._pending_read_data = None
+        self._pending_read_address = None
+        self._read_result_pending = False
+        self._read_started = False
+        self._read_stopping = False
+        self._read_stop_op.callback = _recvfrom_stop_callback_trampoline
+        self._read_stop_op.callback_data = <void *>self
+        self._read_stop_op.backend_token = NULL
+        self._read_stop_op.status = AIOFN_LOOP_OK
+        self._read_stop_op.transferred = 0
         # The scheduled initializer starts receiving and then delivers connection_made().
         self._read_paused = True
 
@@ -563,6 +828,7 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         self._send_op.transferred = 0
 
         self._close_exc = None
+        self._close_scheduled = False
 
         self._proactor_handle = context.wrap_socket(sock)
         assert self._proactor_handle.owner is None
@@ -573,8 +839,7 @@ cdef class ProactorDatagramTransport(DatagramTransport):
             self._loop.call_soon(aiofn_set_result_unless_cancelled, waiter, None)
 
     def __dealloc__(self):
-        Py_XDECREF(self._read_bytes)
-        self._read_bytes = NULL
+        self._release_read_buffer()
 
     cpdef _initialize(self):
         if self._closing:
@@ -588,20 +853,45 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         self._call_protocol_connection_made()
 
     cdef NoResult _start_reading(self) except NoResult.EXC:
-        self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.recvfrom_start(
-            self._proactor_handle.context.backend.state,
-            &self._proactor_handle.backend_handle,
-            _recvfrom_alloc_trampoline,
-            _recvfrom_callback_trampoline,
-            <void *>self,
-        ))
+        if self._read_stopping:
+            return NoResult.OK
+
+        if self._read_result_pending:
+            self._deliver_recvfrom_result()
+            if self._read_paused or self._closing:
+                return NoResult.OK
+
+        assert not self._read_started
+        self._read_started = True
+        try:
+            self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.recvfrom_start(
+                self._proactor_handle.context.backend.state,
+                &self._proactor_handle.backend_handle,
+                _recvfrom_alloc_trampoline,
+                _recvfrom_callback_trampoline,
+                <void *>self,
+            ))
+        except BaseException:
+            self._read_started = False
+            raise
 
     cdef NoResult _stop_reading(self) except NoResult.EXC:
-        self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.recvfrom_stop(
-            self._proactor_handle.context.backend.state,
-            &self._proactor_handle.backend_handle,
-        ))
-        self._release_read_buffer()
+        if not self._read_started or self._read_stopping:
+            return NoResult.OK
+
+        self._read_stopping = True
+        self._read_stop_op.backend_token = NULL
+        self._read_stop_op.status = AIOFN_LOOP_OK
+        self._read_stop_op.transferred = 0
+        try:
+            self._proactor_handle.context.check_status(self._proactor_handle.context.proactor.recvfrom_stop(
+                self._proactor_handle.context.backend.state,
+                &self._proactor_handle.backend_handle,
+                &self._read_stop_op,
+            ))
+        except BaseException:
+            self._read_stopping = False
+            raise
 
     cdef NoResult _allocate_read_buffer(self, void **buffer, size_t *buffer_len) except NoResult.EXC:
         cdef char *data
@@ -650,25 +940,97 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         # Proactor datagram transports currently wrap only INET sockets, whose
         # conversion does not require a sockaddr length.
         py_address = aiofn_sockaddr_to_pyaddr(<void *>address, 0)
+
+        if self._closing:
+            return NoResult.OK
+
+        if self._read_stopping or self._read_paused:
+            assert not self._read_result_pending
+            self._pending_read_data = data
+            self._pending_read_address = py_address
+            self._read_result_pending = True
+            return NoResult.OK
+
         self._call_protocol_datagram_received(data, py_address)
         return NoResult.OK
+
+    cdef NoResult _deliver_recvfrom_result(self) except NoResult.EXC:
+        cdef:
+            object data = self._pending_read_data
+            object address = self._pending_read_address
+
+        self._pending_read_data = None
+        self._pending_read_address = None
+        self._read_result_pending = False
+        self._call_protocol_datagram_received(data, address)
+
+    cdef NoResult _read_stop_completed(self, aiofn_loop_status status) except NoResult.EXC:
+        assert self._read_stopping
+        self._read_stopping = False
+        self._read_started = False
+
+        if status != AIOFN_LOOP_OK:
+            self._pending_read_data = None
+            self._pending_read_address = None
+            self._read_result_pending = False
+            self._release_read_buffer()
+            self._proactor_handle.context.check_status(status)
+
+        if not self._read_result_pending:
+            self._release_read_buffer()
+
+        if self._closing:
+            self._pending_read_data = None
+            self._pending_read_address = None
+            self._read_result_pending = False
+            self._release_read_buffer()
+            self._maybe_schedule_finalize_close()
+        elif not self._read_paused:
+            self._start_reading()
+
+    cdef inline NoResult _maybe_schedule_finalize_close(self) except NoResult.EXC:
+        if (self._closing and not self._close_scheduled and not self._read_started and not self._read_stopping
+                and not self._send_pending):
+            self._close_scheduled = True
+            self._schedule_finalize_close(self._close_exc)
+
+    cpdef close(self):
+        self._check_thread("close")
+        if self._closing:
+            return
+
+        self._closing = True
+        self._close_exc = None
+        self._pause_reading()
+        if self._write_backlog_size == 0:
+            self._maybe_schedule_finalize_close()
 
     cpdef _force_close(self, exc):
         if self._finalizing_close:
             return
 
-        self.pause_reading()
-        self._closing = True
+        # A synchronous read-stop completion can schedule finalization while
+        # _pause_reading() is still on the stack.
         self._finalizing_close = True
         self._close_exc = exc
 
+        if not self._closing:
+            self._closing = True
+            self._pause_reading()
+
         if not self._send_pending:
             self._clear_write_backlog(exc)
-            self._schedule_finalize_close(exc)
+            self._maybe_schedule_finalize_close()
 
     cpdef _finalize_close(self, exc):
         assert self._read_paused
+        assert not self._read_started
+        assert not self._read_stopping
         assert not self._send_pending
+        self._pending_read_data = None
+        self._pending_read_address = None
+        self._read_result_pending = False
+        self._release_read_buffer()
         try:
             self._call_protocol_connection_lost(exc)
         finally:
@@ -743,7 +1105,7 @@ cdef class ProactorDatagramTransport(DatagramTransport):
         if self._finalizing_close:
             self._send_pending = False
             self._clear_write_backlog(self._close_exc)
-            self._schedule_finalize_close(self._close_exc)
+            self._maybe_schedule_finalize_close()
             return NoResult.OK
 
         if status != AIOFN_LOOP_OK:
@@ -771,8 +1133,8 @@ cdef class ProactorDatagramTransport(DatagramTransport):
             self._start_backlog_writing()
 
         self._maybe_resume_protocol()
-        if self._write_backlog_size == 0 and self._closing and not self._finalizing_close:
-            self._schedule_finalize_close(self._close_exc)
+        if self._write_backlog_size == 0 and self._closing:
+            self._maybe_schedule_finalize_close()
 
 
 cdef void _recvfrom_alloc_trampoline(
@@ -806,6 +1168,17 @@ cdef void _recvfrom_callback_trampoline(
     except BaseException:
         try:
             transport._handle_error('Fatal read error on proactor datagram transport')
+        except BaseException as exc:
+            transport._proactor_handle.context.backend_failed(exc)
+
+
+cdef void _recvfrom_stop_callback_trampoline(aiofn_loop_proactor_op_t *op) noexcept with gil:
+    cdef ProactorDatagramTransport transport = <ProactorDatagramTransport>op.callback_data
+    try:
+        transport._read_stop_completed(op.status)
+    except BaseException:
+        try:
+            transport._handle_error('Fatal read-stop error on proactor datagram transport')
         except BaseException as exc:
             transport._proactor_handle.context.backend_failed(exc)
 
@@ -874,6 +1247,17 @@ cdef void _pipe_read_callback_trampoline(
             transport._proactor_handle.context.backend_failed(exc)
 
 
+cdef void _pipe_read_stop_callback_trampoline(aiofn_loop_proactor_op_t *op) noexcept with gil:
+    cdef ProactorReadPipeTransport transport = <ProactorReadPipeTransport>op.callback_data
+    try:
+        transport._read_stop_completed(op.status)
+    except BaseException:
+        try:
+            transport._handle_error('Fatal read-stop error on proactor pipe transport')
+        except BaseException as exc:
+            transport._proactor_handle.context.backend_failed(exc)
+
+
 cdef void _read_callback_trampoline(
     void *callback_data,
     aiofn_loop_status status,
@@ -886,6 +1270,17 @@ cdef void _read_callback_trampoline(
     except BaseException:
         try:
             transport._handle_error('Fatal read error on proactor socket transport')
+        except BaseException as exc:
+            transport._proactor_handle.context.backend_failed(exc)
+
+
+cdef void _read_stop_callback_trampoline(aiofn_loop_proactor_op_t *op) noexcept with gil:
+    cdef ProactorSocketTransport transport = <ProactorSocketTransport>op.callback_data
+    try:
+        transport._read_stop_completed(op.status)
+    except BaseException:
+        try:
+            transport._handle_error('Fatal read-stop error on proactor socket transport')
         except BaseException as exc:
             transport._proactor_handle.context.backend_failed(exc)
 

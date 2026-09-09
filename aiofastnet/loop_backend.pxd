@@ -87,7 +87,11 @@ cdef extern from "loop_backend.h":
             aiofn_loop_read_callback_fn,
             void *,
         ) noexcept nogil
-        aiofn_loop_status (*read_stop)(void *, aiofn_loop_proactor_handle_t *) noexcept nogil
+        aiofn_loop_status (*read_stop)(
+            void *,
+            aiofn_loop_proactor_handle_t *,
+            aiofn_loop_proactor_op_t *,
+        ) noexcept nogil
         aiofn_loop_status (*write)(
             void *,
             aiofn_loop_proactor_handle_t *,
@@ -103,7 +107,11 @@ cdef extern from "loop_backend.h":
             aiofn_loop_recvfrom_callback_fn,
             void *,
         ) noexcept nogil
-        aiofn_loop_status (*recvfrom_stop)(void *, aiofn_loop_proactor_handle_t *) noexcept nogil
+        aiofn_loop_status (*recvfrom_stop)(
+            void *,
+            aiofn_loop_proactor_handle_t *,
+            aiofn_loop_proactor_op_t *,
+        ) noexcept nogil
         aiofn_loop_status (*sendto)(
             void *,
             aiofn_loop_proactor_handle_t *,

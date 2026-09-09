@@ -1,5 +1,6 @@
 #include "uring_backend.h"
 
+#include <assert.h>
 #include <errno.h>
 #include <poll.h>
 #include <stdio.h>
@@ -28,6 +29,8 @@ typedef enum {
     AIOFN_URING_KIND_HANDLE_WRITE = 6,
     AIOFN_URING_KIND_HANDLE_CONNECT = 7,
     AIOFN_URING_KIND_HANDLE_ACCEPT = 8,
+    AIOFN_URING_KIND_HANDLE_READ_STOP = 9,
+    AIOFN_URING_KIND_HANDLE_READ_START = 10,
 } aiofn_uring_tag_kind_t;
 
 #define AIOFN_URING_TAG_BITS 4u
@@ -156,7 +159,13 @@ typedef struct aiofn_uring_handle {
     aiofn_loop_recvfrom_callback_fn recvfrom_callback;
     void *read_callback_data;
     int reading;
+    int read_allocating;
+    int read_callback_running;
+    int read_start_pending;
+    int read_pending;
+    int read_cancel_pending;
     void *read_buf;
+    aiofn_loop_proactor_op_t *read_stop_op;
     struct sockaddr_storage recv_addr;
     struct iovec recv_iov;
     struct msghdr recv_msg;
@@ -757,22 +766,49 @@ static void aiofn_uring_handle_connect_completed(aiofn_uring_state_t *state, aio
 
 // ---- proactor: persistent reads ----
 
-static void aiofn_uring_issue_read(aiofn_uring_state_t *state, aiofn_uring_handle_t *handle) {
+// Return true when the stop callback ran and may have unwrapped the handle.
+static int aiofn_uring_maybe_complete_read_stop(aiofn_uring_handle_t *handle) {
+    aiofn_loop_proactor_op_t *op;
+
+    if (handle->read_stop_op == NULL || handle->read_allocating || handle->read_callback_running
+            || handle->read_start_pending || handle->read_pending || handle->read_cancel_pending) {
+        return 0;
+    }
+
+    op = handle->read_stop_op;
+    handle->read_stop_op = NULL;
+    handle->read_alloc = NULL;
+    handle->read_callback = NULL;
+    handle->recvfrom_callback = NULL;
+    handle->read_callback_data = NULL;
+    aiofn_uring_complete(op, AIOFN_LOOP_OK, 0);
+    return 1;
+}
+
+// Return false when an inline stop completion may have released handle.
+static int aiofn_uring_issue_read(aiofn_uring_state_t *state, aiofn_uring_handle_t *handle) {
     void *buf = NULL;
     size_t buf_len = 0;
+    handle->read_allocating = 1;
     handle->read_alloc(handle->read_callback_data, 65536, &buf, &buf_len);
+    handle->read_allocating = 0;
+    if (handle->read_stop_op != NULL) {
+        aiofn_uring_maybe_complete_read_stop(handle);
+        return 0;
+    }
     if (buf == NULL) {
         handle->reading = 0;
-        return;
+        return 1;
     }
     handle->read_buf = buf;
 
     struct io_uring_sqe *sqe = aiofn_uring_get_sqe(state);
     if (sqe == NULL) {
         handle->reading = 0;
-        return;
+        return 1;
     }
     handle->object.pending_sqes++;
+    handle->read_pending = 1;
     // recv() measurably outperforms read() on sockets; pipes (and other
     // non-socket fds) don't support recv(2) at all (ENOTSOC), so they still
     // go through read(). POLL_FIRST: see aiofn_uring_write() for why.
@@ -783,6 +819,7 @@ static void aiofn_uring_issue_read(aiofn_uring_state_t *state, aiofn_uring_handl
         io_uring_prep_read(sqe, handle->fd, buf, buf_len, 0);
     }
     io_uring_sqe_set_data64(sqe, aiofn_uring_tag(handle, AIOFN_URING_KIND_HANDLE_READ));
+    return 1;
 }
 
 static aiofn_loop_status aiofn_uring_read_start(
@@ -794,58 +831,114 @@ static aiofn_loop_status aiofn_uring_read_start(
 ) {
     aiofn_uring_state_t *state = data;
     aiofn_uring_handle_t *handle = frontend->backend_token;
+    assert(!handle->read_start_pending);
+    assert(!handle->read_pending);
+    assert(handle->read_stop_op == NULL);
+
+    struct io_uring_sqe *sqe = aiofn_uring_get_sqe(state);
+    if (sqe == NULL) {
+        return AIOFN_LOOP_NO_MEMORY;
+    }
+
     handle->read_alloc = alloc;
     handle->read_callback = callback;
+    handle->recvfrom_callback = NULL;
     handle->read_callback_data = callback_data;
     handle->reading = 1;
-    aiofn_uring_issue_read(state, handle);
+    handle->read_start_pending = 1;
+    handle->object.pending_sqes++;
+    // The ABI prohibits read_start() from invoking alloc inline. A NOP moves
+    // the first allocation and submission onto the backend event-loop path.
+    io_uring_prep_nop(sqe);
+    io_uring_sqe_set_data64(sqe, aiofn_uring_tag(handle, AIOFN_URING_KIND_HANDLE_READ_START));
     return AIOFN_LOOP_OK;
 }
 
-static aiofn_loop_status aiofn_uring_read_stop(void *data, aiofn_loop_proactor_handle_t *frontend) {
+static aiofn_loop_status aiofn_uring_read_stop(
+    void *data,
+    aiofn_loop_proactor_handle_t *frontend,
+    aiofn_loop_proactor_op_t *stop_op
+) {
     aiofn_uring_state_t *state = data;
     aiofn_uring_handle_t *handle = frontend->backend_token;
+
+    assert(handle->read_stop_op == NULL);
     handle->reading = 0;
+    handle->read_stop_op = stop_op;
+    stop_op->backend_token = handle;
+
+    if (handle->read_allocating || handle->read_callback_running || handle->read_start_pending) {
+        return AIOFN_LOOP_OK;
+    }
+
+    if (!handle->read_pending) {
+        aiofn_uring_maybe_complete_read_stop(handle);
+        return AIOFN_LOOP_OK;
+    }
 
     struct io_uring_sqe *sqe = aiofn_uring_get_sqe(state);
-    if (sqe != NULL) {
-        io_uring_prep_cancel64(sqe, aiofn_uring_tag(handle, AIOFN_URING_KIND_HANDLE_READ), 0);
-        aiofn_uring_tag_release(sqe, &handle->object);
+    if (sqe == NULL) {
+        handle->reading = 1;
+        handle->read_stop_op = NULL;
+        stop_op->backend_token = NULL;
+        return AIOFN_LOOP_NO_MEMORY;
     }
+    handle->object.pending_sqes++;
+    handle->read_cancel_pending = 1;
+    io_uring_prep_cancel64(sqe, aiofn_uring_tag(handle, AIOFN_URING_KIND_HANDLE_READ), 0);
+    io_uring_sqe_set_data64(sqe, aiofn_uring_tag(handle, AIOFN_URING_KIND_HANDLE_READ_STOP));
     return AIOFN_LOOP_OK;
 }
 
 static void aiofn_uring_handle_read_completed(aiofn_uring_state_t *state, aiofn_uring_handle_t *handle, int res) {
     handle->object.pending_sqes--;
+    handle->read_pending = 0;
     void *buf = handle->read_buf;
     handle->read_buf = NULL;
 
-    if (res == -ECANCELED) {
+    if (res != -ECANCELED) {
+        handle->read_callback_running = 1;
+        if (res < 0) {
+            aiofn_uring_set_error(state, "read", res);
+            handle->read_callback(handle->read_callback_data, AIOFN_LOOP_ERROR, buf, 0);
+        } else {
+            handle->read_callback(handle->read_callback_data, AIOFN_LOOP_OK, buf, (size_t)res);
+        }
+        handle->read_callback_running = 0;
+    }
+
+    if (handle->read_stop_op != NULL) {
+        if (aiofn_uring_maybe_complete_read_stop(handle)) {
+            return;
+        }
         aiofn_uring_maybe_free_handle(handle);
         return;
     }
-    if (res < 0) {
-        aiofn_uring_set_error(state, "read", res);
-        handle->read_callback(handle->read_callback_data, AIOFN_LOOP_ERROR, buf, 0);
-    } else {
-        handle->read_callback(handle->read_callback_data, AIOFN_LOOP_OK, buf, (size_t)res);
-    }
 
     if (handle->reading) {
-        aiofn_uring_issue_read(state, handle);
+        if (!aiofn_uring_issue_read(state, handle)) {
+            return;
+        }
     }
     aiofn_uring_maybe_free_handle(handle);
 }
 
 // ---- proactor: persistent recvfrom ----
 
-static void aiofn_uring_issue_recvfrom(aiofn_uring_state_t *state, aiofn_uring_handle_t *handle) {
+// Return false when an inline stop completion may have released handle.
+static int aiofn_uring_issue_recvfrom(aiofn_uring_state_t *state, aiofn_uring_handle_t *handle) {
     void *buf = NULL;
     size_t buf_len = 0;
+    handle->read_allocating = 1;
     handle->read_alloc(handle->read_callback_data, 65536, &buf, &buf_len);
+    handle->read_allocating = 0;
+    if (handle->read_stop_op != NULL) {
+        aiofn_uring_maybe_complete_read_stop(handle);
+        return 0;
+    }
     if (buf == NULL) {
         handle->reading = 0;
-        return;
+        return 1;
     }
     handle->read_buf = buf;
 
@@ -860,12 +953,14 @@ static void aiofn_uring_issue_recvfrom(aiofn_uring_state_t *state, aiofn_uring_h
     struct io_uring_sqe *sqe = aiofn_uring_get_sqe(state);
     if (sqe == NULL) {
         handle->reading = 0;
-        return;
+        return 1;
     }
     handle->object.pending_sqes++;
+    handle->read_pending = 1;
     io_uring_prep_recvmsg(sqe, handle->fd, &handle->recv_msg, 0);
     sqe->ioprio |= IORING_RECVSEND_POLL_FIRST;
     io_uring_sqe_set_data64(sqe, aiofn_uring_tag(handle, AIOFN_URING_KIND_HANDLE_READ));
+    return 1;
 }
 
 static aiofn_loop_status aiofn_uring_recvfrom_start(
@@ -877,48 +972,102 @@ static aiofn_loop_status aiofn_uring_recvfrom_start(
 ) {
     aiofn_uring_state_t *state = data;
     aiofn_uring_handle_t *handle = frontend->backend_token;
+    assert(!handle->read_start_pending);
+    assert(!handle->read_pending);
+    assert(handle->read_stop_op == NULL);
+
+    struct io_uring_sqe *sqe = aiofn_uring_get_sqe(state);
+    if (sqe == NULL) {
+        return AIOFN_LOOP_NO_MEMORY;
+    }
+
     handle->read_alloc = alloc;
+    handle->read_callback = NULL;
     handle->recvfrom_callback = callback;
     handle->read_callback_data = callback_data;
     handle->reading = 1;
-    aiofn_uring_issue_recvfrom(state, handle);
+    handle->read_start_pending = 1;
+    handle->object.pending_sqes++;
+    io_uring_prep_nop(sqe);
+    io_uring_sqe_set_data64(sqe, aiofn_uring_tag(handle, AIOFN_URING_KIND_HANDLE_READ_START));
     return AIOFN_LOOP_OK;
 }
 
-static aiofn_loop_status aiofn_uring_recvfrom_stop(void *data, aiofn_loop_proactor_handle_t *frontend) {
-    aiofn_uring_state_t *state = data;
-    aiofn_uring_handle_t *handle = frontend->backend_token;
-    handle->reading = 0;
-
-    struct io_uring_sqe *sqe = aiofn_uring_get_sqe(state);
-    if (sqe != NULL) {
-        io_uring_prep_cancel64(sqe, aiofn_uring_tag(handle, AIOFN_URING_KIND_HANDLE_READ), 0);
-        aiofn_uring_tag_release(sqe, &handle->object);
-    }
-    return AIOFN_LOOP_OK;
+static aiofn_loop_status aiofn_uring_recvfrom_stop(
+    void *data,
+    aiofn_loop_proactor_handle_t *frontend,
+    aiofn_loop_proactor_op_t *stop_op
+) {
+    return aiofn_uring_read_stop(data, frontend, stop_op);
 }
 
 // Both read_start and recvfrom_start tag their SQEs as HANDLE_READ; dispatch
 // to the right frontend callback by which one is currently set.
 static void aiofn_uring_handle_recv_completed(aiofn_uring_state_t *state, aiofn_uring_handle_t *handle, int res) {
     handle->object.pending_sqes--;
+    handle->read_pending = 0;
     void *buf = handle->read_buf;
     handle->read_buf = NULL;
 
-    if (res == -ECANCELED) {
+    if (res != -ECANCELED) {
+        handle->read_callback_running = 1;
+        if (res < 0) {
+            aiofn_uring_set_error(state, "recvmsg", res);
+            handle->recvfrom_callback(handle->read_callback_data, AIOFN_LOOP_ERROR, buf, 0, NULL);
+        } else {
+            handle->recvfrom_callback(handle->read_callback_data, AIOFN_LOOP_OK, buf, (size_t)res,
+                                      (const struct sockaddr *)&handle->recv_addr);
+        }
+        handle->read_callback_running = 0;
+    }
+
+    if (handle->read_stop_op != NULL) {
+        if (aiofn_uring_maybe_complete_read_stop(handle)) {
+            return;
+        }
         aiofn_uring_maybe_free_handle(handle);
         return;
     }
-    if (res < 0) {
-        aiofn_uring_set_error(state, "recvmsg", res);
-        handle->recvfrom_callback(handle->read_callback_data, AIOFN_LOOP_ERROR, buf, 0, NULL);
-    } else {
-        handle->recvfrom_callback(handle->read_callback_data, AIOFN_LOOP_OK, buf, (size_t)res,
-                                   (const struct sockaddr *)&handle->recv_addr);
+
+    if (handle->reading) {
+        if (!aiofn_uring_issue_recvfrom(state, handle)) {
+            return;
+        }
+    }
+    aiofn_uring_maybe_free_handle(handle);
+}
+
+static void aiofn_uring_handle_read_stop_completed(aiofn_uring_handle_t *handle) {
+    handle->object.pending_sqes--;
+    assert(handle->read_cancel_pending);
+    handle->read_cancel_pending = 0;
+    if (aiofn_uring_maybe_complete_read_stop(handle)) {
+        return;
+    }
+    aiofn_uring_maybe_free_handle(handle);
+}
+
+static void aiofn_uring_handle_read_start_completed(aiofn_uring_state_t *state, aiofn_uring_handle_t *handle) {
+    handle->object.pending_sqes--;
+    assert(handle->read_start_pending);
+    handle->read_start_pending = 0;
+
+    if (handle->read_stop_op != NULL) {
+        if (aiofn_uring_maybe_complete_read_stop(handle)) {
+            return;
+        }
+        aiofn_uring_maybe_free_handle(handle);
+        return;
     }
 
     if (handle->reading) {
-        aiofn_uring_issue_recvfrom(state, handle);
+        if (handle->recvfrom_callback != NULL) {
+            if (!aiofn_uring_issue_recvfrom(state, handle)) {
+                return;
+            }
+        } else if (!aiofn_uring_issue_read(state, handle)) {
+            return;
+        }
     }
     aiofn_uring_maybe_free_handle(handle);
 }
@@ -1037,6 +1186,12 @@ static void aiofn_uring_dispatch_cqe(aiofn_uring_state_t *state, struct io_uring
         }
         break;
     }
+    case AIOFN_URING_KIND_HANDLE_READ_STOP:
+        aiofn_uring_handle_read_stop_completed((aiofn_uring_handle_t *)ptr);
+        break;
+    case AIOFN_URING_KIND_HANDLE_READ_START:
+        aiofn_uring_handle_read_start_completed(state, (aiofn_uring_handle_t *)ptr);
+        break;
     case AIOFN_URING_KIND_HANDLE_WRITE:
         aiofn_uring_handle_write_completed(state, (aiofn_uring_handle_t *)ptr, cqe->res);
         break;

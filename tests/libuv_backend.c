@@ -33,6 +33,7 @@ typedef struct {
     // when read_stop() is invoked reentrantly from within alloc_cb; applied
     // at the next safe entry into alloc_cb/read_cb.
     int read_stop_deferred;
+    aiofn_loop_proactor_op_t *read_stop_op;
 
     uv_write_t write_request;
     aiofn_loop_proactor_op_t *write_op;
@@ -310,13 +311,33 @@ static aiofn_loop_status aiofn_libuv_unwrap_handle(void *data, aiofn_loop_proact
 // Actually stops reading. Called either directly from read_stop() or, when
 // read_stop() had to defer (see there), from the next safe alloc_cb/read_cb
 // entry.
+static void aiofn_libuv_complete_read_stop(aiofn_libuv_handle_t *socket, aiofn_loop_status status) {
+    aiofn_loop_proactor_op_t *op = socket->read_stop_op;
+    assert(op != NULL);
+    socket->read_stop_op = NULL;
+    socket->read_alloc = NULL;
+    socket->read_callback = NULL;
+    socket->recvfrom_callback = NULL;
+    socket->read_callback_data = NULL;
+    aiofn_libuv_complete(op, status, 0);
+}
+
+
 static void aiofn_libuv_apply_deferred_read_stop(aiofn_libuv_handle_t *socket) {
+    aiofn_libuv_state_t *state = socket->handle.tcp.loop->data;
+    int is_datagram = socket->socktype == SOCK_DGRAM;
+    int result;
+
     socket->read_stop_deferred = 0;
-    if (socket->frontend->socktype == SOCK_DGRAM) {
-        uv_udp_recv_stop(&socket->handle.udp);
+    if (is_datagram) {
+        result = uv_udp_recv_stop(&socket->handle.udp);
     } else {
-        uv_read_stop((uv_stream_t *)&socket->handle.tcp);
+        result = uv_read_stop((uv_stream_t *)&socket->handle.tcp);
     }
+    if (result != 0) {
+        aiofn_libuv_set_error(state, "read_stop", result);
+    }
+    aiofn_libuv_complete_read_stop(socket, result == 0 ? AIOFN_LOOP_OK : AIOFN_LOOP_ERROR);
 }
 
 
@@ -324,7 +345,10 @@ static void aiofn_libuv_alloc_read(uv_handle_t *handle, size_t suggested_size, u
     aiofn_libuv_handle_t *socket = (aiofn_libuv_handle_t *)handle;
 
     if (socket->read_stop_deferred) {
+        buffer->base = NULL;
+        buffer->len = 0;
         aiofn_libuv_apply_deferred_read_stop(socket);
+        return;
     }
 
     // read_alloc is NULL once read_stop() has run (deferred or not); nothing
@@ -352,6 +376,7 @@ static void aiofn_libuv_on_read(uv_stream_t *stream, ssize_t nread, const uv_buf
 
     if (socket->read_stop_deferred) {
         aiofn_libuv_apply_deferred_read_stop(socket);
+        return;
     }
 
     // read_stop() may have run (deferred or not) since this read was issued;
@@ -390,6 +415,7 @@ static void aiofn_libuv_on_udp_read(
 
     if (socket->read_stop_deferred) {
         aiofn_libuv_apply_deferred_read_stop(socket);
+        return;
     }
 
     if (socket->recvfrom_callback == NULL) {
@@ -419,6 +445,7 @@ static aiofn_loop_status aiofn_libuv_read_start(void *data, aiofn_loop_proactor_
     int result;
 
     assert(socket->read_alloc == NULL);
+    assert(socket->read_stop_op == NULL);
     socket->read_alloc = alloc;
     socket->read_callback = callback;
     socket->recvfrom_callback = NULL;
@@ -457,6 +484,7 @@ static aiofn_loop_status aiofn_libuv_recvfrom_start(
     int result;
 
     assert(socket->read_alloc == NULL);
+    assert(socket->read_stop_op == NULL);
     socket->read_alloc = alloc;
     socket->read_callback = NULL;
     socket->recvfrom_callback = callback;
@@ -472,8 +500,17 @@ static aiofn_loop_status aiofn_libuv_recvfrom_start(
     return AIOFN_LOOP_OK;
 }
 
-static aiofn_loop_status aiofn_libuv_read_stop(void *data, aiofn_loop_proactor_handle_t *frontend) {
+static aiofn_loop_status aiofn_libuv_read_stop(
+    void *data,
+    aiofn_loop_proactor_handle_t *frontend,
+    aiofn_loop_proactor_op_t *stop_op
+) {
     aiofn_libuv_handle_t *socket = frontend->backend_token;
+    int result;
+
+    assert(socket->read_stop_op == NULL);
+    socket->read_stop_op = stop_op;
+    stop_op->backend_token = socket;
     socket->read_alloc = NULL;
     socket->read_callback = NULL;
     socket->recvfrom_callback = NULL;
@@ -491,16 +528,20 @@ static aiofn_loop_status aiofn_libuv_read_stop(void *data, aiofn_loop_proactor_h
         return AIOFN_LOOP_OK;
     }
 
-    int result = frontend->socktype == SOCK_DGRAM ? uv_udp_recv_stop(&socket->handle.udp) : uv_read_stop((uv_stream_t *)socket);
+    result = frontend->socktype == SOCK_DGRAM ? uv_udp_recv_stop(&socket->handle.udp) : uv_read_stop((uv_stream_t *)socket);
     if (result != 0) {
         aiofn_libuv_set_error((aiofn_libuv_state_t *)data, "read_stop", result);
-        return AIOFN_LOOP_ERROR;
     }
+    aiofn_libuv_complete_read_stop(socket, result == 0 ? AIOFN_LOOP_OK : AIOFN_LOOP_ERROR);
     return AIOFN_LOOP_OK;
 }
 
-static aiofn_loop_status aiofn_libuv_recvfrom_stop(void *data, aiofn_loop_proactor_handle_t *frontend) {
-    return aiofn_libuv_read_stop(data, frontend);
+static aiofn_loop_status aiofn_libuv_recvfrom_stop(
+    void *data,
+    aiofn_loop_proactor_handle_t *frontend,
+    aiofn_loop_proactor_op_t *stop_op
+) {
+    return aiofn_libuv_read_stop(data, frontend, stop_op);
 }
 
 
