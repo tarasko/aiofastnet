@@ -8,8 +8,14 @@ import os
 import socket
 import stat
 
-from .api_utils import _ensure_resolved, _logger, _set_reuseport, _wait_and_close_transport_on_exc
-from .transport import SelectorDatagramTransport
+from .api_utils import (
+    _ensure_resolved,
+    _get_proactor_context,
+    _logger,
+    _make_datagram_transport,
+    _set_reuseport,
+    _wait_and_close_transport_on_exc,
+)
 from .wrapped_transport import _get_original_loop_method, _should_fallback_to_asyncio, _WrappedDatagramProtocol
 
 
@@ -140,7 +146,14 @@ async def create_datagram_endpoint(
 
     protocol = protocol_factory()
     waiter = loop.create_future()
-    transport = SelectorDatagramTransport(loop, sock, protocol, r_addr, waiter)
+    transport = _make_datagram_transport(
+        loop,
+        sock,
+        protocol,
+        r_addr,
+        waiter,
+        proactor_context=_get_proactor_context(loop, sock),
+    )
     if loop.get_debug():
         if local_addr:
             _logger.info("Datagram endpoint local_addr=%r remote_addr=%r created: (%r, %r)", local_addr, remote_addr, transport, protocol)

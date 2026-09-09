@@ -407,6 +407,9 @@ class AsyncClient(asyncio.Protocol, asyncio.BufferedProtocol):
             return
 
         requested_len, fut = self._readn_waiter
+        if fut.cancelled():
+            self._readn_waiter = None
+            return
 
         if requested_len is not None and len(self._data) < requested_len:
             return

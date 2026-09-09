@@ -1,5 +1,4 @@
 import asyncio
-import os
 import ssl
 import sys
 import warnings
@@ -13,7 +12,6 @@ from cpython.object cimport PyObject
 from cpython.buffer cimport PyBUF_WRITE
 from cpython.memoryview cimport PyMemoryView_FromMemory
 from cpython.ref cimport Py_XDECREF
-from posix.types cimport off_t
 
 from . import constants
 from .utils cimport (
@@ -31,7 +29,7 @@ from .utils cimport (
     aiofn_add_info_and_reraise,
     unlikely
 )
-from .transport cimport Transport, Protocol, WriteWatermarks
+from .transport cimport Protocol, SendFileRequest, Transport, WriteWatermarks, make_sendfile_request
 from .openssl_compat import OPENSSL_DYN_LIBS, create_transport_context
 from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
 
@@ -50,43 +48,6 @@ cdef:
 
 def _ssl_socket_post_handshake_test_hook(transport):
     pass
-
-
-cdef class SendFileRequest:
-    cdef:
-        int fd
-        off_t offset
-        Py_ssize_t count
-        object waiter
-
-    def __len__(self):
-        return self.count
-
-
-cdef SendFileRequest _make_send_file_request(file, offset, count):
-    cdef:
-        int c_fd = file.fileno()
-        off_t c_offset = offset
-
-    if c_offset < 0:
-        raise ValueError("offset must be non-negative")
-
-    cdef:
-        Py_ssize_t size = os.fstat(file.fileno()).st_size
-        Py_ssize_t available = max(0, size - offset)
-        size_t c_count
-
-    if count is None:
-        c_count = available
-    else:
-        c_count = min(<Py_ssize_t> count, available)
-
-    cdef SendFileRequest self = <SendFileRequest>SendFileRequest.__new__(SendFileRequest)
-    self.fd = c_fd
-    self.offset = c_offset
-    self.count = c_count
-    self.waiter = None
-    return self
 
 
 cdef class SSLTransportBase(Transport):
@@ -313,13 +274,6 @@ cdef class SSLTransportBase(Transport):
         if unlikely(self._is_debug):
             _logger.debug("%r: user called abort()", self)
         self._abort(None)
-
-    def write_eof(self):
-        self._check_thread("write_eof")
-        raise NotImplementedError()
-
-    def can_write_eof(self):
-        return False
 
     # Underlying transport use this to take into account upstream write buffer
     # size when deciding to report pause_writing()/resume_writing()
@@ -707,7 +661,7 @@ cdef class SSLTransportBase(Transport):
         if not self._is_protocol_ready():
             raise RuntimeError("Transport is closing")
 
-        cdef SendFileRequest req = _make_send_file_request(file, offset, count)
+        cdef SendFileRequest req = make_sendfile_request(file, offset, count)
 
         try:
             if self._write_backlog_size == 0:
@@ -1224,6 +1178,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             req.count -= bytes_written
 
             if ssl_error == SSLError.SSL_ERROR_NONE:
+                req.count = 0
                 return True
 
             if ssl_error == SSLError.SSL_ERROR_WANT_WRITE:
@@ -1236,7 +1191,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
 
             raise RuntimeError(f"unexpected SSL_sendfile error: {ssl_error_name(ssl_error)}")
 
-    cpdef _read_ready(self):
+    def _read_ready(self):
         if unlikely(self._is_debug):
             _logger.debug("%r: _read_ready event", self)
 
@@ -1253,7 +1208,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             if self._ssl_engine.ssl_incoming_use_membio():
                 while total_bytes_read < self._max_read_bytes_per_cycle_hint:
                     if unlikely(self._read_paused):
-                        return
+                        return NoResult.OK
 
                     self._ssl_engine.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
                     bytes_read = aiofn_read(self._sock_fd, buf_ptr, buf_len, True)
@@ -1263,10 +1218,10 @@ cdef class SSLTransport_Socket(SSLTransportBase):
 
                     if unlikely(bytes_read == 0):
                         self._process_eof()
-                        return
+                        return NoResult.OK
 
                     if unlikely(bytes_read == -1):  # without exception this means EGAIN
-                        return
+                        return NoResult.OK
 
                     total_bytes_read += bytes_read
 
@@ -1274,21 +1229,20 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                     self._incoming_bio_updated()
 
                     if bytes_read < buf_len:
-                        return
+                        return NoResult.OK
             else:
                 self._incoming_bio_updated()
         except:
             self._handle_error("Error occurred during read")
 
     cpdef _force_close(self, exc):
-        if self._sock is None:
+        if self._sock is None or self._finalizing_close:
             return
-        self._finalizing_close = True
         if self._write_backlog_size:
             self._clear_write_backlog(exc)
         self._drop_writer()
         self._loop.remove_reader(self._sock_fd_obj)
-        self._loop.call_soon(self._finalize_close, exc)
+        self._schedule_finalize_close(exc)
 
     cdef NoResult _maybe_pause_protocol(self) except NoResult.EXC:
         self._write_watermarks.maybe_pause_protocol(self, self._protocol, self.get_write_buffer_size())

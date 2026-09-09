@@ -41,7 +41,7 @@ The difference is especially noticeable when SSL is used.
 
 ## Benchmark
 
-The benchmark below compares echo round-trips over loopback for TCP and SSL.
+The benchmark below compares echo round-trips over loopback for TCP and SSL transports.
 The exact gains depend on workload, message sizes, CPU, OpenSSL version, and how
 much of your total runtime is spent in transport/SSL plumbing.
 

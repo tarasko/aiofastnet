@@ -7,11 +7,11 @@ if cython.compiled:
 else:
     from aiofastnet.transport import Protocol, Transport
 
-
 @cython.cclass
 class ServerProtocol(Protocol, asyncio.BufferedProtocol):
     _transport: object
     _read_buf: bytearray
+    _read_buf_mv: memoryview
     _aiofn_transport: cython.bint
     _is_buffered: cython.bint
 
@@ -19,6 +19,7 @@ class ServerProtocol(Protocol, asyncio.BufferedProtocol):
                  is_buffered: cython.bint = True):
         self._transport = None
         self._read_buf = bytearray(read_buf_size)
+        self._read_buf_mv = memoryview(self._read_buf)
         self._aiofn_transport = False
         self._is_buffered = is_buffered
 
@@ -37,7 +38,7 @@ class ServerProtocol(Protocol, asyncio.BufferedProtocol):
     @cython.ccall
     def buffer_updated(self, nbytes: cython.Py_ssize_t):
         if nbytes > 0:
-            data = memoryview(self._read_buf)[:nbytes]
+            data = self._read_buf_mv[:nbytes]
             if self._aiofn_transport:
                 cython.cast(Transport, self._transport).write_nocheck(data)
             else:

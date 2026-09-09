@@ -17,8 +17,9 @@ from typing import Any, Callable
 
 from . import constants, openssl_compat
 from .constants import SSL_BIO_SIZE_DEFAULTS, SSL_TIMEOUT_DEFAULTS
+from .selector_transport import SelectorSocketTransport
 from .ssl_transport import SSLTransport_Socket, SSLTransport_Transport
-from .transport import SelectorSocketTransport, aiofn_is_buffered_protocol
+from .transport import aiofn_is_buffered_protocol
 from .wrapped_transport import _get_original_loop_method, _should_fallback_to_asyncio, _WrappedBufferedProtocol, _WrappedProtocol
 
 _HAS_IPv6 = hasattr(socket, 'AF_INET6')
@@ -59,6 +60,35 @@ def _validate_bio_size(name: str, value: int | None, ssl_or_sslcontext: bool | s
 
 def _ssl_needs_fallback_engine(sslcontext: ssl.SSLContext) -> bool:
     return openssl_compat.OPENSSL_DYN_LIBS is None or getattr(sslcontext, "_aiofastnet_force_fallback_ssl", False)
+
+
+def _get_proactor_context(loop, sock):
+    # Only LoopBase exposes this method; third-party selector loops continue
+    # using selector transports. The current proactor transports cover INET
+    # sockets; Unix-domain sockets still use reactor transports.
+    get_proactor_context = getattr(loop, "get_proactor_context", None)
+    if get_proactor_context is not None and sock.family in (socket.AF_INET, socket.AF_INET6):
+        return get_proactor_context()
+    return None
+
+
+def _make_socket_transport(loop, sock, protocol, waiter=None, server=None, *, proactor_context):
+    if proactor_context is not None:
+        from .proactor_transport import ProactorSocketTransport
+
+        return ProactorSocketTransport(proactor_context, loop, sock, protocol, waiter, server)
+    return SelectorSocketTransport(loop, sock, protocol, waiter=waiter, server=server)
+
+
+def _make_datagram_transport(loop, sock, protocol, address, waiter, *, proactor_context):
+    if proactor_context is not None:
+        from .proactor_transport import ProactorDatagramTransport
+
+        return ProactorDatagramTransport(proactor_context, loop, sock, protocol, address, waiter)
+
+    from .selector_transport import SelectorDatagramTransport
+
+    return SelectorDatagramTransport(loop, sock, protocol, address, waiter)
 
 
 async def _wait_and_close_transport_on_exc(waiter: asyncio.Future[Any], transport: Any) -> Any:
@@ -134,9 +164,10 @@ async def _create_connection_transport(
     else:
         protocol = protocol_factory()
         waiter = loop.create_future() if server is None else None
+        proactor_context = _get_proactor_context(loop, sock)
         if ssl:
             sslcontext = openssl_compat.create_transport_context(server_side, server_hostname) if isinstance(ssl, bool) else ssl
-            if _ssl_needs_fallback_engine(sslcontext):
+            if proactor_context is not None or _ssl_needs_fallback_engine(sslcontext):
                 transport = SSLTransport_Transport(
                     loop, protocol, sslcontext,
                     server_side,
@@ -148,7 +179,7 @@ async def _create_connection_transport(
                     server_hostname=server_hostname,
                     server=server
                 )
-                SelectorSocketTransport(loop, sock, transport.get_tls_protocol())
+                _make_socket_transport(loop, sock, transport.get_tls_protocol(), proactor_context=proactor_context)
             else:
                 transport = SSLTransport_Socket(
                     loop, protocol, sslcontext,
@@ -163,8 +194,7 @@ async def _create_connection_transport(
                     server=server
                 )
         else:
-            transport = SelectorSocketTransport(loop, sock, protocol,
-                                                waiter=waiter, server=server)
+            transport = _make_socket_transport(loop, sock, protocol, waiter, server, proactor_context=proactor_context)
 
     if waiter is not None:
         try:

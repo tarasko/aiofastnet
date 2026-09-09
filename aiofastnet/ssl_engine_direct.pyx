@@ -638,6 +638,9 @@ cdef class SSLEngineDirect(SSLEngine):
                 count -= last_bytes_written
                 continue
 
+            if last_bytes_written == 0:
+                return SSLError.SSL_ERROR_NONE
+
             ssl_error = <SSLError>SSL_get_error(self.ssl, last_bytes_written)
             if unlikely(self._is_debug):
                 _logger.debug("%r: SSL_sendfile(..., offset=%d, size=%d) = %d, %s",
