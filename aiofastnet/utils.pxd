@@ -48,11 +48,6 @@ cdef extern from "pythread.h":
 
 
 cdef extern from *:
-    cdef bint unlikely(bint val) noexcept
-    cdef bint likely(bint val) noexcept
-
-
-cdef extern from *:
     """
     static inline PyObject* aiofn_allocate_bytes(Py_ssize_t sz, char** ptr)
     {

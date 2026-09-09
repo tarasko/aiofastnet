@@ -34,6 +34,7 @@ from asyncio.trsock import TransportSocket
 from logging import getLogger
 
 import cython
+from cython cimport unlikely
 from cpython.ref cimport Py_XDECREF
 from cpython.memoryview cimport PyMemoryView_FromMemory
 from cpython.buffer cimport PyBUF_READ, PyBUF_WRITABLE
