@@ -364,6 +364,24 @@ async def test_pause_reading(all_loops, conn_type_plus_udp):
             client.transport.resume_reading()
 
 
+async def test_pause_resume_reading_before_stop_completion(test_loop, conn_type_plus_udp):
+    payload = b"x" * 1024
+
+    class ImmediatePauseClient(AsyncClient):
+        def connection_made(self, transport):
+            super().connection_made(transport)
+            # io_uring still has its deferred read start in flight here;
+            # resume_reading() must only record the desired frontend state.
+            transport.pause_reading()
+            transport.resume_reading()
+
+    async with TestServer(ct=conn_type_plus_udp) as server:
+        async with TestClient(server, ct=conn_type_plus_udp, protocol_factory=ImmediatePauseClient) as client:
+            client.write(payload)
+
+            assert await client.readn(len(payload)) == payload
+
+
 async def test_pause_reading_from_read_callback(all_loops, conn_type_plus_udp, buffered_protocol):
     big_payload = b"b" * (3 * 256 * 1024)
     small_payload = b"s" * 1024
