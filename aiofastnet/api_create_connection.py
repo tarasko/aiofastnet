@@ -34,7 +34,8 @@ async def create_connection(
         ssl_outgoing_bio_size=None,
         happy_eyeballs_delay=None,
         interleave=None,
-        all_errors=False):
+        all_errors=False,
+        safe_write_on_fallback=True):
     """Connect to a TCP server.
 
     Create a streaming transport connection to a given internet host and
@@ -173,6 +174,7 @@ async def create_connection(
             ssl_shutdown_timeout=ssl_shutdown_timeout,
             ssl_incoming_bio_size=ssl_incoming_bio_size,
             ssl_outgoing_bio_size=ssl_outgoing_bio_size,
+            safe_write_on_fallback=safe_write_on_fallback,
         )
     except:
         if owns_sock:
