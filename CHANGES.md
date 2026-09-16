@@ -1,10 +1,6 @@
-# Changelog
-
-All notable changes to aiofastnet are documented in this file.
-
 ## Unreleased
 
-- Align release procedure with aiolibs practices
+- Align CI and release procedure with aio-libs practices
 - Automate github release creation
 
 ## 1.1.0
