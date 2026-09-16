@@ -26,6 +26,7 @@ from .api_streams import (
 )
 from .openssl_compat import OPENSSL_DYN_LIBS
 from .transport import Protocol, Transport, aiofn_is_buffered_protocol
+from .version import __version__ as __version__
 
 __all__ = [
     'OPENSSL_DYN_LIBS',
@@ -71,5 +72,4 @@ if hasattr(socket, 'AF_UNIX'):
     ))
 
 
-__version__ = "1.1.0"
 __author__ = "Taras Kozlov"
