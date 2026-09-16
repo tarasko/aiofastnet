@@ -499,4 +499,6 @@ pytest -s -v --cov=aiofastnet --cov-report=html
 
 ## Contributing
 
-Contributions are welcome!
+Contributions are welcome! Pull requests include a checklist for user-visible changes that need an entry in `CHANGES.md`.
+
+Maintainers should follow the [release procedure](RELEASING.md) when publishing a new version.

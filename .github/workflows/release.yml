@@ -7,6 +7,24 @@ on:
 
 jobs:
 
+  release-notes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Extract release notes from changelog
+      env:
+        RELEASE_VERSION: ${{ github.ref_name }}
+      run: python tools/changelog.py extract "${RELEASE_VERSION#v}" --output release-notes.md
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: release-notes
+        path: release-notes.md
+
   build-sdist:
     runs-on: ubuntu-latest
     permissions:
@@ -106,7 +124,7 @@ jobs:
 
 
   publish:
-    needs: [build-sdist, build-wheels]
+    needs: [build-sdist, build-wheels, release-notes]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -131,3 +149,27 @@ jobs:
 
     - name: Publish package distributions to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/download-artifact@v8
+      with:
+        path: dist/
+        pattern: dist-*
+        merge-multiple: true
+
+    - uses: actions/download-artifact@v8
+      with:
+        name: release-notes
+        path: release-notes/
+
+    - name: Create GitHub release
+      uses: softprops/action-gh-release@v3.0.3
+      with:
+        body_path: release-notes/release-notes.md
+        files: dist/*
