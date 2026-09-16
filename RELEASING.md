@@ -2,12 +2,12 @@
 
 This document describes the maintainer workflow for publishing aiofastnet to PyPI and creating the corresponding GitHub Release.
 
-## Prepare the release
+## Set release version and prepare changelog
 
 1. Create a branch release/1.2.0
 2. Ensure every user-visible change is described under `Unreleased` in `CHANGES.md`. 
-3. Choose the new version and update `__version__` in `aiofastnet/version.py`.
-4. Finalize the changelog using the same version without the `v` tag prefix:
+3. Choose the new version (1.2.0) and update `__version__` in `aiofastnet/version.py`.
+4. Finalize the changelog using the same version.
 
    ```console
    $ python tools/changelog.py prepare 1.2.0
@@ -15,15 +15,9 @@ This document describes the maintainer workflow for publishing aiofastnet to PyP
 
    This moves the contents of `Unreleased` into a new `## 1.2.0` section and leaves a new empty `Unreleased` section for subsequent changes. The
    command fails if `Unreleased` is empty or the version already exists.
+   It can also be done manually. Just make sure that Unreleased section still exists after the change.
 
-5. Review the resulting changelog and run the relevant checks:
-
-   ```console
-   $ ruff check .
-   $ pytest -n auto -v
-   ```
-
-6. Commit the version and changelog changes, create PR, wait for its required checks to pass, merge PR.
+5. Commit the version and changelog changes, create PR, wait for its required checks to pass, merge PR.
 
 ## Publish the release
 
