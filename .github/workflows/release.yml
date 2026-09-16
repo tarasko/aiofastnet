@@ -58,6 +58,9 @@ jobs:
 
   build-wheels:
     needs: build-wheels-matrix
+    permissions:
+      contents: read
+      actions: read
     runs-on: ${{ matrix.os }}
     name: Build ${{ matrix.only }}
     strategy:
