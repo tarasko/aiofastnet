@@ -10,7 +10,7 @@ import stat
 import sys
 from logging import getLogger
 
-from cpython.bytes cimport *
+from cython cimport unlikely
 from cpython.ref cimport Py_XDECREF
 
 from . import constants
@@ -20,7 +20,6 @@ from .transport cimport (
     StreamTransport,
 )
 from .utils cimport *
-
 from .utils import aiofn_set_result_unless_cancelled as _set_result_unless_cancelled_callback
 
 

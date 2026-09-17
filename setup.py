@@ -59,6 +59,7 @@ def make_extension(name: str, sources: list[str]) -> Extension:
 extensions = [
     make_extension("aiofastnet.utils", ["aiofastnet/utils.pyx"]),
     make_extension("aiofastnet.transport", ["aiofastnet/transport.pyx"]),
+    make_extension("aiofastnet.selector_transport", ["aiofastnet/selector_transport.pyx"]),
     make_extension("aiofastnet.ssl_engine", ["aiofastnet/ssl_engine.pyx"]),
     make_extension("aiofastnet.ssl_engine_fallback", ["aiofastnet/ssl_engine_fallback.pyx"]),
     make_extension(
