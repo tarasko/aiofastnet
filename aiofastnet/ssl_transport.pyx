@@ -1216,7 +1216,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
             if self._ssl_engine.ssl_incoming_use_membio():
                 while total_bytes_read < self._max_read_bytes_per_cycle_hint:
                     if unlikely(self._read_paused):
-                        return NoResult.OK
+                        return
 
                     self._ssl_engine.incoming_bio_get_write_buf(&buf_ptr, &buf_len)
                     bytes_read = aiofn_read(self._sock_fd, buf_ptr, buf_len, True)
@@ -1226,10 +1226,10 @@ cdef class SSLTransport_Socket(SSLTransportBase):
 
                     if unlikely(bytes_read == 0):
                         self._process_eof()
-                        return NoResult.OK
+                        return
 
                     if unlikely(bytes_read == -1):  # without exception this means EGAIN
-                        return NoResult.OK
+                        return
 
                     total_bytes_read += bytes_read
 
@@ -1237,7 +1237,7 @@ cdef class SSLTransport_Socket(SSLTransportBase):
                     self._incoming_bio_updated()
 
                     if bytes_read < buf_len:
-                        return NoResult.OK
+                        return
             else:
                 self._incoming_bio_updated()
         except:
