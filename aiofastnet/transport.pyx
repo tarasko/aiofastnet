@@ -124,9 +124,6 @@ cdef SendFileRequest make_sendfile_request(file, offset, count):
         object available
         SendFileRequest request
 
-    if "b" not in getattr(file, "mode", "b"):
-        raise ValueError("file should be opened in binary mode")
-
     if not isinstance(offset, int):
         raise TypeError(f"offset must be a non-negative integer (got {offset!r})")
     if offset < 0:
@@ -142,6 +139,9 @@ cdef SendFileRequest make_sendfile_request(file, offset, count):
         fd = file.fileno()
     except (AttributeError, io.UnsupportedOperation) as exc:
         raise asyncio.SendfileNotAvailableError("not a regular file") from exc
+
+    if "b" not in file.mode:
+        raise ValueError("file should be opened in binary mode")
 
     # sendfile() is called once per request, so the regular-file check goes
     # through a C fstat() instead of os.fstat(), which would build a Python
