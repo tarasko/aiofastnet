@@ -17,8 +17,9 @@ from typing import Any, Callable
 
 from . import constants, openssl_compat
 from .constants import SSL_BIO_SIZE_DEFAULTS, SSL_TIMEOUT_DEFAULTS
+from .selector_transport import SelectorSocketTransport
 from .ssl_transport import SSLTransport_Socket, SSLTransport_Transport
-from .transport import SelectorSocketTransport, aiofn_is_buffered_protocol
+from .transport import aiofn_is_buffered_protocol
 from .wrapped_transport import _get_original_loop_method, _should_fallback_to_asyncio, _WrappedBufferedProtocol, _WrappedProtocol
 
 _HAS_IPv6 = hasattr(socket, 'AF_INET6')
