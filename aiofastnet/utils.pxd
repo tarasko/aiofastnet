@@ -18,6 +18,29 @@ cpdef enum SSLProtocolState:
     SHUTDOWN = 4
 
 
+cdef extern from *:
+    """
+    #define AIOFN_MAX_IOVEC 256
+    #if defined(_WIN32)
+        #include <winsock2.h>
+
+        // Memory layout is compatible with WSABUF
+        typedef struct
+        {
+            ULONG iov_len;
+            CHAR* iov_base;
+        } aiofn_iovec;
+    #else
+        #include <sys/uio.h>
+        typedef struct iovec aiofn_iovec;
+    #endif
+    """
+    cdef const int AIOFN_MAX_IOVEC
+    ctypedef struct aiofn_iovec:
+        void* iov_base
+        size_t iov_len
+
+
 cpdef aiofn_set_result_unless_cancelled(fut, result)
 cdef NoResult aiofn_set_nodelay(sock) except NoResult.EXC
 cpdef aiofn_set_socket_extra_info(object extra, object sock)
@@ -33,7 +56,7 @@ cdef NoResult aiofn_pyaddr_to_sockaddr(int family, object addr, void* raw_addr, 
 
 cdef Py_ssize_t aiofn_read(int fd, void* buf, Py_ssize_t len, bint is_socket) except -2
 cdef Py_ssize_t aiofn_write(int fd, void* buf, Py_ssize_t len, bint is_socket) except -2
-cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* iov, Py_ssize_t iovcnt, bint is_socket) except -2
+cdef Py_ssize_t aiofn_writev(int sockfd, aiofn_iovec* buffers, Py_ssize_t buffer_count, bint is_socket) except -2
 
 cdef Py_ssize_t aiofn_recvfrom(int sockfd, void* buf, Py_ssize_t len, void* addr, unsigned int* addr_len) except -2
 cdef Py_ssize_t aiofn_sendto(int sockfd, void* buf, Py_ssize_t len, void* raw_addr, unsigned int raw_addr_len) except -2
@@ -68,7 +91,7 @@ cdef extern from *:
         if (new_size == 0)
         {
             Py_DECREF(obj);
-            Py_RETURN_NONE;
+            return PyBytes_FromStringAndSize(NULL, 0);
         }
         _PyBytes_Resize(&obj, new_size);
         return obj;
@@ -84,30 +107,9 @@ cdef extern from *:
         *ptr = PyBytes_AS_STRING(*obj);
         return 0;
     }
-
-    #if defined(_WIN32)
-        #include <winsock2.h>
-
-        // Memory layout is compatible with WSABUF
-        typedef struct
-        {
-            ULONG iov_len;
-            CHAR* iov_base;
-        } aiofn_iovec;
-    #else
-        #include <sys/uio.h>
-        typedef struct iovec aiofn_iovec;
-    #endif
-
-    #define AIOFN_MAX_IOVEC 256
     """
 
     PyObject* aiofn_allocate_bytes(Py_ssize_t sz, char** buf) except NULL
     bytes aiofn_finalize_bytes(PyObject* obj, Py_ssize_t sz)
     int aiofn_resize_bytes(PyObject** obj, Py_ssize_t sz, char** buf) except -1
 
-    cdef const int AIOFN_MAX_IOVEC
-
-    ctypedef struct aiofn_iovec:
-        void* iov_base
-        size_t iov_len

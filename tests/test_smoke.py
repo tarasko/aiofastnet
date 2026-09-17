@@ -12,7 +12,8 @@ import pytest
 from aiofastnet.utils import aiofn_maybe_copy_buffer
 
 import aiofastnet
-from aiofastnet.transport import Protocol, SelectorSocketTransport, Transport
+from aiofastnet.transport import Protocol, Transport
+from aiofastnet.selector_transport import SelectorSocketTransport
 from tests.utils import (
     UDP_MAX_PAYLOAD_SIZE,
     AsyncClient,
