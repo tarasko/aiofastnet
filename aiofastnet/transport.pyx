@@ -155,7 +155,7 @@ cdef SendFileRequest make_sendfile_request(file, offset, count):
     except (AttributeError, io.UnsupportedOperation) as exc:
         raise asyncio.SendfileNotAvailableError("not a regular file") from exc
 
-    if "b" not in file.mode:
+    if "b" not in getattr(file, "mode", "b"):
         raise ValueError("file should be opened in binary mode")
 
     # sendfile() is called once per request, so the regular-file check goes
