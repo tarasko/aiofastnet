@@ -9,11 +9,11 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 
 import pytest
+from aiofastnet.selector_transport import SelectorSocketTransport
 from aiofastnet.utils import aiofn_maybe_copy_buffer
 
 import aiofastnet
 from aiofastnet.transport import Protocol, Transport
-from aiofastnet.selector_transport import SelectorSocketTransport
 from tests.utils import (
     UDP_MAX_PAYLOAD_SIZE,
     AsyncClient,
