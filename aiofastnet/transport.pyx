@@ -34,7 +34,22 @@ from cpython.memoryview cimport PyMemoryView_FromMemory
 from cpython.pythread cimport PyThread_get_thread_ident
 
 from . import constants
-from .utils cimport *
+from .utils cimport (
+    AIOFN_MAX_IOVEC,
+    NoResult,
+    aiofn_add_info_and_reraise,
+    aiofn_maybe_copy_buffer,
+    aiofn_maybe_copy_buffer_tail,
+    aiofn_pyaddr_to_sockaddr,
+    aiofn_regular_file_size,
+    aiofn_sendto,
+    aiofn_set_nodelay,
+    aiofn_set_socket_extra_info,
+    aiofn_unpack_simple_buffer,
+    aiofn_validate_buffer,
+    aiofn_write,
+    aiofn_writev,
+)
 
 
 if sys.platform == "win32":
