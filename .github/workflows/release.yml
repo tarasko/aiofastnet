@@ -7,6 +7,22 @@ on:
 
 jobs:
 
+  release-notes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Extract release notes from changelog
+      run: python tools/changelog.py extract "${GITHUB_REF_NAME#v}" --output release-notes.md
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: release-notes
+        path: release-notes.md
+
   build-sdist:
     runs-on: ubuntu-latest
     permissions:
@@ -58,6 +74,9 @@ jobs:
 
   build-wheels:
     needs: build-wheels-matrix
+    permissions:
+      contents: read
+      actions: read
     runs-on: ${{ matrix.os }}
     name: Build ${{ matrix.only }}
     strategy:
@@ -106,10 +125,13 @@ jobs:
 
 
   publish:
-    needs: [build-sdist, build-wheels]
+    needs: [build-sdist, build-wheels, release-notes]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/p/aiofastnet
 
     steps:
     - uses: actions/checkout@v7
@@ -128,3 +150,35 @@ jobs:
 
     - name: Publish package distributions to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+    - uses: actions/download-artifact@v8
+      with:
+        path: dist/
+        pattern: dist-*
+        merge-multiple: true
+
+    - uses: actions/download-artifact@v8
+      with:
+        name: release-notes
+        path: release-notes/
+
+    - name: Sign distributions with Sigstore
+      uses: sigstore/gh-action-sigstore-python@v3.5.0
+      with:
+        inputs: |
+          ./dist/*.tar.gz
+          ./dist/*.whl
+
+    - name: Create GitHub release
+      uses: softprops/action-gh-release@v3.0.3
+      with:
+        body_path: release-notes/release-notes.md
+        files: dist/*

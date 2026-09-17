@@ -1,25 +1,55 @@
 """Shared transport, protocol, write request, and flow-control primitives."""
 
+# Transport hierarchy (concrete implementations from sibling modules are
+# included to show where these shared bases fit):
+#
+# Transport                         common protocol lifecycle, read control, and error handling
+# +-- FDTransport                   owns and manages a nonblocking file descriptor
+# |   +-- SelectorReadPipeTransport selector-driven, read-only pipe endpoint
+# |   `-- WritableTransport         adds write queues, watermarks, and protocol flow control
+# |       +-- StreamTransport       adds ordered byte-stream writes, EOF, and sendfile support
+# |       |   +-- SelectorSocketTransport    selector-driven bidirectional socket endpoint
+# |       |   `-- SelectorWritePipeTransport selector-driven, write-only pipe endpoint
+# |       `-- DatagramTransport     preserves datagram boundaries and destination addresses
+# |           `-- SelectorDatagramTransport  selector-driven datagram socket endpoint
+# `-- SSLTransportBase              implements the shared TLS state machine and application API
+#     +-- SSLTransport_Socket        performs TLS directly on an owned socket
+#     `-- SSLTransport_Transport     performs TLS over another transport through a protocol adapter
+
 import asyncio
 import collections
 import io
 import os
 import socket
-import stat
 import sys
 import warnings
 from asyncio.trsock import TransportSocket
 from logging import getLogger
 
 import cython
+from cython cimport unlikely
 from cpython.buffer cimport PyBUF_READ, PyBUF_WRITABLE
 from cpython.bytes cimport *
 from cpython.memoryview cimport PyMemoryView_FromMemory
 from cpython.pythread cimport PyThread_get_thread_ident
 
 from . import constants
-from .utils cimport *
-
+from .utils cimport (
+    AIOFN_MAX_IOVEC,
+    NoResult,
+    aiofn_add_info_and_reraise,
+    aiofn_maybe_copy_buffer,
+    aiofn_maybe_copy_buffer_tail,
+    aiofn_pyaddr_to_sockaddr,
+    aiofn_regular_file_size,
+    aiofn_sendto,
+    aiofn_set_nodelay,
+    aiofn_set_socket_extra_info,
+    aiofn_unpack_simple_buffer,
+    aiofn_validate_buffer,
+    aiofn_write,
+    aiofn_writev,
+)
 
 if sys.platform == "win32":
     import msvcrt
@@ -104,12 +134,9 @@ cdef class SendFileRequest:
 cdef SendFileRequest make_sendfile_request(file, offset, count):
     cdef:
         int fd
-        object file_stat
+        int64_t file_size
         object available
         SendFileRequest request
-
-    if "b" not in getattr(file, "mode", "b"):
-        raise ValueError("file should be opened in binary mode")
 
     if not isinstance(offset, int):
         raise TypeError(f"offset must be a non-negative integer (got {offset!r})")
@@ -127,15 +154,17 @@ cdef SendFileRequest make_sendfile_request(file, offset, count):
     except (AttributeError, io.UnsupportedOperation) as exc:
         raise asyncio.SendfileNotAvailableError("not a regular file") from exc
 
-    try:
-        file_stat = os.fstat(fd)
-    except OSError as exc:
-        raise asyncio.SendfileNotAvailableError("not a regular file") from exc
+    if "b" not in getattr(file, "mode", "b"):
+        raise ValueError("file should be opened in binary mode")
 
-    if not stat.S_ISREG(file_stat.st_mode):
+    # sendfile() is called once per request, so the regular-file check goes
+    # through a C fstat() instead of os.fstat(), which would build a Python
+    # os.stat_result on every call.
+    file_size = aiofn_regular_file_size(fd)
+    if file_size < 0:
         raise asyncio.SendfileNotAvailableError("not a regular file")
 
-    available = max(0, file_stat.st_size - offset)
+    available = max(0, file_size - offset)
     if count is not None:
         available = min(count, available)
 

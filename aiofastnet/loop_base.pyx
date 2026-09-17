@@ -50,13 +50,9 @@ from .loop_backend cimport (
     aiofn_loop_fd_watch_t,
     aiofn_loop_status,
 )
-from .utils cimport (
-    NoResult,
-    unlikely,
-)
+from .utils cimport NoResult
 
-from .utils import DNSLookupRequired
-
+from cython cimport unlikely
 from cpython.contextvars cimport PyContext_CopyCurrent, PyContext_Enter, PyContext_Exit
 from cpython.object cimport Py_EQ, Py_GE, Py_GT, Py_LE, Py_LT, Py_NE
 from cpython.pycapsule cimport PyCapsule_CheckExact, PyCapsule_GetPointer

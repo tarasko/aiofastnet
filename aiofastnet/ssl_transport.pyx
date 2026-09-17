@@ -1,3 +1,12 @@
+"""TLS transports that operate directly on a socket or over another transport."""
+
+# TLS transport hierarchy:
+#
+# Transport                      supplies the common application-facing transport contract
+# `-- SSLTransportBase           owns the TLS engine, state machine, timeouts, and plaintext queues
+#     +-- SSLTransport_Socket     owns a socket and drives TLS from selector readiness callbacks
+#     `-- SSLTransport_Transport  drives TLS over a downstream transport via SSLProtocol adapters
+
 import asyncio
 import ssl
 import sys
@@ -6,6 +15,7 @@ from asyncio.trsock import TransportSocket
 from logging import getLogger
 from typing import Optional
 
+from cython cimport unlikely
 from cpython.bytearray cimport PyByteArray_AS_STRING, PyByteArray_GET_SIZE, PyByteArray_FromStringAndSize
 from cpython.bytes cimport PyBytes_FromStringAndSize
 from cpython.object cimport PyObject
@@ -26,8 +36,6 @@ from .utils cimport (
     aiofn_finalize_bytes,
     aiofn_set_nodelay,
     aiofn_set_socket_extra_info,
-    aiofn_add_info_and_reraise,
-    unlikely
 )
 from .transport cimport Protocol, SendFileRequest, Transport, WriteWatermarks, make_sendfile_request
 from .openssl_compat import OPENSSL_DYN_LIBS, create_transport_context

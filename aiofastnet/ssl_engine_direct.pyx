@@ -85,9 +85,10 @@ from .openssl cimport (
     openssl_compat_last_error,
 )
 from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
-from .utils cimport NoResult, unlikely
+from .utils cimport NoResult
 from .openssl_compat import OPENSSL_DYN_LIBS
 
+from cython cimport unlikely
 from cpython.object cimport PyObject
 from cpython.bytes cimport PyBytes_FromStringAndSize, PyBytes_AS_STRING
 from cpython.bytearray cimport (

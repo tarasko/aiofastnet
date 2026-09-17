@@ -16,6 +16,7 @@ from .api_utils import (
     _set_reuseport,
     _wait_and_close_transport_on_exc,
 )
+from .selector_transport import SelectorDatagramTransport
 from .wrapped_transport import _get_original_loop_method, _should_fallback_to_asyncio, _WrappedDatagramProtocol
 
 

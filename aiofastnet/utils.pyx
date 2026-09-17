@@ -2,8 +2,9 @@ import os
 import socket
 import sys
 
+from cython cimport unlikely
 from cpython.bytes cimport (
-    PyBytes_AsStringAndSize, PyBytes_AS_STRING, PyBytes_CheckExact,
+    PyBytes_AsStringAndSize, PyBytes_AS_STRING,
     PyBytes_FromObject, PyBytes_FromStringAndSize, PyBytes_GET_SIZE,
 )
 from cpython.bytearray cimport PyByteArray_GET_SIZE, PyByteArray_AS_STRING
@@ -380,9 +381,11 @@ cpdef object aiofn_maybe_copy_buffer(object buffer):
 
     return PyBytes_FromObject(buffer)
 
+
 cpdef object aiofn_validate_and_maybe_copy_buffer(object buffer):
     aiofn_validate_buffer(buffer)
     return aiofn_maybe_copy_buffer(buffer)
+
 
 cdef object aiofn_maybe_copy_buffer_tail(object buffer, char* ptr, Py_ssize_t sz):
     # Do not copy bytes content, it is safe to make a memory view
@@ -549,6 +552,7 @@ cdef Py_ssize_t aiofn_write(int fd, void* buf, Py_ssize_t len, bint is_socket) e
             # This should never happen, but who knows?
             # May be len is 0?
             raise RuntimeError(f"write syscall has written 0 bytes and did not indicate any error, buf_len={len}")
+
 
 cdef Py_ssize_t aiofn_sendto(int sockfd, void* buf, Py_ssize_t len, void* raw_addr, unsigned int raw_addr_len) except -2:
     cdef:

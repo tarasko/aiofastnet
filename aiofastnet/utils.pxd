@@ -1,4 +1,5 @@
 from cpython.object cimport PyObject
+from libc.stdint cimport int64_t
 
 from .loop_backend cimport aiofn_loop_buffer_t
 
@@ -18,6 +19,46 @@ cpdef enum SSLProtocolState:
     WRAPPED = 2
     FLUSHING = 3
     SHUTDOWN = 4
+
+
+cdef extern from *:
+    """
+    #define AIOFN_MAX_IOVEC 256
+    """
+    cdef const int AIOFN_MAX_IOVEC
+
+
+cdef extern from *:
+    """
+    #include <stdint.h>
+    #include <sys/types.h>
+    #include <sys/stat.h>
+
+    #if defined(_WIN32)
+        // MSVC exposes fstat as _fstat64 and has no S_IS* macros.
+        static inline int64_t aiofn_regular_file_size(int fd)
+        {
+            struct _stat64 file_stat;
+
+            if (_fstat64(fd, &file_stat) != 0 || (file_stat.st_mode & _S_IFMT) != _S_IFREG)
+                return -1;
+
+            return (int64_t)file_stat.st_size;
+        }
+    #else
+        static inline int64_t aiofn_regular_file_size(int fd)
+        {
+            struct stat file_stat;
+
+            if (fstat(fd, &file_stat) != 0 || !S_ISREG(file_stat.st_mode))
+                return -1;
+
+            return (int64_t)file_stat.st_size;
+        }
+    #endif
+    """
+    # Return the size of a regular file, or -1 when fd is not a regular file.
+    int64_t aiofn_regular_file_size(int fd) noexcept nogil
 
 
 cpdef aiofn_set_result_unless_cancelled(fut, result)
@@ -47,11 +88,6 @@ cdef NoResult aiofn_add_info_and_reraise(info) except NoResult.EXC
 
 cdef extern from "pythread.h":
     unsigned long PyThread_get_thread_ident()
-
-
-cdef extern from *:
-    cdef bint unlikely(bint val) noexcept
-    cdef bint likely(bint val) noexcept
 
 
 cdef extern from *:
@@ -91,12 +127,8 @@ cdef extern from *:
         *ptr = PyBytes_AS_STRING(*obj);
         return 0;
     }
-
-    #define AIOFN_MAX_IOVEC 256
     """
 
     PyObject* aiofn_allocate_bytes(Py_ssize_t sz, char** buf) except NULL
     bytes aiofn_finalize_bytes(PyObject* obj, Py_ssize_t sz)
     int aiofn_resize_bytes(PyObject** obj, Py_ssize_t sz, char** buf) except -1
-
-    cdef const int AIOFN_MAX_IOVEC

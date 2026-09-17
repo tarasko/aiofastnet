@@ -31,11 +31,11 @@ from .utils cimport (
     aiofn_pyaddr_to_sockaddr,
     aiofn_sockaddr_to_pyaddr,
     aiofn_unpack_simple_buffer,
-    unlikely,
 )
 
 from .utils import aiofn_set_result_unless_cancelled
 
+from cython cimport unlikely
 from cpython.buffer cimport Py_buffer, PyBuffer_Release, PyObject_GetBuffer, PyBUF_WRITABLE
 from cpython.object cimport PyObject
 from cpython.ref cimport Py_XDECREF

@@ -485,7 +485,7 @@ one thread.
    $ pytest -s -v -k test_echo[uvloop-tcp-buffered-6291456] --asyncio-debug --log-cli-level DEBUG
    ```
 
-7. Build coverage report:
+7. Build for coverage report:
 
 Building for coverage testing requires enabling line tracing in cython, which
 significantly slows down extension modules. It is disabled by default. You
@@ -495,8 +495,3 @@ would need to rebuild specifically with coverage support.
 python setup.py build_ext --inplace --dev --with-coverage
 pytest -s -v --cov=aiofastnet --cov-report=html
 ```
-
-
-## Contributing
-
-Contributions are welcome!

@@ -1,10 +1,11 @@
 import ssl
 
+from cython cimport unlikely
 from cpython.memoryview cimport PyMemoryView_FromMemory
 from cpython.buffer cimport PyBUF_READ, PyBUF_WRITE
 
 from .ssl_engine cimport SSLEngine, SSLError, ssl_error_name
-from .utils cimport NoResult, unlikely
+from .utils cimport NoResult
 
 import logging
 

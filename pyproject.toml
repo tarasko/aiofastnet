@@ -27,7 +27,7 @@ classifiers = [
 ]
 
 [build-system]
-requires = ["setuptools >= 78.0", "wheel", "Cython >= 3.2"]
+requires = ["setuptools >= 78.0", "wheel", "Cython >= 3.3"]
 build-backend = "setuptools.build_meta"
 
 [project.urls]
@@ -42,7 +42,7 @@ package-data = {aiofastnet = ["*.h", "*.pxd", "*.pyi", "py.typed"]}
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
-version = {attr = "aiofastnet.__version__"}
+version = {attr = "aiofastnet.version.__version__"}
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
