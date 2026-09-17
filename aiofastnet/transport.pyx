@@ -21,7 +21,6 @@ import collections
 import io
 import os
 import socket
-import stat
 import sys
 import warnings
 from asyncio.trsock import TransportSocket
@@ -121,7 +120,7 @@ cdef class SendFileRequest:
 cdef SendFileRequest make_sendfile_request(file, offset, count):
     cdef:
         int fd
-        object file_stat
+        int64_t file_size
         object available
         SendFileRequest request
 
@@ -144,15 +143,14 @@ cdef SendFileRequest make_sendfile_request(file, offset, count):
     except (AttributeError, io.UnsupportedOperation) as exc:
         raise asyncio.SendfileNotAvailableError("not a regular file") from exc
 
-    try:
-        file_stat = os.fstat(fd)
-    except OSError as exc:
-        raise asyncio.SendfileNotAvailableError("not a regular file") from exc
-
-    if not stat.S_ISREG(file_stat.st_mode):
+    # sendfile() is called once per request, so the regular-file check goes
+    # through a C fstat() instead of os.fstat(), which would build a Python
+    # os.stat_result on every call.
+    file_size = aiofn_regular_file_size(fd)
+    if file_size < 0:
         raise asyncio.SendfileNotAvailableError("not a regular file")
 
-    available = max(0, file_stat.st_size - offset)
+    available = max(0, file_size - offset)
     if count is not None:
         available = min(count, available)
 

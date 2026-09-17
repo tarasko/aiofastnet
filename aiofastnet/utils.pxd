@@ -1,4 +1,5 @@
 from cpython.object cimport PyObject
+from libc.stdint cimport int64_t
 
 
 cdef enum NoResult:
@@ -39,6 +40,39 @@ cdef extern from *:
     ctypedef struct aiofn_iovec:
         void* iov_base
         size_t iov_len
+
+
+cdef extern from *:
+    """
+    #include <stdint.h>
+    #include <sys/types.h>
+    #include <sys/stat.h>
+
+    #if defined(_WIN32)
+        // MSVC exposes fstat as _fstat64 and has no S_IS* macros.
+        static inline int64_t aiofn_regular_file_size(int fd)
+        {
+            struct _stat64 file_stat;
+
+            if (_fstat64(fd, &file_stat) != 0 || (file_stat.st_mode & _S_IFMT) != _S_IFREG)
+                return -1;
+
+            return (int64_t)file_stat.st_size;
+        }
+    #else
+        static inline int64_t aiofn_regular_file_size(int fd)
+        {
+            struct stat file_stat;
+
+            if (fstat(fd, &file_stat) != 0 || !S_ISREG(file_stat.st_mode))
+                return -1;
+
+            return (int64_t)file_stat.st_size;
+        }
+    #endif
+    """
+    # Return the size of a regular file, or -1 when fd is not a regular file.
+    int64_t aiofn_regular_file_size(int fd) noexcept nogil
 
 
 cpdef aiofn_set_result_unless_cancelled(fut, result)
