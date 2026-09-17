@@ -1,5 +1,21 @@
 """Shared transport, protocol, write request, and flow-control primitives."""
 
+# Transport hierarchy (concrete implementations from sibling modules are
+# included to show where these shared bases fit):
+#
+# Transport                         common protocol lifecycle, read control, and error handling
+# +-- FDTransport                   owns and manages a nonblocking file descriptor
+# |   +-- SelectorReadPipeTransport selector-driven, read-only pipe endpoint
+# |   `-- WritableTransport         adds write queues, watermarks, and protocol flow control
+# |       +-- StreamTransport       adds ordered byte-stream writes, EOF, and sendfile support
+# |       |   +-- SelectorSocketTransport    selector-driven bidirectional socket endpoint
+# |       |   `-- SelectorWritePipeTransport selector-driven, write-only pipe endpoint
+# |       `-- DatagramTransport     preserves datagram boundaries and destination addresses
+# |           `-- SelectorDatagramTransport  selector-driven datagram socket endpoint
+# `-- SSLTransportBase              implements the shared TLS state machine and application API
+#     +-- SSLTransport_Socket        performs TLS directly on an owned socket
+#     `-- SSLTransport_Transport     performs TLS over another transport through a protocol adapter
+
 import asyncio
 import collections
 import io

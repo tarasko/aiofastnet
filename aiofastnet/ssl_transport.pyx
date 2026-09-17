@@ -1,3 +1,12 @@
+"""TLS transports that operate directly on a socket or over another transport."""
+
+# TLS transport hierarchy:
+#
+# Transport                      supplies the common application-facing transport contract
+# `-- SSLTransportBase           owns the TLS engine, state machine, timeouts, and plaintext queues
+#     +-- SSLTransport_Socket     owns a socket and drives TLS from selector readiness callbacks
+#     `-- SSLTransport_Transport  drives TLS over a downstream transport via SSLProtocol adapters
+
 import asyncio
 import ssl
 import sys

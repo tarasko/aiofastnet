@@ -4,6 +4,18 @@ Writable selector transports inherit the shared stream/datagram transport
 bases directly.
 """
 
+# Selector transport hierarchy:
+#
+# Transport                         supplies the common transport and protocol lifecycle
+# `-- FDTransport                   owns the nonblocking descriptor and selector registration
+#     +-- SelectorReadPipeTransport reads a pipe and forwards bytes or EOF to its protocol
+#     `-- WritableTransport         supplies write queues, watermarks, and flow control
+#         +-- StreamTransport       supplies ordered byte-stream writes and EOF handling
+#         |   +-- SelectorSocketTransport    reads from a socket and provides a bidirectional stream
+#         |   `-- SelectorWritePipeTransport writes to a pipe and detects peer closure
+#         `-- DatagramTransport     supplies message-oriented buffering and addressing
+#             `-- SelectorDatagramTransport  receives and sends complete datagrams on readiness
+
 import errno
 import os
 import stat
