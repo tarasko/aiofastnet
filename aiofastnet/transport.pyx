@@ -51,7 +51,6 @@ from .utils cimport (
     aiofn_writev,
 )
 
-
 if sys.platform == "win32":
     import msvcrt
 else:

@@ -55,7 +55,7 @@ __all__ = [
     'sock_sendall',
     'sock_sendto',
     'start_server',
-    'start_tls',
+    'start_tls'
 ]
 
 if hasattr(socket, 'AF_UNIX'):

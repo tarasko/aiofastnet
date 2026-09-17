@@ -1,7 +1,8 @@
 import cython
 from libc.stdint cimport int64_t, intptr_t
 
-from .utils cimport AIOFN_MAX_IOVEC, NoResult, aiofn_iovec
+from .loop_backend cimport aiofn_loop_buffer_t
+from .utils cimport AIOFN_MAX_IOVEC, NoResult
 
 
 cdef class Transport:
@@ -182,7 +183,7 @@ cdef class StreamTransport(WritableTransport):
     cdef:
         object _server
         bint _write_eof
-        aiofn_iovec _write_buffers[AIOFN_MAX_IOVEC]
+        aiofn_loop_buffer_t _write_buffers[AIOFN_MAX_IOVEC]
         public bint _sendfile_compatible
 
     # Implement in concrete transport.
