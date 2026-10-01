@@ -54,14 +54,14 @@ The benchmark below compares echo round-trips over loopback for TCP and SSL.
 The exact gains depend on workload, message sizes, CPU, OpenSSL version, and how
 much of your total runtime is spent in transport/SSL plumbing.
 
-[![Benchmark](https://raw.githubusercontent.com/aio-libs/aiofastnet/master/examples/benchmark.png)](https://github.com/aio-libs/aiofastnet/blob/master/examples/benchmark.png)
+[![Benchmark](https://raw.githubusercontent.com/aio-libs/aiofastnet/master/examples/benchmark.svg)](https://github.com/aio-libs/aiofastnet/blob/master/examples/benchmark.svg)
 
-[![Speedup](https://raw.githubusercontent.com/aio-libs/aiofastnet/master/examples/benchmark_speedup.png)](https://github.com/aio-libs/aiofastnet/blob/master/examples/benchmark_speedup.png)
+[![Speedup](https://raw.githubusercontent.com/aio-libs/aiofastnet/master/examples/benchmark_speedup.svg)](https://github.com/aio-libs/aiofastnet/blob/master/examples/benchmark_speedup.svg)
 
 Source: [examples/benchmark.py](https://github.com/aio-libs/aiofastnet/blob/master/examples/benchmark.py)
 
 In these benchmarks, `aiofastnet` is up to
-2.7x faster than standard `asyncio` and up to 1.6x faster than uvloop for TLS
+2.7x faster than standard `asyncio` and up to 1.3x faster than uvloop for TLS
 connections.
 
 `aiofastnet` is fully compatible with free-threaded Python builds and scales

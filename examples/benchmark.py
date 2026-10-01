@@ -5,6 +5,7 @@ import logging
 import math
 import socket
 import sys
+from io import StringIO
 from logging import basicConfig
 from pathlib import Path
 
@@ -28,6 +29,16 @@ except ImportError:
 UDP_MAX_PAYLOAD_SIZE = 65507
 SUPPORTED_TRANSPORTS = ["ssl", "tcp", "udp"]
 SUPPORTED_LOOPS = ["asyncio", "uvloop", "blazio"]
+SVG_FOREGROUND = "#1f2328"
+SVG_DARK_FOREGROUND = "#f0f6fc"
+PLOT_STYLE = {
+    "axes.edgecolor": SVG_FOREGROUND,
+    "axes.labelcolor": SVG_FOREGROUND,
+    "axes.titlecolor": SVG_FOREGROUND,
+    "text.color": SVG_FOREGROUND,
+    "xtick.color": SVG_FOREGROUND,
+    "ytick.color": SVG_FOREGROUND,
+}
 
 
 def _round_msg_size(msg_size: int, chunks: int) -> int:
@@ -87,31 +98,47 @@ def _plot_results(
     if not variants:
         return
 
-    fig, _axes = _plot_absolute_results(results, transports, msg_sizes, variants)
-    fig.suptitle(
-        f"Echo Round-Trip Benchmark | Python {python_version}\naiofastnet-{aiofastnet_version} | "
-        f"uvloop-{uvloop_version} | SO_SNDBUF={sndbuf_size}"
-    )
-    fig.tight_layout()
+    with plt.rc_context(PLOT_STYLE if save_plot else {}):
+        fig, _axes = _plot_absolute_results(results, transports, msg_sizes, variants)
+        fig.suptitle(
+            f"Echo Round-Trip Benchmark | Python {python_version}\naiofastnet-{aiofastnet_version} | "
+            f"uvloop-{uvloop_version} | SO_SNDBUF={sndbuf_size}"
+        )
+        fig.tight_layout()
 
-    if save_plot:
-        output_path = Path(__file__).with_name("benchmark.png")
-        fig.savefig(output_path, dpi=150)
-        print(f"saved plot to {output_path}")
-
-    heatmap_fig = _plot_speedup_heatmap(results, transports, msg_sizes)
-    if heatmap_fig is not None:
-        heatmap_fig.suptitle("aiofastnet speedup over native")
-        heatmap_fig.tight_layout()
         if save_plot:
-            output_path = Path(__file__).with_name("benchmark_speedup.png")
-            heatmap_fig.savefig(output_path, dpi=150)
+            output_path = Path(__file__).with_name("benchmark.svg")
+            _save_svg(fig, output_path)
             print(f"saved plot to {output_path}")
-    else:
-        print("skipped speedup heatmap: need both native and aiofastnet results for at least one loop")
 
-    if not save_plot:
-        plt.show()
+        heatmap_fig = _plot_speedup_heatmap(results, transports, msg_sizes)
+        if heatmap_fig is not None:
+            heatmap_fig.suptitle("aiofastnet speedup over native")
+            heatmap_fig.tight_layout()
+            if save_plot:
+                output_path = Path(__file__).with_name("benchmark_speedup.svg")
+                _save_svg(heatmap_fig, output_path)
+                print(f"saved plot to {output_path}")
+        else:
+            print("skipped speedup heatmap: need both native and aiofastnet results for at least one loop")
+
+        if not save_plot:
+            plt.show()
+
+
+def _save_svg(fig, output_path: Path) -> None:
+    buffer = StringIO()
+    fig.savefig(buffer, format="svg", transparent=True)
+    svg = buffer.getvalue().replace(SVG_FOREGROUND, "currentColor")
+    # Embedded SVG images cannot inherit the page's text color, but they can follow its color scheme.
+    theme_style = (
+        "<style type=\"text/css\">\n"
+        f":root {{ color-scheme: light dark; color: {SVG_FOREGROUND}; }}\n"
+        f"@media (prefers-color-scheme: dark) {{ :root {{ color: {SVG_DARK_FOREGROUND}; }} }}\n"
+        "</style>\n"
+    )
+    svg = svg.replace("<defs>", f"<defs>\n{theme_style}", 1)
+    output_path.write_text(svg, encoding="utf-8")
 
 
 def _collect_variants(results: dict[str, dict[int, dict[str, float]]]) -> list[str]:
@@ -297,7 +324,7 @@ def main():
         action="store_true",
         help="Send the --writelines chunks with individual write() calls instead of writelines()",
     )
-    parser.add_argument("--save-plot", action="store_true", help="Save plot to examples/benchmark.png")
+    parser.add_argument("--save-plot", action="store_true", help="Save plot to examples/benchmark.svg")
     parser.add_argument("--no-plot", action="store_true", help="Disable plotting")
     parser.add_argument("--asyncio-debug", action="store_true", help="Enable loop debug")
     args = parser.parse_args()
