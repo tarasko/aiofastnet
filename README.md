@@ -54,9 +54,9 @@ The benchmark below compares echo round-trips over loopback for TCP and SSL.
 The exact gains depend on workload, message sizes, CPU, OpenSSL version, and how
 much of your total runtime is spent in transport/SSL plumbing.
 
-[![Benchmark](https://raw.githubusercontent.com/aio-libs/aiofastnet/master/examples/benchmark.svg)](https://github.com/aio-libs/aiofastnet/blob/master/examples/benchmark.svg)
+[![Benchmark](https://raw.githubusercontent.com/tarasko/aiofastnet/svg_charts/examples/benchmark.svg)](https://github.com/aio-libs/aiofastnet/blob/svg_charts/examples/benchmark.svg)
 
-[![Speedup](https://raw.githubusercontent.com/aio-libs/aiofastnet/master/examples/benchmark_speedup.svg)](https://github.com/aio-libs/aiofastnet/blob/master/examples/benchmark_speedup.svg)
+[![Speedup](https://raw.githubusercontent.com/tarasko/aiofastnet/svg_charts/examples/benchmark_speedup.svg)](https://github.com/aio-libs/aiofastnet/blob/svg_charts/examples/benchmark_speedup.svg)
 
 Source: [examples/benchmark.py](https://github.com/aio-libs/aiofastnet/blob/master/examples/benchmark.py)
 
